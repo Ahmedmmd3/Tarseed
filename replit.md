@@ -1,45 +1,47 @@
-# [Project name]
+# وضوح — نظام الكاشير والمحاسبة
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+تطبيق ويب محاسبة وكاشير متكامل يعمل Offline-First. ملف HTML واحد بالكامل — لا React، لا Vue، لا Bootstrap.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `pnpm --filter @workspace/wudooh run dev` — تشغيل التطبيق (منفذ من artifact workflow)
+- لا يحتاج DATABASE_URL — يستخدم IndexedDB فقط
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Vanilla HTML + CSS + JavaScript (ملف واحد: `artifacts/wudooh/index.html`)
+- Dexie.js 3.2.4 من unpkg — wrapper لـ IndexedDB
+- IndexedDB لكل البيانات
+- localStorage لحفظ جلسة المستخدم
+- Vite لاستضافة الملف الثابت
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/wudooh/index.html` — **التطبيق كامله** (HTML + CSS + JS)
+- `artifacts/wudooh/vite.config.ts` — إعدادات Vite
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- **ملف واحد فقط** — كل كود HTML وCSS وJS في index.html حسب طلب المستخدم
+- **Offline-First** — يعمل بدون إنترنت باستخدام IndexedDB عبر Dexie.js
+- **RTL كامل** — واجهة عربية بالكامل مع خط Tajawal
+- **Multi-user** — كل مستخدم له بياناته المنفصلة في IndexedDB باستخدام userId
+- **No backend** — لا server، لا قاعدة بيانات خارجية
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Auth (تسجيل + دخول)
+- لوحة التحكم مع KPIs
+- كاشير/POS مع ماسح باركود USB
+- إدارة المنتجات والمخزون
+- الفواتير (إنشاء + عرض + طباعة)
+- المصاريف
+- العملاء
+- التقارير والإحصاءات
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- ملف HTML واحد فقط بدون frameworks
+- Dexie.js فقط من unpkg
+- واجهة عربية RTL
+- اللون الرئيسي: #1D9E75
