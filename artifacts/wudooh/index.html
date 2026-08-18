@@ -171,6 +171,24 @@
     .modal-footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     .form-grid .full { grid-column: 1 / -1; }
+    .barcode-field-wrap { display: flex; gap: 8px; }
+    .barcode-field-wrap input { flex: 1; }
+    .btn-scan-prod {
+      padding: 0 14px; background: var(--primary); color: #fff;
+      border: none; border-radius: 8px; font-family: 'Tajawal', sans-serif;
+      font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
+      transition: background .2s;
+    }
+    .btn-scan-prod:hover { background: #178a62; }
+    .btn-scan-prod:disabled { background: var(--text-muted); cursor: default; }
+    .btn-scan-prod.scanning { background: #e67e22; animation: scanPulse 0.9s infinite; }
+    @keyframes scanPulse {
+      0%,100% { opacity:1; } 50% { opacity:.6; }
+    }
+    #prod-barcode.scanning {
+      border-color: #e67e22;
+      box-shadow: 0 0 0 3px rgba(230,126,34,0.18);
+    }
 
     /* ═══ CASHIER ═══ */
     .cashier-layout { display: grid; grid-template-columns: 1fr 380px; gap: 16px; min-height: calc(100vh - 120px); }
@@ -410,27 +428,27 @@
       <nav class="sidebar-nav">
         <div class="nav-section-title">القائمة الرئيسية</div>
         <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
-          <span class="nav-icon">📊</span> لوحة التحكم
+          <span class="nav-icon">▤</span> لوحة التحكم
         </div>
         <div class="nav-item" data-page="cashier" onclick="navigate('cashier')">
-          <span class="nav-icon">🛒</span> الكاشير (نقطة البيع)
+          <span class="nav-icon">⊟</span> الكاشير (نقطة البيع)
         </div>
         <div class="nav-section-title">الإدارة</div>
         <div class="nav-item" data-page="products" onclick="navigate('products')">
-          <span class="nav-icon">📦</span> المنتجات
+          <span class="nav-icon">▣</span> المنتجات
         </div>
         <div class="nav-item" data-page="invoices" onclick="navigate('invoices')">
-          <span class="nav-icon">🧾</span> الفواتير
+          <span class="nav-icon">≋</span> الفواتير
         </div>
         <div class="nav-item" data-page="expenses" onclick="navigate('expenses')">
-          <span class="nav-icon">💸</span> المصاريف
+          <span class="nav-icon">↙</span> المصاريف
         </div>
         <div class="nav-item" data-page="customers" onclick="navigate('customers')">
-          <span class="nav-icon">👥</span> العملاء
+          <span class="nav-icon">◎</span> العملاء
         </div>
         <div class="nav-section-title">التحليل</div>
         <div class="nav-item" data-page="reports" onclick="navigate('reports')">
-          <span class="nav-icon">📈</span> التقارير
+          <span class="nav-icon">↑</span> التقارير
         </div>
       </nav>
       <div class="sidebar-footer">
@@ -439,7 +457,7 @@
           <span id="conn-text">متصل بالإنترنت</span>
         </div>
         <div class="nav-item logout" onclick="doLogout()">
-          <span class="nav-icon">🚪</span> تسجيل الخروج
+          <span class="nav-icon">⎋</span> تسجيل الخروج
         </div>
       </div>
     </aside>
@@ -458,16 +476,16 @@
         <div class="kpi-grid" id="dash-kpi"></div>
         <div class="dash-grid">
           <div class="card">
-            <div class="section-title">🧾 آخر الفواتير</div>
+            <div class="section-title">آخر الفواتير</div>
             <div id="dash-invoices"></div>
           </div>
           <div class="card">
-            <div class="section-title">💸 آخر المصاريف</div>
+            <div class="section-title">آخر المصاريف</div>
             <div id="dash-expenses"></div>
           </div>
         </div>
         <div class="card">
-          <div class="section-title">🛒 آخر مبيعات الكاشير</div>
+          <div class="section-title">آخر مبيعات الكاشير</div>
           <div id="dash-sales"></div>
         </div>
       </div>
@@ -476,10 +494,10 @@
       <div class="page" id="page-cashier">
         <div class="page-header">
           <div>
-            <div class="page-title">🛒 الكاشير — نقطة البيع</div>
+            <div class="page-title">الكاشير — نقطة البيع</div>
             <div class="page-subtitle">امسح الباركود أو ابحث عن المنتج</div>
           </div>
-          <button class="btn btn-ghost btn-sm" onclick="clearCart()">🗑 تفريغ السلة</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearCart()">✕ تفريغ السلة</button>
         </div>
         <div class="cashier-layout">
           <div class="cashier-left">
@@ -488,7 +506,7 @@
               <div style="font-size:13px;color:rgba(255,255,255,0.6);margin-bottom:4px;">ماسح الباركود (USB)</div>
               <div style="font-size:16px;font-weight:700;margin-bottom:12px;">امسح المنتج أو اكتب الباركود يدوياً</div>
               <div class="barcode-input-wrap">
-                <input type="text" class="barcode-input" id="barcode-input" placeholder="🔍 الباركود أو اسم المنتج..." autocomplete="off" autofocus>
+                <input type="text" class="barcode-input" id="barcode-input" placeholder="الباركود أو اسم المنتج..." autocomplete="off" autofocus>
                 <button class="btn btn-primary" onclick="searchBarcode()">إضافة</button>
               </div>
               <div id="barcode-msg" style="margin-top:10px;font-size:13px;color:rgba(255,200,100,0.9);display:none;"></div>
@@ -496,7 +514,7 @@
             <!-- Product search/grid -->
             <div class="card">
               <div class="toolbar">
-                <input type="text" class="toolbar-search" id="pos-search" placeholder="🔍 ابحث عن منتج..." oninput="renderPOSProducts()">
+                <input type="text" class="toolbar-search" id="pos-search" placeholder="ابحث عن منتج..." oninput="renderPOSProducts()">
                 <select class="toolbar-select" id="pos-cat" onchange="renderPOSProducts()">
                   <option value="">كل الفئات</option>
                 </select>
@@ -542,11 +560,11 @@
                 <div class="cart-row">
                   <select class="cart-select" id="cart-payment">
                     <option value="cash">💵 نقداً</option>
-                    <option value="card">💳 بطاقة</option>
-                    <option value="credit">📋 آجل</option>
+                    <option value="card">بطاقة</option>
+                    <option value="credit">آجل</option>
                   </select>
                 </div>
-                <button class="btn-complete" onclick="completeSale()">✅ إتمام البيع</button>
+                <button class="btn-complete" onclick="completeSale()">إتمام البيع</button>
               </div>
             </div>
           </div>
@@ -557,14 +575,14 @@
       <div class="page" id="page-products">
         <div class="page-header">
           <div>
-            <div class="page-title">📦 المنتجات</div>
+            <div class="page-title">المنتجات</div>
             <div class="page-subtitle">إدارة كتالوج المنتجات والمخزون</div>
           </div>
           <button class="btn btn-primary" onclick="openProductModal()">＋ منتج جديد</button>
         </div>
         <div id="stock-warnings"></div>
         <div class="toolbar">
-          <input type="text" class="toolbar-search" id="prod-search" placeholder="🔍 ابحث بالاسم أو الباركود..." oninput="renderProducts()">
+          <input type="text" class="toolbar-search" id="prod-search" placeholder="ابحث بالاسم أو الباركود..." oninput="renderProducts()">
           <select class="toolbar-select" id="prod-cat-filter" onchange="renderProducts()">
             <option value="">كل الفئات</option>
           </select>
@@ -587,16 +605,16 @@
       <div class="page" id="page-invoices">
         <div class="page-header">
           <div>
-            <div class="page-title">🧾 الفواتير</div>
+            <div class="page-title">الفواتير</div>
             <div class="page-subtitle">إدارة فواتير العملاء</div>
           </div>
           <button class="btn btn-primary" onclick="openInvoiceModal()">＋ فاتورة جديدة</button>
         </div>
         <div class="filter-tabs">
           <button class="filter-tab active" onclick="filterInvoices('')">الكل</button>
-          <button class="filter-tab" onclick="filterInvoices('pending')">⏳ معلقة</button>
-          <button class="filter-tab" onclick="filterInvoices('paid')">✅ مدفوعة</button>
-          <button class="filter-tab" onclick="filterInvoices('overdue')">🔴 متأخرة</button>
+          <button class="filter-tab" onclick="filterInvoices('pending')">معلقة</button>
+          <button class="filter-tab" onclick="filterInvoices('paid')">مدفوعة</button>
+          <button class="filter-tab" onclick="filterInvoices('overdue')">متأخرة</button>
         </div>
         <div class="table-wrap">
           <table>
@@ -615,13 +633,13 @@
       <div class="page" id="page-expenses">
         <div class="page-header">
           <div>
-            <div class="page-title">💸 المصاريف</div>
+            <div class="page-title">المصاريف</div>
             <div class="page-subtitle">تتبع مصاريف المشروع</div>
           </div>
           <button class="btn btn-primary" onclick="openExpenseModal()">＋ مصروف جديد</button>
         </div>
         <div class="toolbar">
-          <input type="text" class="toolbar-search" id="exp-search" placeholder="🔍 ابحث..." oninput="renderExpenses()">
+          <input type="text" class="toolbar-search" id="exp-search" placeholder="ابحث..." oninput="renderExpenses()">
           <select class="toolbar-select" id="exp-cat-filter" onchange="renderExpenses()">
             <option value="">كل الفئات</option>
             <option>إيجار</option><option>رواتب</option><option>مشتريات</option>
@@ -646,13 +664,13 @@
       <div class="page" id="page-customers">
         <div class="page-header">
           <div>
-            <div class="page-title">👥 العملاء</div>
+            <div class="page-title">العملاء</div>
             <div class="page-subtitle">إدارة قاعدة العملاء</div>
           </div>
           <button class="btn btn-primary" onclick="openCustomerModal()">＋ عميل جديد</button>
         </div>
         <div class="toolbar">
-          <input type="text" class="toolbar-search" id="cust-search" placeholder="🔍 ابحث..." oninput="renderCustomers()">
+          <input type="text" class="toolbar-search" id="cust-search" placeholder="ابحث..." oninput="renderCustomers()">
         </div>
         <div class="table-wrap">
           <table>
@@ -671,24 +689,24 @@
       <div class="page" id="page-reports">
         <div class="page-header">
           <div>
-            <div class="page-title">📈 التقارير</div>
+            <div class="page-title">التقارير</div>
             <div class="page-subtitle" id="report-period">الشهر الحالي</div>
           </div>
-          <button class="btn btn-secondary" onclick="window.print()">🖨 طباعة</button>
+          <button class="btn btn-secondary" onclick="window.print()">طباعة</button>
         </div>
         <div class="kpi-grid" id="report-kpi"></div>
         <div class="dash-grid">
           <div class="card">
-            <div class="section-title">📦 أكثر المنتجات مبيعاً</div>
+            <div class="section-title">أكثر المنتجات مبيعاً</div>
             <div id="top-products"></div>
           </div>
           <div class="card">
-            <div class="section-title">💸 المصاريف حسب الفئة</div>
+            <div class="section-title">المصاريف حسب الفئة</div>
             <div id="expense-by-cat"></div>
           </div>
         </div>
         <div class="card">
-          <div class="section-title">📅 المبيعات اليومية (آخر 7 أيام)</div>
+          <div class="section-title">المبيعات اليومية — آخر 7 أيام</div>
           <div id="daily-chart" class="daily-chart"></div>
         </div>
       </div>
@@ -715,7 +733,11 @@
         </div>
         <div class="form-group">
           <label>الباركود</label>
-          <input type="text" id="prod-barcode" placeholder="123456789">
+          <div class="barcode-field-wrap">
+            <input type="text" id="prod-barcode" placeholder="123456789 أو اضغط مسح">
+            <button class="btn-scan-prod" id="btn-scan-prod" onclick="startProductBarcodeScan()" type="button">⌥ مسح</button>
+          </div>
+          <div id="prod-barcode-msg" style="font-size:12px;margin-top:5px;display:none;"></div>
         </div>
         <div class="form-group">
           <label>الفئة</label>
@@ -745,7 +767,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-product')">إلغاء</button>
-      <button class="btn btn-primary" onclick="saveProduct()">💾 حفظ</button>
+      <button class="btn btn-primary" onclick="saveProduct()">حفظ</button>
     </div>
   </div>
 </div>
@@ -869,7 +891,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-expense')">إلغاء</button>
-      <button class="btn btn-primary" onclick="saveExpense()">💾 حفظ</button>
+      <button class="btn btn-primary" onclick="saveExpense()">حفظ</button>
     </div>
   </div>
 </div>
@@ -904,7 +926,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-customer')">إلغاء</button>
-      <button class="btn btn-primary" onclick="saveCustomer()">💾 حفظ</button>
+      <button class="btn btn-primary" onclick="saveCustomer()">حفظ</button>
     </div>
   </div>
 </div>
@@ -915,7 +937,7 @@
     <div class="modal-header">
       <div class="modal-title">عرض الفاتورة</div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-secondary btn-sm" onclick="window.print()">🖨 طباعة</button>
+        <button class="btn btn-secondary btn-sm" onclick="window.print()">طباعة</button>
         <button class="modal-close" onclick="closeModal('modal-inv-view')">✕</button>
       </div>
     </div>
@@ -927,7 +949,7 @@
 <div class="modal-overlay" id="modal-receipt">
   <div class="modal-box">
     <div class="modal-header">
-      <div class="modal-title">✅ تم البيع بنجاح</div>
+      <div class="modal-title">تم البيع بنجاح</div>
       <button class="modal-close" onclick="closeModal('modal-receipt')">✕</button>
     </div>
     <div class="modal-body">
@@ -935,7 +957,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-receipt')">إغلاق</button>
-      <button class="btn btn-primary" onclick="printReceipt()">🖨 طباعة</button>
+      <button class="btn btn-primary" onclick="printReceipt()">طباعة</button>
     </div>
   </div>
 </div>
@@ -1105,7 +1127,7 @@ function toast(msg, type='success') {
   const c = document.getElementById('toast-container');
   const t = document.createElement('div');
   t.className = `toast ${type}`;
-  t.innerHTML = (type==='success'?'✅':type==='error'?'❌':'⚠️') + ' ' + msg;
+  t.innerHTML = (type==='success'?'✓':type==='error'?'✕':'▲') + ' ' + msg;
   c.appendChild(t);
   setTimeout(() => t.remove(), 3500);
 }
@@ -1165,22 +1187,22 @@ async function renderDashboard() {
 
   document.getElementById('dash-kpi').innerHTML = `
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#e8f8f1"><span style="font-size:22px">💰</span></div>
+      <div class="kpi-icon" style="background:#e8f8f1"><span style="font-size:18px;font-weight:700">ر.س</span></div>
       <div class="kpi-value" style="color:var(--success)">${fmt(totalRevenue)}</div>
       <div class="kpi-label">إجمالي الإيرادات (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fef6e4"><span style="font-size:22px">⏳</span></div>
+      <div class="kpi-icon" style="background:#fef6e4"><span style="font-size:22px">◷</span></div>
       <div class="kpi-value" style="color:var(--warning)">${fmt(pending)}</div>
       <div class="kpi-label">فواتير معلقة (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fde8e8"><span style="font-size:22px">💸</span></div>
+      <div class="kpi-icon" style="background:#fde8e8"><span style="font-size:22px;font-weight:700">↓</span></div>
       <div class="kpi-value" style="color:var(--danger)">${fmt(totalExp)}</div>
       <div class="kpi-label">إجمالي المصاريف (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:${netProfit>=0?'#e8f8f1':'#fde8e8'}"><span style="font-size:22px">${netProfit>=0?'📈':'📉'}</span></div>
+      <div class="kpi-icon" style="background:${netProfit>=0?'#e8f8f1':'#fde8e8'}"><span style="font-size:20px;font-weight:700">${netProfit>=0?'↑':'↓'}</span></div>
       <div class="kpi-value" style="color:${netProfit>=0?'var(--success)':'var(--danger)'}">${fmt(netProfit)}</div>
       <div class="kpi-label">صافي الربح (ر.س)</div>
     </div>
@@ -1201,7 +1223,7 @@ async function renderDashboard() {
         <div style="font-size:14px;font-weight:700">${fmt(i.total)} ر.س</div>
         ${invBadge(i.status)}
       </div>
-    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">لا توجد فواتير</div></div>';
+    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">≋</div><div class="empty-text">لا توجد فواتير</div></div>';
 
   // Last 4 expenses
   const lastExp = expenses.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,4);
@@ -1212,7 +1234,7 @@ async function renderDashboard() {
         <div style="font-size:11px;color:var(--text-muted)">${e.category} — ${fmtDate(e.date)}</div>
       </div>
       <div style="font-size:14px;font-weight:700;color:var(--danger)">${fmt(e.amount)} ر.س</div>
-    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">💸</div><div class="empty-text">لا توجد مصاريف</div></div>';
+    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">−</div><div class="empty-text">لا توجد مصاريف</div></div>';
 
   // Last 4 sales
   const lastSales = sales.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,4);
@@ -1244,9 +1266,85 @@ function invBadge(status) {
 }
 
 // ══════════════════════════════════════════════════════════
+//  PRODUCT BARCODE SCAN
+// ══════════════════════════════════════════════════════════
+let _prodScanHandler = null;
+
+function startProductBarcodeScan() {
+  const input   = document.getElementById('prod-barcode');
+  const btn     = document.getElementById('btn-scan-prod');
+  const msg     = document.getElementById('prod-barcode-msg');
+
+  // cancel existing listener if any
+  if (_prodScanHandler) {
+    input.removeEventListener('keydown', _prodScanHandler);
+    _prodScanHandler = null;
+  }
+
+  input.value = '';
+  input.focus();
+  input.classList.add('scanning');
+  btn.textContent = '◉ جاري المسح...';
+  btn.classList.add('scanning');
+  btn.disabled = true;
+  msg.style.display = 'block';
+  msg.style.color = 'var(--text-muted)';
+  msg.textContent = 'وجّه الماسح نحو الباركود أو اكتب الرقم يدوياً ثم اضغط Enter';
+
+  _prodScanHandler = function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = input.value.trim();
+      input.classList.remove('scanning');
+      btn.textContent = '⌥ مسح';
+      btn.classList.remove('scanning');
+      btn.disabled = false;
+      if (val) {
+        msg.style.color = 'var(--success)';
+        msg.textContent = 'تم تسجيل الباركود: ' + val;
+        checkProductBarcodeExists(val);
+      } else {
+        msg.style.display = 'none';
+      }
+      input.removeEventListener('keydown', _prodScanHandler);
+      _prodScanHandler = null;
+    }
+  };
+  input.addEventListener('keydown', _prodScanHandler);
+}
+
+async function checkProductBarcodeExists(barcode) {
+  if (!barcode || !currentUser) return;
+  const msg = document.getElementById('prod-barcode-msg');
+  const editingId = parseInt(document.getElementById('prod-id').value) || 0;
+  const existing = await db.products
+    .where('barcode').equals(barcode)
+    .and(p => p.userId === currentUser.id)
+    .first();
+  if (existing && existing.id !== editingId) {
+    msg.style.color = 'var(--warning)';
+    msg.textContent = '▲ هذا الباركود مستخدم للمنتج: ' + existing.name;
+  }
+}
+
+function resetProductBarcodeUI() {
+  if (_prodScanHandler) {
+    document.getElementById('prod-barcode')?.removeEventListener('keydown', _prodScanHandler);
+    _prodScanHandler = null;
+  }
+  const btn = document.getElementById('btn-scan-prod');
+  const msg = document.getElementById('prod-barcode-msg');
+  if (btn) { btn.textContent = '⌥ مسح'; btn.classList.remove('scanning'); btn.disabled = false; }
+  const input = document.getElementById('prod-barcode');
+  if (input) input.classList.remove('scanning');
+  if (msg) msg.style.display = 'none';
+}
+
+// ══════════════════════════════════════════════════════════
 //  PRODUCTS CRUD
 // ══════════════════════════════════════════════════════════
 function openProductModal(prod=null) {
+  resetProductBarcodeUI();
   document.getElementById('product-modal-title').textContent = prod ? 'تعديل المنتج' : 'إضافة منتج جديد';
   document.getElementById('prod-id').value = prod?.id || '';
   document.getElementById('prod-name').value = prod?.name || '';
@@ -1318,8 +1416,8 @@ async function renderProducts() {
   const outStock = prods.filter(p => p.stock <= 0);
   const warns = document.getElementById('stock-warnings');
   warns.innerHTML = '';
-  if (outStock.length) warns.innerHTML += `<div class="alert alert-danger">⚠️ نفد المخزون: ${outStock.map(p=>p.name).join('، ')}</div>`;
-  if (lowStock.length) warns.innerHTML += `<div class="alert alert-warning">⚠️ مخزون منخفض (أقل من 5): ${lowStock.map(p=>p.name).join('، ')}</div>`;
+  if (outStock.length) warns.innerHTML += `<div class="alert alert-danger">▲ نفد المخزون: ${outStock.map(p=>p.name).join('، ')}</div>`;
+  if (lowStock.length) warns.innerHTML += `<div class="alert alert-warning">▲ مخزون منخفض (أقل من 5): ${lowStock.map(p=>p.name).join('، ')}</div>`;
 
   await updateCatDatalist();
 
@@ -1340,11 +1438,11 @@ async function renderProducts() {
       <td>${p.unit||'قطعة'}</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick='editProduct(${p.id})'>✏️</button>
-          <button class="btn btn-danger btn-sm" onclick='deleteProduct(${p.id})'>🗑</button>
+          <button class="btn btn-ghost btn-sm" onclick='editProduct(${p.id})'>✎</button>
+          <button class="btn btn-danger btn-sm" onclick='deleteProduct(${p.id})'>✕</button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📦</div><div class="empty-text">لا توجد منتجات</div><div class="empty-sub">ابدأ بإضافة منتجاتك</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">▣</div><div class="empty-text">لا توجد منتجات</div><div class="empty-sub">ابدأ بإضافة منتجاتك</div></div></td></tr>`;
 }
 
 async function editProduct(id) {
@@ -1478,14 +1576,14 @@ async function searchBarcode() {
   if (prod) {
     if (prod.stock <= 0) {
       beep(false);
-      msg.textContent = '⚠️ هذا المنتج نفد من المخزون';
+      msg.textContent = '▲ هذا المنتج نفد من المخزون';
       msg.style.display = 'block';
     } else {
       addToCart(prod);
     }
   } else {
     beep(false);
-    msg.innerHTML = `⚠️ المنتج "${val}" غير موجود — <a href="#" onclick="openProductModal();return false;" style="color:#ffd700">هل تريد إضافته؟</a>`;
+    msg.innerHTML = `▲ المنتج "${val}" غير موجود — <a href="#" onclick="openProductModal();return false;" style="color:#ffd700">هل تريد إضافته؟</a>`;
     msg.style.display = 'block';
   }
   document.getElementById('barcode-input').value = '';
@@ -1552,7 +1650,7 @@ async function completeSale() {
   cart = [];
   renderCart();
   renderPOSProducts();
-  toast('تم البيع بنجاح! 🎉');
+  toast('تم البيع بنجاح');
 }
 
 function printReceipt() {
@@ -1693,18 +1791,18 @@ async function renderInvoices() {
       <td>${invBadge(inv.status)}</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick="viewInvoice(${inv.id})">👁</button>
-          ${inv.status!=='paid'?`<button class="btn btn-secondary btn-sm" onclick="markPaid(${inv.id})">✅</button>`:''}
-          <button class="btn btn-ghost btn-sm" onclick='editInvoice(${inv.id})'>✏️</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteInvoice(${inv.id})">🗑</button>
+          <button class="btn btn-ghost btn-sm" onclick="viewInvoice(${inv.id})">◉</button>
+          ${inv.status!=='paid'?`<button class="btn btn-secondary btn-sm" onclick="markPaid(${inv.id})">✓</button>`:''}
+          <button class="btn btn-ghost btn-sm" onclick='editInvoice(${inv.id})'>✎</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteInvoice(${inv.id})">✕</button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">لا توجد فواتير</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">≋</div><div class="empty-text">لا توجد فواتير</div></div></td></tr>`;
 }
 
 async function markPaid(id) {
   await db.invoices.update(id, { status:'paid', updatedAt: new Date() });
-  toast('تم تحديد الفاتورة كمدفوعة ✅');
+  toast('تم تحديد الفاتورة كمدفوعة');
   renderInvoices();
 }
 
@@ -1838,11 +1936,11 @@ async function renderExpenses() {
       <td style="font-size:12px;color:var(--text-muted)">${e.notes||'—'}</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick='editExpense(${e.id})'>✏️</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})">🗑</button>
+          <button class="btn btn-ghost btn-sm" onclick='editExpense(${e.id})'>✎</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})">✕</button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">💸</div><div class="empty-text">لا توجد مصاريف</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">−</div><div class="empty-text">لا توجد مصاريف</div></div></td></tr>`;
 }
 
 async function editExpense(id) {
@@ -1919,11 +2017,11 @@ async function renderCustomers() {
       <td style="font-weight:700;color:var(--primary)">${fmt(totalMap[c.id]||0)} ر.س</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick='editCustomer(${c.id})'>✏️</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteCustomer(${c.id})">🗑</button>
+          <button class="btn btn-ghost btn-sm" onclick='editCustomer(${c.id})'>✎</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCustomer(${c.id})">✕</button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">👥</div><div class="empty-text">لا يوجد عملاء</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><div class="empty-text">لا يوجد عملاء</div></div></td></tr>`;
 }
 
 async function editCustomer(id) {
@@ -1978,22 +2076,22 @@ async function renderReports() {
 
   document.getElementById('report-kpi').innerHTML = `
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#e8f8f1">💰</div>
+      <div class="kpi-icon" style="background:#e8f8f1"><span style="font-size:16px;font-weight:700">ر.س</span></div>
       <div class="kpi-value" style="color:var(--success)">${fmt(monthRev)}</div>
       <div class="kpi-label">إيرادات الشهر (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fde8e8">💸</div>
+      <div class="kpi-icon" style="background:#fde8e8"><span style="font-size:20px;font-weight:700">↓</span></div>
       <div class="kpi-value" style="color:var(--danger)">${fmt(monthExp)}</div>
       <div class="kpi-label">مصاريف الشهر (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:${monthProfit>=0?'#e8f8f1':'#fde8e8'}">${monthProfit>=0?'📈':'📉'}</div>
+      <div class="kpi-icon" style="background:${monthProfit>=0?'#e8f8f1':'#fde8e8'}"><span style="font-size:20px;font-weight:700">${monthProfit>=0?'↑':'↓'}</span></div>
       <div class="kpi-value" style="color:${monthProfit>=0?'var(--success)':'var(--danger)'}">${fmt(monthProfit)}</div>
       <div class="kpi-label">صافي الربح (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fef6e4">⏳</div>
+      <div class="kpi-icon" style="background:#fef6e4"><span style="font-size:20px">◷</span></div>
       <div class="kpi-value" style="color:var(--warning)">${pendingCount}</div>
       <div class="kpi-label">فواتير معلقة هذا الشهر</div>
     </div>
@@ -2020,7 +2118,7 @@ async function renderReports() {
           </div>
           <div class="top-product-qty">${qty} وحدة</div>
         </div>`).join('')}
-    </div>` : '<div class="empty-state"><div class="empty-icon">📦</div><div class="empty-text">لا توجد بيانات مبيعات</div></div>';
+    </div>` : '<div class="empty-state"><div class="empty-icon">▣</div><div class="empty-text">لا توجد بيانات مبيعات</div></div>';
 
   // Expenses by category
   const expByCat = {};
@@ -2039,7 +2137,7 @@ async function renderReports() {
             <div style="height:6px;border-radius:3px;background:var(--danger);opacity:0.7;width:${(amount/maxExp*100).toFixed(0)}%"></div>
           </div>
         </div>`).join('')}
-    </div>` : '<div class="empty-state"><div class="empty-icon">💸</div><div class="empty-text">لا توجد مصاريف هذا الشهر</div></div>';
+    </div>` : '<div class="empty-state"><div class="empty-icon">−</div><div class="empty-text">لا توجد مصاريف هذا الشهر</div></div>';
 
   // Daily sales chart (last 7 days)
   const days = Array.from({length:7}, (_,i) => {
