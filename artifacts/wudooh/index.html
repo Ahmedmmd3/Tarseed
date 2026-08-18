@@ -3,16 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>وضوح — نظام الكاشير والمحاسبة</title>
+  <title>ترصيد — برنامج محاسبي متكامل</title>
   <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --primary: #1D9E75;
-      --primary-dark: #158060;
-      --primary-light: #e6f7f2;
+      --primary: #00B8AB;
+      --primary-dark: #009487;
+      --primary-light: #e0f8f6;
       --bg: #f4f6f9;
       --card: #ffffff;
       --border: #e5e9ef;
@@ -31,17 +31,15 @@
     /* ═══ AUTH ═══ */
     #auth-screen {
       min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      background: linear-gradient(135deg, #0f5c42 0%, #1D9E75 50%, #27c58f 100%);
+      background: linear-gradient(135deg, #0D1B4B 0%, #1A2E7A 55%, #1E3A90 100%);
     }
     .auth-box {
       background: white; border-radius: 20px; padding: 40px;
       width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
     }
     .auth-logo { text-align: center; margin-bottom: 32px; }
-    .auth-logo .logo-icon {
-      width: 64px; height: 64px; background: var(--primary); border-radius: 16px;
-      display: inline-flex; align-items: center; justify-content: center;
-      font-size: 32px; margin-bottom: 12px;
+    .auth-logo .logo-img {
+      width: 110px; height: 110px; object-fit: contain; margin-bottom: 8px;
     }
     .auth-logo h1 { font-size: 28px; font-weight: 800; color: var(--primary); }
     .auth-logo p { color: var(--text-muted); font-size: 14px; }
@@ -78,15 +76,15 @@
 
     /* ═══ SIDEBAR ═══ */
     .sidebar {
-      width: var(--sidebar-w); background: #0f2027; color: white;
+      width: var(--sidebar-w); background: #0D1B4B; color: white;
       display: flex; flex-direction: column; position: fixed; right: 0; top: 0;
       height: 100vh; z-index: 100;
     }
     .sidebar-logo { padding: 24px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); }
     .sidebar-logo .logo-wrap { display: flex; align-items: center; gap: 10px; }
-    .sidebar-logo .logo-icon {
-      width: 40px; height: 40px; background: var(--primary); border-radius: 10px;
-      display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0;
+    .sidebar-logo .logo-img {
+      width: 36px; height: 36px; object-fit: contain; flex-shrink: 0;
+      filter: brightness(0) invert(1);
     }
     .sidebar-logo .logo-text { font-size: 20px; font-weight: 800; color: white; }
     .sidebar-logo .logo-sub { font-size: 11px; color: rgba(255,255,255,0.45); }
@@ -180,7 +178,7 @@
       font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;
       transition: background .2s;
     }
-    .btn-scan-prod:hover { background: #178a62; }
+    .btn-scan-prod:hover { background: #009487; }
     .btn-scan-prod:disabled { background: var(--text-muted); cursor: default; }
     .btn-scan-prod.scanning { background: #e67e22; animation: scanPulse 0.9s infinite; }
     @keyframes scanPulse {
@@ -196,7 +194,7 @@
     .cashier-left { display: flex; flex-direction: column; gap: 16px; }
     .cashier-right { position: sticky; top: 28px; height: fit-content; }
     .barcode-section {
-      background: #0f2027; border-radius: var(--radius); padding: 20px; color: white;
+      background: #0D1B4B; border-radius: var(--radius); padding: 20px; color: white;
     }
     .barcode-input-wrap { display: flex; gap: 10px; margin-top: 12px; }
     .barcode-input {
@@ -369,9 +367,9 @@
 <div id="auth-screen">
   <div class="auth-box">
     <div class="auth-logo">
-      <div class="logo-icon">✓</div>
-      <h1>وضوح</h1>
-      <p>نظام الكاشير والمحاسبة المتكامل</p>
+      <img src="logo.png" alt="ترصيد" class="logo-img">
+      <h1>ترصيد</h1>
+      <p>برنامج محاسبي متكامل</p>
     </div>
     <div class="auth-tabs">
       <button class="auth-tab active" onclick="switchAuthTab('login')">تسجيل الدخول</button>
@@ -419,9 +417,9 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-logo">
         <div class="logo-wrap">
-          <div class="logo-icon">✓</div>
+          <img src="logo.png" alt="ترصيد" class="logo-img">
           <div>
-            <div class="logo-text">وضوح</div>
+            <div class="logo-text">ترصيد</div>
             <div class="logo-sub" id="project-name-display">محل</div>
           </div>
         </div>
@@ -1624,7 +1622,7 @@ async function completeSale() {
   const now = new Date();
   document.getElementById('receipt-content').innerHTML = `
     <div class="receipt-header">
-      <div style="font-size:28px;font-weight:800;color:var(--primary)">✓ وضوح</div>
+      <div style="font-size:28px;font-weight:800;color:var(--primary)">ترصيد</div>
       <div style="font-size:12px;color:var(--text-muted)">${currentUser.projectName}</div>
       <div style="font-size:11px;color:var(--text-muted);margin-top:4px">${now.toLocaleString('ar-SA')}</div>
     </div>
@@ -1662,7 +1660,7 @@ function printReceipt() {
     .receipt-divider{border:1px dashed #ccc;margin:10px 0;}
     .receipt-row,.receipt-total-row{display:flex;justify-content:space-between;margin-bottom:5px;font-size:13px;}
     .receipt-total-row{font-size:16px;font-weight:800;}
-    h2{color:#1D9E75;}
+    h2{color:#00B8AB;}
   </style></head><body>${content}</body></html>`);
   win.print();
   win.close();
@@ -1828,7 +1826,7 @@ async function viewInvoice(id) {
   document.getElementById('inv-view-content').innerHTML = `
     <div class="inv-view-header">
       <div class="inv-logo-sec">
-        <h2>✓ وضوح</h2>
+        <h2>ترصيد</h2>
         <p>${currentUser.projectName}</p>
       </div>
       <div class="inv-meta">
