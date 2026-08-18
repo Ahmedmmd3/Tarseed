@@ -6,6 +6,7 @@
   <title>وضوح — نظام الكاشير والمحاسبة</title>
   <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -99,7 +100,7 @@
     }
     .nav-item:hover { background: rgba(255,255,255,0.07); color: white; }
     .nav-item.active { background: var(--primary); color: white; }
-    .nav-icon { font-size: 17px; flex-shrink: 0; }
+    .nav-icon { font-size: 16px; flex-shrink: 0; width: 20px; text-align: center; }
     .sidebar-footer { padding: 16px 12px; border-top: 1px solid rgba(255,255,255,0.08); }
     .connection-badge {
       display: flex; align-items: center; gap: 8px; padding: 10px 12px;
@@ -428,27 +429,27 @@
       <nav class="sidebar-nav">
         <div class="nav-section-title">القائمة الرئيسية</div>
         <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
-          <span class="nav-icon">▤</span> لوحة التحكم
+          <i class="bi bi-speedometer2 nav-icon"></i> لوحة التحكم
         </div>
         <div class="nav-item" data-page="cashier" onclick="navigate('cashier')">
-          <span class="nav-icon">⊟</span> الكاشير (نقطة البيع)
+          <i class="bi bi-upc-scan nav-icon"></i> الكاشير (نقطة البيع)
         </div>
         <div class="nav-section-title">الإدارة</div>
         <div class="nav-item" data-page="products" onclick="navigate('products')">
-          <span class="nav-icon">▣</span> المنتجات
+          <i class="bi bi-box-seam nav-icon"></i> المنتجات
         </div>
         <div class="nav-item" data-page="invoices" onclick="navigate('invoices')">
-          <span class="nav-icon">≋</span> الفواتير
+          <i class="bi bi-receipt nav-icon"></i> الفواتير
         </div>
         <div class="nav-item" data-page="expenses" onclick="navigate('expenses')">
-          <span class="nav-icon">↙</span> المصاريف
+          <i class="bi bi-wallet2 nav-icon"></i> المصاريف
         </div>
         <div class="nav-item" data-page="customers" onclick="navigate('customers')">
-          <span class="nav-icon">◎</span> العملاء
+          <i class="bi bi-people nav-icon"></i> العملاء
         </div>
         <div class="nav-section-title">التحليل</div>
         <div class="nav-item" data-page="reports" onclick="navigate('reports')">
-          <span class="nav-icon">↑</span> التقارير
+          <i class="bi bi-bar-chart-line nav-icon"></i> التقارير
         </div>
       </nav>
       <div class="sidebar-footer">
@@ -457,7 +458,7 @@
           <span id="conn-text">متصل بالإنترنت</span>
         </div>
         <div class="nav-item logout" onclick="doLogout()">
-          <span class="nav-icon">⎋</span> تسجيل الخروج
+          <i class="bi bi-box-arrow-left nav-icon"></i> تسجيل الخروج
         </div>
       </div>
     </aside>
@@ -497,7 +498,7 @@
             <div class="page-title">الكاشير — نقطة البيع</div>
             <div class="page-subtitle">امسح الباركود أو ابحث عن المنتج</div>
           </div>
-          <button class="btn btn-ghost btn-sm" onclick="clearCart()">✕ تفريغ السلة</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearCart()"><i class="bi bi-trash3"></i> تفريغ السلة</button>
         </div>
         <div class="cashier-layout">
           <div class="cashier-left">
@@ -692,7 +693,7 @@
             <div class="page-title">التقارير</div>
             <div class="page-subtitle" id="report-period">الشهر الحالي</div>
           </div>
-          <button class="btn btn-secondary" onclick="window.print()">طباعة</button>
+          <button class="btn btn-secondary" onclick="window.print()"><i class="bi bi-printer"></i> طباعة</button>
         </div>
         <div class="kpi-grid" id="report-kpi"></div>
         <div class="dash-grid">
@@ -735,7 +736,7 @@
           <label>الباركود</label>
           <div class="barcode-field-wrap">
             <input type="text" id="prod-barcode" placeholder="123456789 أو اضغط مسح">
-            <button class="btn-scan-prod" id="btn-scan-prod" onclick="startProductBarcodeScan()" type="button">⌥ مسح</button>
+            <button class="btn-scan-prod" id="btn-scan-prod" onclick="startProductBarcodeScan()" type="button"><i class="bi bi-upc-scan"></i> مسح</button>
           </div>
           <div id="prod-barcode-msg" style="font-size:12px;margin-top:5px;display:none;"></div>
         </div>
@@ -767,7 +768,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-product')">إلغاء</button>
-      <button class="btn btn-primary" onclick="saveProduct()">حفظ</button>
+      <button class="btn btn-primary" onclick="saveProduct()"><i class="bi bi-floppy2"></i> حفظ</button>
     </div>
   </div>
 </div>
@@ -891,7 +892,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-expense')">إلغاء</button>
-      <button class="btn btn-primary" onclick="saveExpense()">حفظ</button>
+      <button class="btn btn-primary" onclick="saveExpense()"><i class="bi bi-floppy2"></i> حفظ</button>
     </div>
   </div>
 </div>
@@ -926,7 +927,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-customer')">إلغاء</button>
-      <button class="btn btn-primary" onclick="saveCustomer()">حفظ</button>
+      <button class="btn btn-primary" onclick="saveCustomer()"><i class="bi bi-floppy2"></i> حفظ</button>
     </div>
   </div>
 </div>
@@ -937,7 +938,7 @@
     <div class="modal-header">
       <div class="modal-title">عرض الفاتورة</div>
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-secondary btn-sm" onclick="window.print()">طباعة</button>
+        <button class="btn btn-secondary btn-sm" onclick="window.print()"><i class="bi bi-printer"></i> طباعة</button>
         <button class="modal-close" onclick="closeModal('modal-inv-view')">✕</button>
       </div>
     </div>
@@ -957,7 +958,7 @@
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modal-receipt')">إغلاق</button>
-      <button class="btn btn-primary" onclick="printReceipt()">طباعة</button>
+      <button class="btn btn-primary" onclick="printReceipt()"><i class="bi bi-printer"></i> طباعة</button>
     </div>
   </div>
 </div>
@@ -1127,7 +1128,7 @@ function toast(msg, type='success') {
   const c = document.getElementById('toast-container');
   const t = document.createElement('div');
   t.className = `toast ${type}`;
-  t.innerHTML = (type==='success'?'✓':type==='error'?'✕':'▲') + ' ' + msg;
+  const icon = type==='success' ? '<i class="bi bi-check-circle-fill"></i>' : type==='error' ? '<i class="bi bi-x-circle-fill"></i>' : '<i class="bi bi-exclamation-triangle-fill"></i>'; t.innerHTML = icon + ' ' + msg;
   c.appendChild(t);
   setTimeout(() => t.remove(), 3500);
 }
@@ -1187,22 +1188,22 @@ async function renderDashboard() {
 
   document.getElementById('dash-kpi').innerHTML = `
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#e8f8f1"><span style="font-size:18px;font-weight:700">ر.س</span></div>
+      <div class="kpi-icon" style="background:#e8f8f1"><i class="bi bi-cash-stack" style="font-size:22px;color:var(--success)"></i></div>
       <div class="kpi-value" style="color:var(--success)">${fmt(totalRevenue)}</div>
       <div class="kpi-label">إجمالي الإيرادات (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fef6e4"><span style="font-size:22px">◷</span></div>
+      <div class="kpi-icon" style="background:#fef6e4"><i class="bi bi-hourglass-split" style="font-size:20px;color:var(--warning)"></i></div>
       <div class="kpi-value" style="color:var(--warning)">${fmt(pending)}</div>
       <div class="kpi-label">فواتير معلقة (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fde8e8"><span style="font-size:22px;font-weight:700">↓</span></div>
+      <div class="kpi-icon" style="background:#fde8e8"><i class="bi bi-arrow-down-circle" style="font-size:21px;color:var(--danger)"></i></div>
       <div class="kpi-value" style="color:var(--danger)">${fmt(totalExp)}</div>
       <div class="kpi-label">إجمالي المصاريف (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:${netProfit>=0?'#e8f8f1':'#fde8e8'}"><span style="font-size:20px;font-weight:700">${netProfit>=0?'↑':'↓'}</span></div>
+      <div class="kpi-icon" style="background:${netProfit>=0?'#e8f8f1':'#fde8e8'}"><i class="bi ${netProfit>=0?'bi-graph-up':'bi-graph-down'}" style="font-size:20px;color:${netProfit>=0?'var(--success)':'var(--danger)'}"></i></div>
       <div class="kpi-value" style="color:${netProfit>=0?'var(--success)':'var(--danger)'}">${fmt(netProfit)}</div>
       <div class="kpi-label">صافي الربح (ر.س)</div>
     </div>
@@ -1223,7 +1224,7 @@ async function renderDashboard() {
         <div style="font-size:14px;font-weight:700">${fmt(i.total)} ر.س</div>
         ${invBadge(i.status)}
       </div>
-    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">≋</div><div class="empty-text">لا توجد فواتير</div></div>';
+    </div>`).join('') : '<div class="empty-state"><div class="empty-icon"><i class="bi bi-receipt"></i></div><div class="empty-text">لا توجد فواتير</div></div>';
 
   // Last 4 expenses
   const lastExp = expenses.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,4);
@@ -1234,7 +1235,7 @@ async function renderDashboard() {
         <div style="font-size:11px;color:var(--text-muted)">${e.category} — ${fmtDate(e.date)}</div>
       </div>
       <div style="font-size:14px;font-weight:700;color:var(--danger)">${fmt(e.amount)} ر.س</div>
-    </div>`).join('') : '<div class="empty-state"><div class="empty-icon">−</div><div class="empty-text">لا توجد مصاريف</div></div>';
+    </div>`).join('') : '<div class="empty-state"><div class="empty-icon"><i class="bi bi-wallet2"></i></div><div class="empty-text">لا توجد مصاريف</div></div>';
 
   // Last 4 sales
   const lastSales = sales.sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,4);
@@ -1284,7 +1285,7 @@ function startProductBarcodeScan() {
   input.value = '';
   input.focus();
   input.classList.add('scanning');
-  btn.textContent = '◉ جاري المسح...';
+  btn.innerHTML = '<i class="bi bi-upc-scan"></i> جاري المسح...';
   btn.classList.add('scanning');
   btn.disabled = true;
   msg.style.display = 'block';
@@ -1296,7 +1297,7 @@ function startProductBarcodeScan() {
       e.preventDefault();
       const val = input.value.trim();
       input.classList.remove('scanning');
-      btn.textContent = '⌥ مسح';
+      btn.innerHTML = '<i class="bi bi-upc-scan"></i> مسح';
       btn.classList.remove('scanning');
       btn.disabled = false;
       if (val) {
@@ -1334,7 +1335,7 @@ function resetProductBarcodeUI() {
   }
   const btn = document.getElementById('btn-scan-prod');
   const msg = document.getElementById('prod-barcode-msg');
-  if (btn) { btn.textContent = '⌥ مسح'; btn.classList.remove('scanning'); btn.disabled = false; }
+  if (btn) { btn.innerHTML = '<i class="bi bi-upc-scan"></i> مسح'; btn.classList.remove('scanning'); btn.disabled = false; }
   const input = document.getElementById('prod-barcode');
   if (input) input.classList.remove('scanning');
   if (msg) msg.style.display = 'none';
@@ -1438,11 +1439,11 @@ async function renderProducts() {
       <td>${p.unit||'قطعة'}</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick='editProduct(${p.id})'>✎</button>
-          <button class="btn btn-danger btn-sm" onclick='deleteProduct(${p.id})'>✕</button>
+          <button class="btn btn-ghost btn-sm" onclick='editProduct(${p.id})'><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-danger btn-sm" onclick='deleteProduct(${p.id})'><i class="bi bi-trash3"></i></button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">▣</div><div class="empty-text">لا توجد منتجات</div><div class="empty-sub">ابدأ بإضافة منتجاتك</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon"><i class="bi bi-box-seam"></i></div><div class="empty-text">لا توجد منتجات</div><div class="empty-sub">ابدأ بإضافة منتجاتك</div></div></td></tr>`;
 }
 
 async function editProduct(id) {
@@ -1791,13 +1792,13 @@ async function renderInvoices() {
       <td>${invBadge(inv.status)}</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick="viewInvoice(${inv.id})">◉</button>
-          ${inv.status!=='paid'?`<button class="btn btn-secondary btn-sm" onclick="markPaid(${inv.id})">✓</button>`:''}
-          <button class="btn btn-ghost btn-sm" onclick='editInvoice(${inv.id})'>✎</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteInvoice(${inv.id})">✕</button>
+          <button class="btn btn-ghost btn-sm" onclick="viewInvoice(${inv.id})"><i class="bi bi-eye"></i></button>
+          ${inv.status!=='paid'?`<button class="btn btn-secondary btn-sm" onclick="markPaid(${inv.id})"><i class="bi bi-check-circle"></i></button>`:''}
+          <button class="btn btn-ghost btn-sm" onclick='editInvoice(${inv.id})'><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-danger btn-sm" onclick="deleteInvoice(${inv.id})"><i class="bi bi-trash3"></i></button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">≋</div><div class="empty-text">لا توجد فواتير</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon"><i class="bi bi-receipt"></i></div><div class="empty-text">لا توجد فواتير</div></div></td></tr>`;
 }
 
 async function markPaid(id) {
@@ -1936,11 +1937,11 @@ async function renderExpenses() {
       <td style="font-size:12px;color:var(--text-muted)">${e.notes||'—'}</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick='editExpense(${e.id})'>✎</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})">✕</button>
+          <button class="btn btn-ghost btn-sm" onclick='editExpense(${e.id})'><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-danger btn-sm" onclick="deleteExpense(${e.id})"><i class="bi bi-trash3"></i></button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">−</div><div class="empty-text">لا توجد مصاريف</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon"><i class="bi bi-wallet2"></i></div><div class="empty-text">لا توجد مصاريف</div></div></td></tr>`;
 }
 
 async function editExpense(id) {
@@ -2017,11 +2018,11 @@ async function renderCustomers() {
       <td style="font-weight:700;color:var(--primary)">${fmt(totalMap[c.id]||0)} ر.س</td>
       <td>
         <div class="actions-cell">
-          <button class="btn btn-ghost btn-sm" onclick='editCustomer(${c.id})'>✎</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteCustomer(${c.id})">✕</button>
+          <button class="btn btn-ghost btn-sm" onclick='editCustomer(${c.id})'><i class="bi bi-pencil"></i></button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCustomer(${c.id})"><i class="bi bi-trash3"></i></button>
         </div>
       </td>
-    </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">◎</div><div class="empty-text">لا يوجد عملاء</div></div></td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon"><i class="bi bi-people"></i></div><div class="empty-text">لا يوجد عملاء</div></div></td></tr>`;
 }
 
 async function editCustomer(id) {
@@ -2076,22 +2077,22 @@ async function renderReports() {
 
   document.getElementById('report-kpi').innerHTML = `
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#e8f8f1"><span style="font-size:16px;font-weight:700">ر.س</span></div>
+      <div class="kpi-icon" style="background:#e8f8f1"><i class="bi bi-cash-stack" style="font-size:20px;color:var(--success)"></i></div>
       <div class="kpi-value" style="color:var(--success)">${fmt(monthRev)}</div>
       <div class="kpi-label">إيرادات الشهر (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fde8e8"><span style="font-size:20px;font-weight:700">↓</span></div>
+      <div class="kpi-icon" style="background:#fde8e8"><i class="bi bi-arrow-down-circle" style="font-size:20px;color:var(--danger)"></i></div>
       <div class="kpi-value" style="color:var(--danger)">${fmt(monthExp)}</div>
       <div class="kpi-label">مصاريف الشهر (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:${monthProfit>=0?'#e8f8f1':'#fde8e8'}"><span style="font-size:20px;font-weight:700">${monthProfit>=0?'↑':'↓'}</span></div>
+      <div class="kpi-icon" style="background:${monthProfit>=0?'#e8f8f1':'#fde8e8'}"><i class="bi ${monthProfit>=0?'bi-graph-up':'bi-graph-down'}" style="font-size:20px;color:${monthProfit>=0?'var(--success)':'var(--danger)'}"></i></div>
       <div class="kpi-value" style="color:${monthProfit>=0?'var(--success)':'var(--danger)'}">${fmt(monthProfit)}</div>
       <div class="kpi-label">صافي الربح (ر.س)</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-icon" style="background:#fef6e4"><span style="font-size:20px">◷</span></div>
+      <div class="kpi-icon" style="background:#fef6e4"><i class="bi bi-hourglass-split" style="font-size:19px;color:var(--warning)"></i></div>
       <div class="kpi-value" style="color:var(--warning)">${pendingCount}</div>
       <div class="kpi-label">فواتير معلقة هذا الشهر</div>
     </div>
@@ -2118,7 +2119,7 @@ async function renderReports() {
           </div>
           <div class="top-product-qty">${qty} وحدة</div>
         </div>`).join('')}
-    </div>` : '<div class="empty-state"><div class="empty-icon">▣</div><div class="empty-text">لا توجد بيانات مبيعات</div></div>';
+    </div>` : '<div class="empty-state"><div class="empty-icon"><i class="bi bi-box-seam"></i></div><div class="empty-text">لا توجد بيانات مبيعات</div></div>';
 
   // Expenses by category
   const expByCat = {};
@@ -2137,7 +2138,7 @@ async function renderReports() {
             <div style="height:6px;border-radius:3px;background:var(--danger);opacity:0.7;width:${(amount/maxExp*100).toFixed(0)}%"></div>
           </div>
         </div>`).join('')}
-    </div>` : '<div class="empty-state"><div class="empty-icon">−</div><div class="empty-text">لا توجد مصاريف هذا الشهر</div></div>';
+    </div>` : '<div class="empty-state"><div class="empty-icon"><i class="bi bi-wallet2"></i></div><div class="empty-text">لا توجد مصاريف هذا الشهر</div></div>';
 
   // Daily sales chart (last 7 days)
   const days = Array.from({length:7}, (_,i) => {
