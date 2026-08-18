@@ -1393,12 +1393,50 @@ async function saveProduct() {
 
   const id = document.getElementById('prod-id').value;
   if (id) {
+    // ── تعديل منتج موجود ──
+    const old = await db.products.get(parseInt(id));
     await db.products.update(parseInt(id), data);
-    toast('تم تحديث المنتج');
+
+    // إذا زادت الكمية وسعر الشراء محدد → أضف مصروف للكمية المضافة فقط
+    const addedQty = data.stock - (old?.stock ?? 0);
+    if (data.buyPrice > 0 && addedQty > 0) {
+      const expAmount = data.buyPrice * addedQty;
+      await db.expenses.add({
+        userId: currentUser.id,
+        description: `شراء مخزون: ${name}`,
+        category: 'مشتريات',
+        amount: expAmount,
+        paymentMethod: 'cash',
+        date: new Date().toISOString().split('T')[0],
+        notes: `${addedQty} ${data.unit} × ${data.buyPrice} ر.س`,
+        createdAt: new Date()
+      });
+      toast(`تم تحديث المنتج وإضافة مصروف ${expAmount.toLocaleString('ar-SA')} ر.س`);
+    } else {
+      toast('تم تحديث المنتج');
+    }
   } else {
+    // ── منتج جديد ──
     data.createdAt = new Date();
     await db.products.add(data);
-    toast('تمت إضافة المنتج');
+
+    // إذا سعر الشراء محدد والكمية أكبر من صفر → أضف مصروف تلقائي
+    if (data.buyPrice > 0 && data.stock > 0) {
+      const expAmount = data.buyPrice * data.stock;
+      await db.expenses.add({
+        userId: currentUser.id,
+        description: `شراء مخزون: ${name}`,
+        category: 'مشتريات',
+        amount: expAmount,
+        paymentMethod: 'cash',
+        date: new Date().toISOString().split('T')[0],
+        notes: `${data.stock} ${data.unit} × ${data.buyPrice} ر.س`,
+        createdAt: new Date()
+      });
+      toast(`تمت إضافة المنتج ومصروف شراء ${expAmount.toLocaleString('ar-SA')} ر.س`);
+    } else {
+      toast('تمت إضافة المنتج');
+    }
   }
   closeModal('modal-product');
   renderProducts();
