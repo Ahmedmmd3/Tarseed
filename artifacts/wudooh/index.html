@@ -525,18 +525,19 @@
         <div class="nav-item" data-page="cashier" onclick="navigate('cashier')">
           <i class="bi bi-upc-scan nav-icon"></i> الكاشير (نقطة البيع)
         </div>
-        <div class="nav-section-title">الإدارة</div>
-        <div class="nav-item" data-page="products" onclick="navigate('products')">
-          <i class="bi bi-box-seam nav-icon"></i> المنتجات
-        </div>
+        <div class="nav-section-title">المبيعات والعملاء</div>
         <div class="nav-item" data-page="invoices" onclick="navigate('invoices')">
-          <i class="bi bi-receipt nav-icon"></i> الفواتير
-        </div>
-        <div class="nav-item" data-page="expenses" onclick="navigate('expenses')">
-          <i class="bi bi-wallet2 nav-icon"></i> المصاريف
+          <i class="bi bi-receipt nav-icon"></i> الفواتير والمبيعات
         </div>
         <div class="nav-item" data-page="customers" onclick="navigate('customers')">
-          <i class="bi bi-people nav-icon"></i> العملاء
+          <i class="bi bi-people nav-icon"></i> علاقات العملاء
+        </div>
+        <div class="nav-section-title">المشتريات والمخزون</div>
+        <div class="nav-item" data-page="products" onclick="navigate('products')">
+          <i class="bi bi-box-seam nav-icon"></i> المنتجات والمخزون
+        </div>
+        <div class="nav-item" data-page="warehouses" onclick="navigate('warehouses')">
+          <i class="bi bi-building nav-icon"></i> المستودعات والفروع
         </div>
         <div class="nav-item" data-page="suppliers" onclick="navigate('suppliers')">
           <i class="bi bi-truck nav-icon"></i> الموردون
@@ -547,7 +548,17 @@
         <div class="nav-item" data-page="returns" onclick="navigate('returns')">
           <i class="bi bi-arrow-counterclockwise nav-icon"></i> المرتجعات
         </div>
-        <div class="nav-section-title">التحليل</div>
+        <div class="nav-section-title">المحاسبة والموارد</div>
+        <div class="nav-item" data-page="expenses" onclick="navigate('expenses')">
+          <i class="bi bi-wallet2 nav-icon"></i> المصاريف والحسابات
+        </div>
+        <div class="nav-item" data-page="employees" onclick="navigate('employees')">
+          <i class="bi bi-person-badge nav-icon"></i> الموارد البشرية
+        </div>
+        <div class="nav-item" data-page="projects" onclick="navigate('projects')">
+          <i class="bi bi-kanban nav-icon"></i> العمليات والمشاريع
+        </div>
+        <div class="nav-section-title">التحليل والامتثال</div>
         <div class="nav-item" data-page="reports" onclick="navigate('reports')">
           <i class="bi bi-bar-chart-line nav-icon"></i> التقارير
         </div>
@@ -940,6 +951,73 @@
         </div>
       </div>
 
+      <!-- ═══ WAREHOUSES & BRANCHES ═══ -->
+      <div class="page" id="page-warehouses">
+        <div class="page-header">
+          <div>
+            <div class="page-title">المستودعات والفروع</div>
+            <div class="page-subtitle">إدارة مواقع التشغيل وتوزيع المخزون</div>
+          </div>
+          <button class="btn btn-primary" onclick="openWarehouseModal()"><i class="bi bi-plus-lg"></i> موقع جديد</button>
+        </div>
+        <div class="card" style="margin-bottom:16px;background:var(--primary-light);border-color:#BFDBFE">
+          <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text)">
+            <i class="bi bi-diagram-3" style="font-size:20px;color:var(--primary)"></i>
+            أنشئ الفروع والمستودعات أولاً لتوسيع إدارة المخزون والعمليات بين المواقع.
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>اسم الموقع</th><th>النوع</th><th>المدينة</th><th>المسؤول</th><th>الحالة</th><th>الإجراءات</th></tr></thead>
+            <tbody id="warehouses-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══ EMPLOYEES ═══ -->
+      <div class="page" id="page-employees">
+        <div class="page-header">
+          <div>
+            <div class="page-title">الموارد البشرية</div>
+            <div class="page-subtitle">سجل الموظفين والأقسام وحالة العمل</div>
+          </div>
+          <button class="btn btn-primary" onclick="openEmployeeModal()"><i class="bi bi-person-plus"></i> موظف جديد</button>
+        </div>
+        <div class="toolbar">
+          <input type="text" class="toolbar-search" id="employee-search" placeholder="ابحث بالاسم أو القسم..." oninput="renderEmployees()">
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>الموظف</th><th>الوظيفة</th><th>القسم</th><th>الهاتف</th><th>تاريخ الانضمام</th><th>الحالة</th><th>الإجراءات</th></tr></thead>
+            <tbody id="employees-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ═══ PROJECTS & OPERATIONS ═══ -->
+      <div class="page" id="page-projects">
+        <div class="page-header">
+          <div>
+            <div class="page-title">العمليات والمشاريع</div>
+            <div class="page-subtitle">متابعة المشاريع والخدمات ومراحل التنفيذ</div>
+          </div>
+          <button class="btn btn-primary" onclick="openProjectModal()"><i class="bi bi-plus-lg"></i> مشروع جديد</button>
+        </div>
+        <div class="filter-tabs" id="project-filter-tabs">
+          <button class="filter-tab active" onclick="filterProjects(this,'')">الكل</button>
+          <button class="filter-tab" onclick="filterProjects(this,'planning')">تخطيط</button>
+          <button class="filter-tab" onclick="filterProjects(this,'active')">قيد التنفيذ</button>
+          <button class="filter-tab" onclick="filterProjects(this,'completed')">مكتمل</button>
+          <button class="filter-tab" onclick="filterProjects(this,'on-hold')">متوقف</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>المشروع</th><th>العميل</th><th>المسؤول</th><th>البداية</th><th>النهاية</th><th>الميزانية</th><th>الحالة</th><th>الإجراءات</th></tr></thead>
+            <tbody id="projects-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
     </main>
   </div>
 </div>
@@ -1192,6 +1270,158 @@
   </div>
 </div>
 
+<!-- Warehouse Modal -->
+<div class="modal-overlay" id="modal-warehouse">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="warehouse-modal-title">إضافة موقع تشغيل</div>
+      <button class="modal-close" onclick="closeModal('modal-warehouse')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="warehouse-id">
+      <div class="form-grid">
+        <div class="full form-group">
+          <label>اسم الموقع *</label>
+          <input type="text" id="warehouse-name" placeholder="مثال: مستودع الرياض الرئيسي">
+        </div>
+        <div class="form-group">
+          <label>نوع الموقع</label>
+          <select id="warehouse-type">
+            <option value="warehouse">مستودع</option>
+            <option value="branch">فرع</option>
+            <option value="store">متجر</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>المدينة</label>
+          <input type="text" id="warehouse-city" placeholder="الرياض">
+        </div>
+        <div class="form-group">
+          <label>المسؤول</label>
+          <input type="text" id="warehouse-manager" placeholder="اسم المسؤول">
+        </div>
+        <div class="form-group">
+          <label>الحالة</label>
+          <select id="warehouse-status">
+            <option value="active">نشط</option>
+            <option value="inactive">غير نشط</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-warehouse')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveWarehouse()"><i class="bi bi-floppy2"></i> حفظ</button>
+    </div>
+  </div>
+</div>
+
+<!-- Employee Modal -->
+<div class="modal-overlay" id="modal-employee">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="employee-modal-title">إضافة موظف</div>
+      <button class="modal-close" onclick="closeModal('modal-employee')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="employee-id">
+      <div class="form-grid">
+        <div class="full form-group">
+          <label>اسم الموظف *</label>
+          <input type="text" id="employee-name" placeholder="الاسم الكامل">
+        </div>
+        <div class="form-group">
+          <label>المسمى الوظيفي</label>
+          <input type="text" id="employee-role" placeholder="مثال: مسؤول مبيعات">
+        </div>
+        <div class="form-group">
+          <label>القسم</label>
+          <select id="employee-department">
+            <option>الإدارة</option>
+            <option>المبيعات</option>
+            <option>المحاسبة</option>
+            <option>المخزون</option>
+            <option>العمليات</option>
+            <option>الموارد البشرية</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>الهاتف</label>
+          <input type="tel" id="employee-phone" placeholder="05XXXXXXXX">
+        </div>
+        <div class="form-group">
+          <label>تاريخ الانضمام</label>
+          <input type="date" id="employee-join-date">
+        </div>
+        <div class="full form-group">
+          <label>حالة العمل</label>
+          <select id="employee-status">
+            <option value="active">على رأس العمل</option>
+            <option value="leave">إجازة</option>
+            <option value="inactive">غير نشط</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-employee')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveEmployee()"><i class="bi bi-floppy2"></i> حفظ</button>
+    </div>
+  </div>
+</div>
+
+<!-- Project Modal -->
+<div class="modal-overlay" id="modal-project">
+  <div class="modal-box">
+    <div class="modal-header">
+      <div class="modal-title" id="project-modal-title">إضافة مشروع</div>
+      <button class="modal-close" onclick="closeModal('modal-project')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="project-id">
+      <div class="form-grid">
+        <div class="full form-group">
+          <label>اسم المشروع *</label>
+          <input type="text" id="project-name" placeholder="مثال: تجهيز فرع جديد">
+        </div>
+        <div class="form-group">
+          <label>اسم العميل</label>
+          <input type="text" id="project-customer" placeholder="عميل أو جهة داخلية">
+        </div>
+        <div class="form-group">
+          <label>المسؤول</label>
+          <input type="text" id="project-owner" placeholder="مدير المشروع">
+        </div>
+        <div class="form-group">
+          <label>تاريخ البداية</label>
+          <input type="date" id="project-start-date">
+        </div>
+        <div class="form-group">
+          <label>تاريخ النهاية المتوقع</label>
+          <input type="date" id="project-end-date">
+        </div>
+        <div class="form-group">
+          <label>الميزانية (ر.س)</label>
+          <input type="number" id="project-budget" min="0" step="0.01" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>الحالة</label>
+          <select id="project-status">
+            <option value="planning">تخطيط</option>
+            <option value="active">قيد التنفيذ</option>
+            <option value="completed">مكتمل</option>
+            <option value="on-hold">متوقف</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-project')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveProject()"><i class="bi bi-floppy2"></i> حفظ</button>
+    </div>
+  </div>
+</div>
+
 <!-- Toast Container -->
 <div id="toast-container"></div>
 
@@ -1213,6 +1443,12 @@ db.version(2).stores({
   returns_: '++id, userId, refType, refId, date',
   suppliers: '++id, userId',
   purchaseOrders: '++id, userId, supplierId, status, date'
+});
+// الإصدار 3: نواة ERP للمواقع والموارد البشرية والعمليات
+db.version(3).stores({
+  warehouses: '++id, userId, type, status, city',
+  employees: '++id, userId, department, status, joinDate',
+  projects: '++id, userId, status, startDate, endDate'
 });
 
 // ══════════════════════════════════════════════════════════
@@ -1354,6 +1590,9 @@ function navigate(page) {
   if (page === 'purchase-orders') { renderPurchaseOrders(); }
   if (page === 'returns') { renderReturns(); }
   if (page === 'vat-report') { renderVATReport(); }
+  if (page === 'warehouses') { renderWarehouses(); }
+  if (page === 'employees') { renderEmployees(); }
+  if (page === 'projects') { renderProjects(); }
 }
 
 function toggleSidebar() {
@@ -2518,6 +2757,243 @@ async function renderReports() {
       <div class="daily-label">${d.label}</div>
     </div>`).join('');
 }
+// ══════════════════════════════════════════════════════════════════
+//  ERP CORE: WAREHOUSES, EMPLOYEES & PROJECTS
+// ══════════════════════════════════════════════════════════════════
+let currentProjectFilter = '';
+
+function erpStatusBadge(status, labels, styles) {
+  return `<span class="badge ${styles[status] || 'badge-muted'}">${labels[status] || status}</span>`;
+}
+
+function openWarehouseModal(location = null) {
+  document.getElementById('warehouse-modal-title').textContent = location ? 'تعديل موقع التشغيل' : 'إضافة موقع تشغيل';
+  document.getElementById('warehouse-id').value = location?.id || '';
+  document.getElementById('warehouse-name').value = location?.name || '';
+  document.getElementById('warehouse-type').value = location?.type || 'warehouse';
+  document.getElementById('warehouse-city').value = location?.city || '';
+  document.getElementById('warehouse-manager').value = location?.manager || '';
+  document.getElementById('warehouse-status').value = location?.status || 'active';
+  openModal('modal-warehouse');
+}
+
+async function saveWarehouse() {
+  const name = document.getElementById('warehouse-name').value.trim();
+  if (!name) return toast('يرجى إدخال اسم الموقع', 'error');
+  const data = {
+    userId: currentUser.id,
+    name,
+    type: document.getElementById('warehouse-type').value,
+    city: document.getElementById('warehouse-city').value.trim(),
+    manager: document.getElementById('warehouse-manager').value.trim(),
+    status: document.getElementById('warehouse-status').value,
+    updatedAt: new Date()
+  };
+  const id = document.getElementById('warehouse-id').value;
+  if (id) {
+    await db.warehouses.update(parseInt(id), data);
+    toast('تم تحديث موقع التشغيل');
+  } else {
+    data.createdAt = new Date();
+    await db.warehouses.add(data);
+    toast('تمت إضافة موقع التشغيل');
+  }
+  closeModal('modal-warehouse');
+  renderWarehouses();
+}
+
+async function renderWarehouses() {
+  const locations = await db.warehouses.where('userId').equals(currentUser.id).toArray();
+  locations.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const types = { warehouse: 'مستودع', branch: 'فرع', store: 'متجر' };
+  const statuses = { active: 'نشط', inactive: 'غير نشط' };
+  const styles = { active: 'badge-success', inactive: 'badge-muted' };
+  document.getElementById('warehouses-tbody').innerHTML = locations.length ? locations.map(location => `
+    <tr>
+      <td style="font-weight:700">${location.name}</td>
+      <td><span class="badge badge-info">${types[location.type] || location.type}</span></td>
+      <td>${location.city || '—'}</td>
+      <td>${location.manager || '—'}</td>
+      <td>${erpStatusBadge(location.status, statuses, styles)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-ghost btn-sm" onclick="editWarehouse(${location.id})" title="تعديل"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="deleteWarehouse(${location.id})" title="حذف"><i class="bi bi-trash3"></i></button>
+      </div></td>
+    </tr>`).join('') :
+    `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon"><i class="bi bi-building"></i></div><div class="empty-text">لا توجد مواقع تشغيل بعد</div><div class="empty-sub">أضف مستودعاً أو فرعاً لتبدأ إدارة أعمالك متعددة المواقع</div></div></td></tr>`;
+}
+
+async function editWarehouse(id) {
+  const location = await db.warehouses.get(id);
+  if (location) openWarehouseModal(location);
+}
+
+async function deleteWarehouse(id) {
+  if (!confirm('هل تريد حذف موقع التشغيل هذا؟')) return;
+  await db.warehouses.delete(id);
+  toast('تم حذف موقع التشغيل', 'warning');
+  renderWarehouses();
+}
+
+function openEmployeeModal(employee = null) {
+  document.getElementById('employee-modal-title').textContent = employee ? 'تعديل بيانات موظف' : 'إضافة موظف';
+  document.getElementById('employee-id').value = employee?.id || '';
+  document.getElementById('employee-name').value = employee?.name || '';
+  document.getElementById('employee-role').value = employee?.role || '';
+  document.getElementById('employee-department').value = employee?.department || 'الإدارة';
+  document.getElementById('employee-phone').value = employee?.phone || '';
+  document.getElementById('employee-join-date').value = employee?.joinDate || new Date().toISOString().split('T')[0];
+  document.getElementById('employee-status').value = employee?.status || 'active';
+  openModal('modal-employee');
+}
+
+async function saveEmployee() {
+  const name = document.getElementById('employee-name').value.trim();
+  if (!name) return toast('يرجى إدخال اسم الموظف', 'error');
+  const data = {
+    userId: currentUser.id,
+    name,
+    role: document.getElementById('employee-role').value.trim(),
+    department: document.getElementById('employee-department').value,
+    phone: document.getElementById('employee-phone').value.trim(),
+    joinDate: document.getElementById('employee-join-date').value,
+    status: document.getElementById('employee-status').value,
+    updatedAt: new Date()
+  };
+  const id = document.getElementById('employee-id').value;
+  if (id) {
+    await db.employees.update(parseInt(id), data);
+    toast('تم تحديث بيانات الموظف');
+  } else {
+    data.createdAt = new Date();
+    await db.employees.add(data);
+    toast('تمت إضافة الموظف');
+  }
+  closeModal('modal-employee');
+  renderEmployees();
+}
+
+async function renderEmployees() {
+  const search = (document.getElementById('employee-search')?.value || '').trim().toLowerCase();
+  let employees = await db.employees.where('userId').equals(currentUser.id).toArray();
+  if (search) employees = employees.filter(employee =>
+    employee.name.toLowerCase().includes(search) ||
+    (employee.department || '').toLowerCase().includes(search) ||
+    (employee.role || '').toLowerCase().includes(search)
+  );
+  employees.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const statuses = { active: 'على رأس العمل', leave: 'إجازة', inactive: 'غير نشط' };
+  const styles = { active: 'badge-success', leave: 'badge-warning', inactive: 'badge-muted' };
+  document.getElementById('employees-tbody').innerHTML = employees.length ? employees.map(employee => `
+    <tr>
+      <td style="font-weight:700">${employee.name}</td>
+      <td>${employee.role || '—'}</td>
+      <td><span class="badge badge-info">${employee.department || '—'}</span></td>
+      <td>${employee.phone || '—'}</td>
+      <td>${employee.joinDate ? fmtDate(employee.joinDate) : '—'}</td>
+      <td>${erpStatusBadge(employee.status, statuses, styles)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-ghost btn-sm" onclick="editEmployee(${employee.id})" title="تعديل"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="deleteEmployee(${employee.id})" title="حذف"><i class="bi bi-trash3"></i></button>
+      </div></td>
+    </tr>`).join('') :
+    `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon"><i class="bi bi-person-badge"></i></div><div class="empty-text">لا يوجد موظفون بعد</div><div class="empty-sub">أضف أعضاء فريقك لإدارة الموارد البشرية من مكان واحد</div></div></td></tr>`;
+}
+
+async function editEmployee(id) {
+  const employee = await db.employees.get(id);
+  if (employee) openEmployeeModal(employee);
+}
+
+async function deleteEmployee(id) {
+  if (!confirm('هل تريد حذف هذا الموظف؟')) return;
+  await db.employees.delete(id);
+  toast('تم حذف الموظف', 'warning');
+  renderEmployees();
+}
+
+function filterProjects(button, status) {
+  currentProjectFilter = status;
+  document.querySelectorAll('#project-filter-tabs .filter-tab').forEach(tab => tab.classList.remove('active'));
+  button.classList.add('active');
+  renderProjects();
+}
+
+function openProjectModal(project = null) {
+  document.getElementById('project-modal-title').textContent = project ? 'تعديل مشروع' : 'إضافة مشروع';
+  document.getElementById('project-id').value = project?.id || '';
+  document.getElementById('project-name').value = project?.name || '';
+  document.getElementById('project-customer').value = project?.customer || '';
+  document.getElementById('project-owner').value = project?.owner || '';
+  document.getElementById('project-start-date').value = project?.startDate || new Date().toISOString().split('T')[0];
+  document.getElementById('project-end-date').value = project?.endDate || '';
+  document.getElementById('project-budget').value = project?.budget ?? '';
+  document.getElementById('project-status').value = project?.status || 'planning';
+  openModal('modal-project');
+}
+
+async function saveProject() {
+  const name = document.getElementById('project-name').value.trim();
+  if (!name) return toast('يرجى إدخال اسم المشروع', 'error');
+  const data = {
+    userId: currentUser.id,
+    name,
+    customer: document.getElementById('project-customer').value.trim(),
+    owner: document.getElementById('project-owner').value.trim(),
+    startDate: document.getElementById('project-start-date').value,
+    endDate: document.getElementById('project-end-date').value,
+    budget: parseFloat(document.getElementById('project-budget').value) || 0,
+    status: document.getElementById('project-status').value,
+    updatedAt: new Date()
+  };
+  const id = document.getElementById('project-id').value;
+  if (id) {
+    await db.projects.update(parseInt(id), data);
+    toast('تم تحديث المشروع');
+  } else {
+    data.createdAt = new Date();
+    await db.projects.add(data);
+    toast('تمت إضافة المشروع');
+  }
+  closeModal('modal-project');
+  renderProjects();
+}
+
+async function renderProjects() {
+  let projects = await db.projects.where('userId').equals(currentUser.id).toArray();
+  if (currentProjectFilter) projects = projects.filter(project => project.status === currentProjectFilter);
+  projects.sort((a, b) => new Date(b.createdAt || b.startDate) - new Date(a.createdAt || a.startDate));
+  const statuses = { planning: 'تخطيط', active: 'قيد التنفيذ', completed: 'مكتمل', 'on-hold': 'متوقف' };
+  const styles = { planning: 'badge-warning', active: 'badge-info', completed: 'badge-success', 'on-hold': 'badge-muted' };
+  document.getElementById('projects-tbody').innerHTML = projects.length ? projects.map(project => `
+    <tr>
+      <td style="font-weight:700">${project.name}</td>
+      <td>${project.customer || 'داخلي'}</td>
+      <td>${project.owner || '—'}</td>
+      <td>${project.startDate ? fmtDate(project.startDate) : '—'}</td>
+      <td>${project.endDate ? fmtDate(project.endDate) : '—'}</td>
+      <td style="font-weight:700;color:var(--primary)">${fmt(project.budget || 0)} ر.س</td>
+      <td>${erpStatusBadge(project.status, statuses, styles)}</td>
+      <td><div class="actions-cell">
+        <button class="btn btn-ghost btn-sm" onclick="editProject(${project.id})" title="تعديل"><i class="bi bi-pencil"></i></button>
+        <button class="btn btn-danger btn-sm" onclick="deleteProject(${project.id})" title="حذف"><i class="bi bi-trash3"></i></button>
+      </div></td>
+    </tr>`).join('') :
+    `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon"><i class="bi bi-kanban"></i></div><div class="empty-text">لا توجد مشاريع حالياً</div><div class="empty-sub">ابدأ بإضافة مشروع لتتبع العمليات والخدمات</div></div></td></tr>`;
+}
+
+async function editProject(id) {
+  const project = await db.projects.get(id);
+  if (project) openProjectModal(project);
+}
+
+async function deleteProject(id) {
+  if (!confirm('هل تريد حذف هذا المشروع؟')) return;
+  await db.projects.delete(id);
+  toast('تم حذف المشروع', 'warning');
+  renderProjects();
+}
+
 </script>
 </body>
 </html>
