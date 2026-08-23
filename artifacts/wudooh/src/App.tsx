@@ -21,6 +21,7 @@ import Journals from '@/pages/journals';
 import Receivables from '@/pages/receivables';
 import Reports from '@/pages/reports';
 import Team from '@/pages/team';
+import ResetPassword from '@/pages/reset-password';
 
 const queryClient = new QueryClient();
 
@@ -37,6 +38,7 @@ function Router() {
     <RoutedErrorBoundary>
       <Switch>
         <Route path="/" component={Landing} />
+        <Route path="/reset-password" component={ResetPassword} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
         <Route path="/accounts" component={() => <DashboardLayout><Accounts /></DashboardLayout>} />
         <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />

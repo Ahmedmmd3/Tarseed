@@ -1,15 +1,18 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, desc, eq } from "drizzle-orm";
+import { ReplitConnectors } from "@replit/connectors-sdk";
 import {
   authSessionsTable,
   db,
   erpRecordsTable,
   organizationsTable,
+  passwordResetTokensTable,
   teamAuditLogsTable,
   teamUsersTable,
   type TeamUser,
 } from "@workspace/db";
-import { createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "../lib/team-auth";
+import { createPasswordResetToken, createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "../lib/team-auth";
+import { logger } from "../lib/logger";
 import { getAuthContext, requireAuth, requireOwner, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -18,6 +21,8 @@ const REMOTE_SESSION_HINT_COOKIE = "wudooh_remote_session";
 const PERMISSION_KEYS = new Set(["dashboard", "sales", "accounting", "inventory", "hr", "operations", "reports"]);
 const ROLE_IDS = new Set(["sales", "accountant", "inventory", "hr", "manager", "custom"]);
 const LOCATION_SCOPES = new Set(["all", "selected", "none"]);
+const PASSWORD_RESET_MINUTES = 30;
+const connectors = new ReplitConnectors();
 
 function safeUser(user: TeamUser, projectName: string) {
   return {
@@ -70,6 +75,47 @@ async function recordAudit(auth: AuthContext, action: string, entity = "", detai
     entity,
     details,
   });
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  }[character] ?? character));
+}
+
+function passwordResetUrl(request: Request, token: string): string {
+  const configuredOrigin = process.env.PUBLIC_APP_URL?.replace(/\/$/, "");
+  const forwardedProtocol = request.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const origin = configuredOrigin || `${forwardedProtocol || request.protocol}://${request.get("host")}`;
+  return `${origin}/reset-password?token=${encodeURIComponent(token)}`;
+}
+
+async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string; name: string; resetUrl: string }): Promise<void> {
+  const response = await connectors.proxy("resend", "/emails", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: process.env.RESEND_FROM_EMAIL || "Tarseed <onboarding@resend.dev>",
+      to: [email],
+      subject: "استعادة كلمة مرور ترصيد",
+      html: `
+        <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.7;color:#0f172a">
+          <h1 style="font-size:22px">استعادة كلمة المرور</h1>
+          <p>مرحباً ${escapeHtml(name)}،</p>
+          <p>وصلنا طلباً لإعادة تعيين كلمة مرور حسابك في ترصيد. استخدم الرابط التالي لاختيار كلمة مرور جديدة:</p>
+          <p style="margin:28px 0"><a href="${resetUrl}" style="display:inline-block;background:#0f766e;color:#fff;padding:12px 20px;border-radius:6px;text-decoration:none">إعادة تعيين كلمة المرور</a></p>
+          <p>ينتهي هذا الرابط خلال ${PASSWORD_RESET_MINUTES} دقيقة ويمكن استخدامه مرة واحدة فقط.</p>
+          <p>إذا لم تطلب تغيير كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان.</p>
+        </div>`,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Resend request failed with status ${response.status}`);
+  }
 }
 
 function validateMemberBody(body: Record<string, unknown>, requiresPassword: boolean) {
@@ -153,6 +199,87 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
   setSession(response, token);
   await recordAudit({ ...result.user, projectName: result.projectName }, "login", "user", result.user.email);
   response.json({ user: safeUser(result.user, result.projectName) });
+});
+
+router.post("/auth/password-reset/request", async (request: Request, response: Response): Promise<void> => {
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const message = "إذا كان البريد الإلكتروني مسجلاً، فستصلك رسالة تحتوي على رابط استعادة كلمة المرور.";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    response.status(400).json({ error: "أدخل بريداً إلكترونياً صحيحاً." });
+    return;
+  }
+
+  const [user] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.email, email)).limit(1);
+  if (!user || user.status !== "active") {
+    response.status(202).json({ message });
+    return;
+  }
+
+  const token = createPasswordResetToken();
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_MINUTES * 60 * 1000);
+  const [record] = await db.transaction(async (tx) => {
+    await tx.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.userId, user.id));
+    return tx.insert(passwordResetTokensTable).values({
+      userId: user.id,
+      tokenHash: hashSessionToken(token),
+      expiresAt,
+    }).returning();
+  });
+
+  try {
+    await sendPasswordResetEmail({
+      email: user.email,
+      name: user.name,
+      resetUrl: passwordResetUrl(request, token),
+    });
+  } catch (error) {
+    await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, record.id));
+    logger.error({ err: error, userId: user.id }, "Unable to deliver password reset email");
+  }
+
+  response.status(202).json({ message });
+});
+
+router.post("/auth/password-reset/confirm", async (request: Request, response: Response): Promise<void> => {
+  const token = typeof request.body?.token === "string" ? request.body.token.trim() : "";
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  if (token.length < 32 || password.length < 8) {
+    response.status(400).json({ error: "رابط الاستعادة غير صالح أو كلمة المرور أقصر من 8 أحرف." });
+    return;
+  }
+
+  const now = new Date();
+  const result = await db.transaction(async (tx) => {
+    const [resetToken] = await tx.select().from(passwordResetTokensTable)
+      .where(eq(passwordResetTokensTable.tokenHash, hashSessionToken(token)))
+      .for("update");
+    if (!resetToken || resetToken.usedAt || resetToken.expiresAt <= now) {
+      return { kind: "invalid" as const };
+    }
+
+    const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.id, resetToken.userId)).for("update");
+    if (!user || user.status !== "active") {
+      return { kind: "invalid" as const };
+    }
+
+    await tx.update(teamUsersTable).set({ passwordHash: await hashPassword(password), updatedAt: now }).where(eq(teamUsersTable.id, user.id));
+    await tx.update(passwordResetTokensTable).set({ usedAt: now }).where(eq(passwordResetTokensTable.id, resetToken.id));
+    await tx.update(authSessionsTable).set({ revokedAt: now }).where(eq(authSessionsTable.userId, user.id));
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: user.organizationId,
+      actorId: user.id,
+      actorName: user.name,
+      action: "password_reset_completed",
+      entity: user.email,
+    });
+    return { kind: "updated" as const };
+  });
+
+  if (result.kind === "invalid") {
+    response.status(400).json({ error: "رابط الاستعادة غير صالح أو انتهت صلاحيته." });
+    return;
+  }
+  response.json({ message: "تم تحديث كلمة المرور. سجّل الدخول بكلمة المرور الجديدة." });
 });
 
 router.post("/auth/logout", requireAuth, async (request: Request, response: Response): Promise<void> => {

@@ -45,12 +45,18 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [screen, setScreen] = useState<'credentials' | 'recovery'>('credentials');
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryMessage, setRecoveryMessage] = useState('');
 
   useEffect(() => {
     if (!open) return;
     setMode(initialMode);
     setError('');
     setShowPassword(false);
+    setScreen('credentials');
+    setRecoveryEmail('');
+    setRecoveryMessage('');
   }, [initialMode, open]);
 
   const updateField = (field: keyof AuthForm, value: string) => {
@@ -122,6 +128,32 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
     }
   };
 
+  const submitRecovery = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recoveryEmail.trim())) {
+      setError('أدخل بريداً إلكترونياً صحيحاً.');
+      return;
+    }
+
+    setError('');
+    setRecoveryMessage('');
+    setIsSubmitting(true);
+    try {
+      const response = await fetch('/api/auth/password-reset/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: recoveryEmail.trim() }),
+      });
+      const payload = await response.json().catch(() => ({})) as { message?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر إرسال طلب الاستعادة.');
+      setRecoveryMessage(payload.message ?? 'تحقق من بريدك الإلكتروني للحصول على رابط الاستعادة.');
+    } catch (submissionError) {
+      setError(submissionError instanceof Error ? submissionError.message : 'تعذر إرسال طلب الاستعادة.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md overflow-hidden border-slate-200 p-0" dir="rtl">
@@ -131,10 +163,12 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               <Building2 className="h-5 w-5" aria-hidden="true" />
             </div>
             <DialogTitle className="text-2xl text-white">
-              {mode === 'register' ? 'أنشئ سجل منشأتك' : 'مرحباً بعودتك'}
+              {screen === 'recovery' ? 'استعادة كلمة المرور' : mode === 'register' ? 'أنشئ سجل منشأتك' : 'مرحباً بعودتك'}
             </DialogTitle>
             <DialogDescription className="mt-2 text-slate-300">
-              {mode === 'register'
+              {screen === 'recovery'
+                ? 'أدخل بريد حسابك وسنرسل لك رابطاً آمناً لاختيار كلمة مرور جديدة.'
+                : mode === 'register'
                 ? 'ابدأ بسجل محاسبي مشترك لفريقك، ويمكنك دعوة الأعضاء لاحقاً.'
                 : 'سجّل الدخول للوصول إلى بيانات منشأتك من أي جهاز.'}
             </DialogDescription>
@@ -142,6 +176,53 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
         </div>
 
         <div className="p-6">
+          {screen === 'recovery' ? (
+            <form onSubmit={submitRecovery} className="space-y-4" noValidate>
+              <div className="space-y-2">
+                <Label htmlFor="recovery-email">البريد الإلكتروني</Label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
+                  <Input
+                    id="recovery-email"
+                    type="email"
+                    dir="ltr"
+                    value={recoveryEmail}
+                    onChange={(event) => { setRecoveryEmail(event.target.value); if (error) setError(''); }}
+                    className="pr-9 text-left"
+                    placeholder="name@company.com"
+                    autoComplete="email"
+                    aria-invalid={Boolean(error)}
+                    data-testid="input-recovery-email"
+                  />
+                </div>
+              </div>
+
+              {recoveryMessage && (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900" role="status" data-testid="password-recovery-message">
+                  {recoveryMessage}
+                </div>
+              )}
+              {error && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-800" role="alert" data-testid="auth-error">
+                  {error}
+                </div>
+              )}
+
+              <Button type="submit" className="h-11 w-full bg-primary text-base hover:bg-teal-500" disabled={isSubmitting} data-testid="button-send-password-reset">
+                {isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Mail className="h-4 w-4" aria-hidden="true" />}
+                {isSubmitting ? 'جارٍ الإرسال...' : 'إرسال رابط الاستعادة'}
+              </Button>
+              <button
+                type="button"
+                onClick={() => { setScreen('credentials'); setError(''); setRecoveryMessage(''); }}
+                className="w-full text-sm font-semibold text-primary hover:underline"
+                data-testid="button-back-to-login"
+              >
+                العودة إلى تسجيل الدخول
+              </button>
+            </form>
+          ) : (
+            <>
           <div className="mb-6 grid grid-cols-2 rounded-lg bg-slate-100 p-1" role="tablist" aria-label="نوع العملية">
             <button
               type="button"
@@ -243,6 +324,18 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               </div>
               {mode === 'register' && <p className="text-xs text-slate-500">استخدم ٨ أحرف أو أكثر لحماية سجل منشأتك.</p>}
             </div>
+            {mode === 'login' && (
+              <div className="-mt-1 text-left">
+                <button
+                  type="button"
+                  onClick={() => { setRecoveryEmail(form.email); setError(''); setScreen('recovery'); }}
+                  className="text-sm font-semibold text-primary hover:underline"
+                  data-testid="button-forgot-password"
+                >
+                  نسيت كلمة المرور؟
+                </button>
+              </div>
+            )}
 
             {error && (
               <div
@@ -259,6 +352,8 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               {isSubmitting ? 'جارٍ التحقق...' : mode === 'register' ? 'إنشاء المنشأة والبدء' : 'دخول إلى لوحة التحكم'}
             </Button>
           </form>
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>
