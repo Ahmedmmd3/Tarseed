@@ -28,3 +28,17 @@ mtime_ms = 1787506063804
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/ff128f23-14f9-4389-8e11-d9f08468c525/bc17baf9-5f2c-4566-9fcf-7ddeaa4ed2b3"
 storage_version_token = "1787506097884707"
 content_type = "image/png"
+
+[[outputs]]
+id = "VKS9fUjEe2OhKlGwcjZcB"
+uri = "file://artifacts/wudooh/public/hero-abstract-ar-minimal.png"
+type = "image"
+title = "لوحة ترصيد العربية — نسخة مبسطة وواضحة"
+description = "نسخة تسويقية نظيفة بعناوين عربية مختصرة، خريطة السعودية، وقيم بالريال السعودي."
+logical_id = "15c8c383-2018-4a99-8692-aa07d6b4ceab"
+content_hash = "sha256:d33800b1bd0b88b981e6bda68e0f1b73291b559bd00a743d58de798e0ef5c17f"
+size = 1110445
+mtime_ms = 1787506512482
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/15c8c383-2018-4a99-8692-aa07d6b4ceab/8f0cd421-7b80-48eb-aad3-457d90c22893"
+storage_version_token = "1787506551410972"
+content_type = "image/png"

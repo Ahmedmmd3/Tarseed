@@ -101,7 +101,7 @@ export default function Landing() {
             <div className="relative animate-in slide-in-from-bottom-12 duration-1000 delay-150 fill-mode-both">
               <div className="absolute inset-0 bg-gradient-to-tr from-primary to-[#00204a] rounded-2xl blur-3xl opacity-30 animate-pulse"></div>
                 <img 
-                src={asset('hero-abstract-ar-clean.png')}
+                src={asset('hero-abstract-ar-minimal.png')}
                 alt="واجهة ترصيد لإدارة أعمال الشركة" 
                 width="1024"
                 height="768"
