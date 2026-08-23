@@ -6,9 +6,10 @@ import { Button } from '@/components/ui/button';
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
 
   const navigation = [
-    { name: 'نظرة عامة', href: '/', icon: LayoutDashboard },
+    { name: 'نظرة عامة', href: '/dashboard', icon: LayoutDashboard },
     { name: 'دليل الحسابات', href: '/accounts', icon: Book },
     { name: 'القيود اليومية', href: '/journals', icon: FileText },
     { name: 'الذمم والمستحقات', href: '/receivables', icon: Wallet },
@@ -19,7 +20,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row font-sans text-gray-900" dir="rtl">
       {/* Mobile header */}
       <div className="md:hidden flex items-center justify-between bg-white border-b border-gray-200 p-4">
-        <h1 className="text-xl font-bold text-primary">وضوح</h1>
+         <img src={logoSrc} alt="شعار ترصيد" className="h-8 w-auto object-contain" width="96" height="36" />
         <Button variant="ghost" size="icon" onClick={() => setSidebarOpen(!sidebarOpen)} data-testid="button-menu">
           {sidebarOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
         </Button>
@@ -33,10 +34,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       `}>
         <div className="h-full flex flex-col">
           <div className="p-6 hidden md:block">
-            <h1 className="text-2xl font-bold text-primary flex items-center gap-2">
-              <span className="w-8 h-8 rounded bg-primary text-white flex items-center justify-center font-serif">و</span>
-              وضوح
-            </h1>
+             <img src={logoSrc} alt="شعار ترصيد" className="h-10 w-auto object-contain" width="132" height="48" />
           </div>
           <nav className="flex-1 px-4 py-4 space-y-1">
             {navigation.map((item) => {

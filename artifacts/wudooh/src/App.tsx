@@ -14,6 +14,7 @@ import {
 import { StoreProvider } from '@/context/store';
 import { AppLayout } from '@/components/layout';
 
+import Landing from '@/pages/landing';
 import Overview from '@/pages/overview';
 import Accounts from '@/pages/accounts';
 import Journals from '@/pages/journals';
@@ -22,19 +23,26 @@ import Reports from '@/pages/reports';
 
 const queryClient = new QueryClient();
 
+function DashboardLayout({ children }: { children: ReactNode }) {
+  return (
+    <StoreProvider>
+      <AppLayout>{children}</AppLayout>
+    </StoreProvider>
+  );
+}
+
 function Router() {
   return (
     <RoutedErrorBoundary>
-      <AppLayout>
-        <Switch>
-          <Route path="/" component={Overview} />
-          <Route path="/accounts" component={Accounts} />
-          <Route path="/journals" component={Journals} />
-          <Route path="/receivables" component={Receivables} />
-          <Route path="/reports" component={Reports} />
-          <Route component={NotFound} />
-        </Switch>
-      </AppLayout>
+      <Switch>
+        <Route path="/" component={Landing} />
+        <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
+        <Route path="/accounts" component={() => <DashboardLayout><Accounts /></DashboardLayout>} />
+        <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />
+        <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />
+        <Route path="/reports" component={() => <DashboardLayout><Reports /></DashboardLayout>} />
+        <Route component={NotFound} />
+      </Switch>
     </RoutedErrorBoundary>
   );
 }
@@ -47,14 +55,12 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <StoreProvider>
-        <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-            <Router />
-          </WouterRouter>
-          <Toaster />
-        </TooltipProvider>
-      </StoreProvider>
+      <TooltipProvider>
+        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+          <Router />
+        </WouterRouter>
+        <Toaster />
+      </TooltipProvider>
     </QueryClientProvider>
   );
 }
