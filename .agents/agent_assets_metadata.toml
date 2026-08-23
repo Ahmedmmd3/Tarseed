@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "upFY8CfpeJOXI4YEbqfyq"
+uri = "file://artifacts/wudooh/public/hero-abstract-ar-ready.png"
+type = "image"
+title = "لوحة ترصيد العربية — الشرق الأوسط والريال السعودي"
+description = "نسخة نهائية من لوحة البيانات بالعربية مع خريطة الشرق الأوسط ومبالغ بالريال السعودي."
+logical_id = "354ca541-a0dd-4053-92ba-8f0f1e85e579"
+content_hash = "sha256:2ea22134fc162e0d1513fcd4abade7210d2b5e32d695b75189c44e13b5062139"
+size = 1265833
+mtime_ms = 1787502629015
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/354ca541-a0dd-4053-92ba-8f0f1e85e579/278c2d66-e7e2-4960-821c-ba2c4adc2f59"
+storage_version_token = "1787502674506037"
+content_type = "image/png"
