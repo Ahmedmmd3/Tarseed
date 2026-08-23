@@ -11,32 +11,30 @@ import {
   Router as WouterRouter,
 } from 'wouter';
 
-const queryClient = new QueryClient();
+import { StoreProvider } from '@/context/store';
+import { AppLayout } from '@/components/layout';
 
-function Home() {
-  return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <h1 className="text-2xl font-bold text-gray-900">
-          Replit Agent is building...
-        </h1>
-        <p className="mt-2 text-sm text-gray-600">
-          Your app will appear here once it's ready.
-        </p>
-      </div>
-    </div>
-  );
-}
+import Overview from '@/pages/overview';
+import Accounts from '@/pages/accounts';
+import Journals from '@/pages/journals';
+import Receivables from '@/pages/receivables';
+import Reports from '@/pages/reports';
+
+const queryClient = new QueryClient();
 
 function Router() {
   return (
-    // Keep a shared shell (sidebar, navbar) outside the boundary so it
-    // survives a page crash.
     <RoutedErrorBoundary>
-      <Switch>
-        <Route path="/" component={Home} />
-        <Route component={NotFound} />
-      </Switch>
+      <AppLayout>
+        <Switch>
+          <Route path="/" component={Overview} />
+          <Route path="/accounts" component={Accounts} />
+          <Route path="/journals" component={Journals} />
+          <Route path="/receivables" component={Receivables} />
+          <Route path="/reports" component={Reports} />
+          <Route component={NotFound} />
+        </Switch>
+      </AppLayout>
     </RoutedErrorBoundary>
   );
 }
@@ -49,12 +47,14 @@ function RoutedErrorBoundary({ children }: { children: ReactNode }) {
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
-        <Toaster />
-      </TooltipProvider>
+      <StoreProvider>
+        <TooltipProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <Router />
+          </WouterRouter>
+          <Toaster />
+        </TooltipProvider>
+      </StoreProvider>
     </QueryClientProvider>
   );
 }
