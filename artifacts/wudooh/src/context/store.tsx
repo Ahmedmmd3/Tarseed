@@ -171,12 +171,16 @@ const initialReceivables: Receivable[] = [
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
+  const [storedData] = useState(() => readStoredData());
   const [needsLegacySessionMigration] = useState(() => hasLegacyStoredData());
   const [shouldVerifyRemoteSession] = useState(() => hasRemoteSessionHint() || hasLegacyStoredData());
-  const [accounts, setAccounts] = useState<Account[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.accounts ?? initialAccounts);
-  const [journals, setJournals] = useState<Journal[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.journals ?? initialJournals);
-  const [receivables, setReceivables] = useState<Receivable[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.receivables ?? initialReceivables);
-  const [closures, setClosures] = useState<FinancialClosure[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.closures ?? []);
+  // Keep the last local snapshot available while a known shared session is
+  // being verified. The loading screen hides it until verification completes,
+  // but it is the safe fallback when the shared service is temporarily down.
+  const [accounts, setAccounts] = useState<Account[]>(() => storedData?.accounts ?? initialAccounts);
+  const [journals, setJournals] = useState<Journal[]>(() => storedData?.journals ?? initialJournals);
+  const [receivables, setReceivables] = useState<Receivable[]>(() => storedData?.receivables ?? initialReceivables);
+  const [closures, setClosures] = useState<FinancialClosure[]>(() => storedData?.closures ?? []);
   const [connectionMode, setConnectionMode] = useState<'loading' | 'remote' | 'local'>(
     () => shouldVerifyRemoteSession ? 'loading' : 'local',
   );

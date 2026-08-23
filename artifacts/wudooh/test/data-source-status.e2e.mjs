@@ -117,3 +117,70 @@ test('يبقي جلسة مشتركة قابلة لإعادة الاتصال عن
   expect(apiRequests).toHaveLength(1);
   expect(apiRequests[0]).toContain('/api/auth/me');
 });
+
+test('يستعيد السجل المشترك بعد عودة الخدمة دون فقدان القيد السابق', async ({ page }) => {
+  const session = await registerSharedSession(page);
+  await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  const apiOrigin = 'http://127.0.0.1:8081';
+  const requestHeaders = { Origin: apiOrigin };
+  const accountResponse = await page.request.post(`${apiOrigin}/api/data/accounts`, {
+      headers: requestHeaders,
+      data: {
+        code: '1001',
+        name: 'حساب اختبار الاستعادة',
+        type: 'asset',
+        parent: null,
+        balance: 0,
+        status: 'active',
+      },
+  });
+  const accountPayload = await accountResponse.json();
+  if (!accountResponse.ok() || !accountPayload.record) {
+    throw new Error(`تعذر إنشاء حساب الاختبار: ${JSON.stringify(accountPayload)}`);
+  }
+
+  const accountId = String(accountPayload.record.id);
+  const journalResponse = await page.request.post(`${apiOrigin}/api/data/journalEntries`, {
+    headers: requestHeaders,
+    data: {
+        date: '2026-08-23',
+        description: 'قيد محفوظ قبل انقطاع الخدمة',
+        status: 'draft',
+        lines: [
+          { id: 'restore-debit', accountId, debit: 125, credit: 0 },
+          { id: 'restore-credit', accountId: '1', debit: 0, credit: 125 },
+        ],
+      },
+  });
+  const journalPayload = await journalResponse.json();
+  if (!journalResponse.ok() || !journalPayload.record) {
+    throw new Error(`تعذر إنشاء قيد الاختبار: ${JSON.stringify(journalPayload)}`);
+  }
+  const journal = { id: String(journalPayload.record.id), description: journalPayload.record.description };
+
+  // Refresh once while the service is healthy so the browser's local snapshot
+  // contains the record that must remain available during the outage.
+  await page.goto('/journals', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId(`card-journal-${journal.id}`)).toContainText(journal.description);
+
+  await page.route('**/api/**', async (route) => {
+    await route.abort('failed');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  const localStatus = page.getByTestId('connection-status-local');
+  await expect(localStatus).toBeVisible();
+  await expect(localStatus).toContainText('تعذر الوصول إلى السجل المشترك');
+  await expect(page.getByTestId(`card-journal-${journal.id}`)).toContainText(journal.description);
+
+  await page.unroute('**/api/**');
+  await page.getByTestId('button-retry-shared-connection').click();
+
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+  await expect(page.getByTestId('connection-status-remote')).toContainText('متصل بسجل المنشأة المشترك');
+  await expect(page.getByTestId('shared-account-bar')).toContainText(session.projectName);
+  await expect(page.getByTestId('shared-account-bar')).toContainText(session.email);
+  await expect(page.getByTestId(`card-journal-${journal.id}`)).toContainText(journal.description);
+});
