@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'wouter';
 import { 
   ArrowLeft, 
   BarChart3, 
@@ -14,11 +13,23 @@ import {
   Users, 
   Zap 
 } from 'lucide-react';
+import { AuthDialog } from '@/components/auth-dialog';
 
 const asset = (name: string) => `${import.meta.env.BASE_URL}${name}`;
 
 export default function Landing() {
   const [scrolled, setScrolled] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+
+  const openAuth = (mode: 'login' | 'register') => {
+    setAuthMode(mode);
+    setAuthOpen(true);
+  };
+
+  const openDashboard = () => {
+    window.location.assign(`${import.meta.env.BASE_URL}dashboard`);
+  };
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
@@ -43,13 +54,13 @@ export default function Landing() {
           </div>
 
           <div className="flex items-center gap-4">
-            <Link href="/dashboard" className="hidden md:block text-sm font-medium hover:text-primary transition-colors">
+            <button type="button" onClick={() => openAuth('login')} className="hidden md:block text-sm font-medium hover:text-primary transition-colors" data-testid="button-open-login">
               تسجيل الدخول
-            </Link>
-            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 group">
+            </button>
+            <button type="button" onClick={() => openAuth('login')} className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 group" data-testid="button-open-dashboard">
               لوحة التحكم
               <ArrowLeft className="ms-2 h-4 w-4 group-hover:-translate-x-1 transition-transform" />
-            </Link>
+            </button>
           </div>
         </div>
       </nav>
@@ -78,9 +89,9 @@ export default function Landing() {
               </p>
               
               <div className="flex flex-col sm:flex-row items-center gap-4 pt-4">
-                <Link href="/dashboard" className="w-full sm:w-auto inline-flex items-center justify-center rounded-md text-base font-medium transition-all bg-primary text-primary-foreground hover:bg-teal-500 hover:shadow-lg hover:shadow-primary/25 h-12 px-8">
+                <button type="button" onClick={() => openAuth('register')} className="w-full sm:w-auto inline-flex items-center justify-center rounded-md text-base font-medium transition-all bg-primary text-primary-foreground hover:bg-teal-500 hover:shadow-lg hover:shadow-primary/25 h-12 px-8" data-testid="button-hero-register">
                   ابدأ تجربتك المجانية
-                </Link>
+                </button>
                 <a href="#modules" className="w-full sm:w-auto inline-flex items-center justify-center rounded-md text-base font-medium transition-colors bg-white/10 text-white hover:bg-white/20 backdrop-blur-sm border border-white/10 h-12 px-8">
                   استكشف الحلول
                 </a>
@@ -183,9 +194,9 @@ export default function Landing() {
                   تحكم كامل في المستودعات والفروع. تتبع الكميات، الجرد الدوري، ونقاط إعادة الطلب بشكل آلي لتجنب نفاد الكميات.
                 </p>
                 <div className="mt-auto">
-                  <Link href="/dashboard" className="text-teal-400 text-sm font-medium hover:text-teal-300 flex items-center gap-1 group-hover:gap-2 transition-all">
+                  <button type="button" onClick={() => openAuth('login')} className="text-teal-400 text-sm font-medium hover:text-teal-300 flex items-center gap-1 group-hover:gap-2 transition-all" data-testid="button-module-login">
                     اكتشف المزيد <ChevronLeft className="h-4 w-4" />
-                  </Link>
+                  </button>
                 </div>
               </div>
             </div>
@@ -288,9 +299,9 @@ export default function Landing() {
                 ))}
               </ul>
               
-              <Link href="/dashboard" className="inline-flex flex-col sm:flex-row items-center justify-center rounded-md text-base font-medium transition-colors bg-slate-900 text-white hover:bg-slate-800 h-12 px-8">
+              <button type="button" onClick={() => openAuth('register')} className="inline-flex flex-col sm:flex-row items-center justify-center rounded-md text-base font-medium transition-colors bg-slate-900 text-white hover:bg-slate-800 h-12 px-8" data-testid="button-features-register">
                 انضم لآلاف الشركات الناجحة
-              </Link>
+              </button>
             </div>
           </div>
         </div>
@@ -309,10 +320,10 @@ export default function Landing() {
             احصل على تحكم كامل، قلل التكاليف، وزد إنتاجية فريقك اليوم. تجربة متكاملة تبدأ بخطوة بسيطة.
           </p>
           <div className="flex flex-col sm:flex-row justify-center gap-4">
-            <Link href="/dashboard" className="inline-flex items-center justify-center rounded-md text-base font-bold transition-all bg-primary text-primary-foreground hover:bg-teal-500 hover:shadow-lg h-14 px-10">
+            <button type="button" onClick={() => openAuth('login')} className="inline-flex items-center justify-center rounded-md text-base font-bold transition-all bg-primary text-primary-foreground hover:bg-teal-500 hover:shadow-lg h-14 px-10" data-testid="button-cta-login">
               دخول مجاني للنظام
               <ArrowLeft className="ms-2 h-5 w-5" />
-            </Link>
+            </button>
             <a href="#features" className="inline-flex items-center justify-center rounded-md text-base font-bold transition-colors border border-white/20 text-white hover:bg-white/10 h-14 px-10">
               تعرّف على المزايا
             </a>
@@ -381,6 +392,7 @@ export default function Landing() {
           </div>
         </div>
       </footer>
+      <AuthDialog open={authOpen} mode={authMode} onOpenChange={setAuthOpen} onSuccess={openDashboard} />
     </div>
   );
 }

@@ -1,13 +1,14 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { LayoutDashboard, Book, FileText, Wallet, BarChart3, Menu, X, Cloud, CloudOff, LoaderCircle } from 'lucide-react';
+import { LayoutDashboard, Book, FileText, Wallet, BarChart3, Menu, X, Cloud, CloudOff, LoaderCircle, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useStore } from '@/context/store';
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
-  const { connectionMode, canRetrySharedConnection, retrySharedConnection } = useStore();
+  const { currentUser, signOut, connectionMode, canRetrySharedConnection, retrySharedConnection } = useStore();
+  const [isSigningOut, setIsSigningOut] = React.useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
 
   const navigation = [
@@ -63,6 +64,33 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Main content */}
       <main className="flex-1 overflow-x-hidden overflow-y-auto">
         <div className="max-w-7xl mx-auto p-4 md:p-8">
+           {currentUser && (
+             <div className="mb-6 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between" data-testid="shared-account-bar">
+               <div className="min-w-0">
+                 <p className="truncate font-semibold text-slate-900">{currentUser.projectName}</p>
+                 <p className="truncate text-sm text-slate-500">{currentUser.name} · {currentUser.email}</p>
+               </div>
+               <Button
+                 type="button"
+                 variant="outline"
+                 size="sm"
+                 className="shrink-0"
+                 disabled={isSigningOut}
+                 onClick={async () => {
+                   setIsSigningOut(true);
+                   try {
+                     await signOut();
+                   } finally {
+                     setIsSigningOut(false);
+                   }
+                 }}
+                 data-testid="button-sign-out"
+               >
+                 {isSigningOut ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <LogOut aria-hidden="true" />}
+                 {isSigningOut ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}
+               </Button>
+             </div>
+           )}
            <ConnectionStatus
              mode={connectionMode}
              canRetrySharedConnection={canRetrySharedConnection}

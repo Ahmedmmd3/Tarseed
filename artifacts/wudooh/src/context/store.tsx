@@ -52,6 +52,8 @@ export type FinancialClosure = {
 };
 
 type StoreContextType = {
+  currentUser: SharedUser | null;
+  signOut: () => Promise<void>;
   accounts: Account[];
   addAccount: (account: Omit<Account, 'id'>) => Promise<void>;
   updateAccount: (id: string, account: Partial<Account>) => Promise<void>;
@@ -68,6 +70,21 @@ type StoreContextType = {
   connectionMode: 'loading' | 'remote' | 'local';
   canRetrySharedConnection: boolean;
   retrySharedConnection: () => Promise<void>;
+};
+
+export type SharedUser = {
+  id: number;
+  accountId: number;
+  organizationId: number;
+  projectName: string;
+  email: string;
+  name: string;
+  roleId: string;
+  permissions: Record<string, boolean>;
+  locationScope: string;
+  warehouseIds: number[];
+  status: string;
+  isTeamMember: boolean;
 };
 
 const demoYear = new Date().getFullYear();
@@ -166,6 +183,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     () => hasRemoteSessionHint() || needsLegacySessionMigration,
   );
   const [legacyRecoveryPending, setLegacyRecoveryPending] = useState(needsLegacySessionMigration);
+  const [currentUser, setCurrentUser] = useState<SharedUser | null>(null);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify({
@@ -187,6 +205,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (session.status === 401 || session.status === 403) {
           clearRemoteSessionHint();
           if (isActive()) {
+            setCurrentUser(null);
             setCanRetrySharedConnection(false);
             setLegacyRecoveryPending(false);
           }
@@ -201,6 +220,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!sessionPayload.user) {
         clearRemoteSessionHint();
         if (isActive()) {
+          setCurrentUser(null);
           setCanRetrySharedConnection(false);
           setLegacyRecoveryPending(false);
           setConnectionMode('local');
@@ -210,6 +230,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
       setRemoteSessionHint();
       if (isActive()) {
+        setCurrentUser(sessionPayload.user as SharedUser);
         setCanRetrySharedConnection(true);
         setLegacyRecoveryPending(false);
       }
@@ -233,6 +254,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setCanRetrySharedConnection(true);
         setConnectionMode('local');
       }
+    }
+  }, []);
+
+  const signOut = useCallback(async (): Promise<void> => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } finally {
+      clearRemoteSessionHint();
+      setCurrentUser(null);
+      setConnectionMode('local');
+      setCanRetrySharedConnection(false);
+      setLegacyRecoveryPending(false);
     }
   }, []);
 
@@ -386,6 +419,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   return (
     <StoreContext.Provider value={{
+      currentUser, signOut,
       accounts, addAccount, updateAccount,
       journals, addJournal, updateJournal, postJournal,
       receivables, addReceivable, updateReceivable, payReceivable,
