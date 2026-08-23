@@ -185,20 +185,28 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
     return;
   }
   if (access.tableName === "products") {
-    const [updated] = await db.transaction(async (tx) => {
+    const result = await db.transaction(async (tx) => {
       const [current] = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
-      if (!current) return [];
+      if (!current) return { kind: "missing" as const };
       const data = { ...current.data, ...(body as Record<string, unknown>), stock: current.data.stock };
-      return tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
+      if (!isLocationAllowed(access.auth, access.tableName, data, current.id)) {
+        return { kind: "forbidden" as const };
+      }
+      const [updated] = await tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
+      return { kind: "updated" as const, record: updated };
     });
-    if (!updated) {
+    if (result.kind === "missing") {
       response.status(404).json({ error: "السجل غير متاح." });
       return;
     }
+    if (result.kind === "forbidden") {
+      response.status(403).json({ error: "ليس لديك صلاحية للمواقع المحددة." });
+      return;
+    }
     await audit(access.auth, "products_updated", String(id));
-    response.json({ record: { ...updated.data, id: updated.id, userId: access.auth.organizationId } });
+    response.json({ record: { ...result.record.data, id: result.record.id, userId: access.auth.organizationId } });
     return;
   }
   const [existing] = await db.select().from(erpRecordsTable).where(and(
@@ -257,7 +265,10 @@ router.delete("/data/:table/:id", requireAuth, async (request: Request, response
       const [product] = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
-      if (!product) return false;
+      if (!product) return "missing" as const;
+      if (!isLocationAllowed(access.auth, access.tableName, product.data, product.id)) {
+        return "forbidden" as const;
+      }
       const [reference] = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
         eq(erpRecordsTable.organizationId, access.auth.organizationId),
         sql`${erpRecordsTable.tableName} in ('inventoryBalances', 'stockTransfers', 'stockAdjustments', 'sales')`,
@@ -268,10 +279,14 @@ router.delete("/data/:table/:id", requireAuth, async (request: Request, response
         return null;
       }
       await tx.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
-      return true;
+      return "deleted" as const;
     });
-    if (deleted === false) {
+    if (deleted === "missing") {
       response.status(404).json({ error: "السجل غير متاح." });
+      return;
+    }
+    if (deleted === "forbidden") {
+      response.status(403).json({ error: "ليس لديك صلاحية للمواقع المحددة." });
       return;
     }
     if (deleted === null) return;
