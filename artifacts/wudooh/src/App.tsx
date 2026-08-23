@@ -20,6 +20,7 @@ import Accounts from '@/pages/accounts';
 import Journals from '@/pages/journals';
 import Receivables from '@/pages/receivables';
 import Reports from '@/pages/reports';
+import Team from '@/pages/team';
 
 const queryClient = new QueryClient();
 
@@ -41,6 +42,7 @@ function Router() {
         <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />
         <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />
         <Route path="/reports" component={() => <DashboardLayout><Reports /></DashboardLayout>} />
+        <Route path="/team" component={() => <DashboardLayout><Team /></DashboardLayout>} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>

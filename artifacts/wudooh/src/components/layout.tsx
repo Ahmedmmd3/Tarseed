@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { LayoutDashboard, Book, FileText, Wallet, BarChart3, Menu, X, Cloud, CloudOff, LoaderCircle, LogOut } from 'lucide-react';
+import { LayoutDashboard, Book, FileText, Wallet, BarChart3, Menu, X, Cloud, CloudOff, LoaderCircle, LogOut, UsersRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useStore } from '@/context/store';
 
@@ -10,6 +10,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const { currentUser, signOut, connectionMode, canRetrySharedConnection, retrySharedConnection } = useStore();
   const [isSigningOut, setIsSigningOut] = React.useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
+  const canViewCurrentRoute = !currentUser || canAccessNavigationItem(location, currentUser);
 
   const navigation = [
     { name: 'نظرة عامة', href: '/dashboard', icon: LayoutDashboard },
@@ -17,6 +18,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     { name: 'القيود اليومية', href: '/journals', icon: FileText },
     { name: 'الذمم والمستحقات', href: '/receivables', icon: Wallet },
     { name: 'التقارير', href: '/reports', icon: BarChart3 },
+    { name: 'إدارة الفريق', href: '/team', icon: UsersRound, ownerOnly: true },
   ];
 
   return (
@@ -40,7 +42,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
              <img src={logoSrc} alt="شعار ترصيد" className="h-10 w-auto object-contain" width="132" height="48" />
           </div>
           <nav className="flex-1 px-4 py-4 space-y-1">
-            {navigation.map((item) => {
+            {navigation.filter((item) => {
+              if (!currentUser) return !item.ownerOnly;
+              return item.ownerOnly ? currentUser.roleId === 'owner' : canAccessNavigationItem(item.href, currentUser);
+            }).map((item) => {
               const isActive = location === item.href;
               return (
                 <Link key={item.name} href={item.href} data-testid={`link-${item.href.replace('/', '') || 'home'}`}>
@@ -96,11 +101,51 @@ export function AppLayout({ children }: { children: ReactNode }) {
              canRetrySharedConnection={canRetrySharedConnection}
              onRetry={() => void retrySharedConnection()}
            />
-          {children}
+           {connectionMode === 'loading' ? (
+             <DashboardLoading />
+           ) : canViewCurrentRoute ? (
+             children
+           ) : (
+             <RestrictedRoute />
+           )}
         </div>
       </main>
     </div>
   );
+}
+
+function DashboardLoading() {
+  return (
+    <div className="flex min-h-72 flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm" role="status" data-testid="dashboard-content-loading">
+      <LoaderCircle className="h-6 w-6 animate-spin text-primary" aria-hidden="true" />
+      <p className="mt-3 font-semibold text-slate-800">جارٍ التحقق من صلاحيات الوصول</p>
+      <p className="mt-1 text-sm text-slate-500">لن نعرض بيانات السجل المشترك قبل تأكيد جلسة الدخول.</p>
+    </div>
+  );
+}
+
+function RestrictedRoute() {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm" data-testid="restricted-route-message">
+      <CloudOff className="mx-auto h-9 w-9 text-slate-300" aria-hidden="true" />
+      <h2 className="mt-4 text-xl font-bold text-slate-900">هذه الوحدة غير متاحة لحسابك</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">تواصل مع مالك المنشأة إذا كنت تحتاج إلى صلاحية الوصول إليها.</p>
+    </div>
+  );
+}
+
+function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {
+  if (user.roleId === 'owner') return true;
+  const permissionByRoute: Record<string, string> = {
+    '/dashboard': 'dashboard',
+    '/accounts': 'accounting',
+    '/journals': 'accounting',
+    '/receivables': 'accounting',
+    '/reports': 'reports',
+    '/team': '__owner__',
+  };
+  const permission = permissionByRoute[href];
+  return permission ? user.permissions[permission] === true : false;
 }
 
 function ConnectionStatus({

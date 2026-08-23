@@ -171,16 +171,17 @@ const initialReceivables: Receivable[] = [
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [accounts, setAccounts] = useState<Account[]>(() => readStoredData()?.accounts ?? initialAccounts);
-  const [journals, setJournals] = useState<Journal[]>(() => readStoredData()?.journals ?? initialJournals);
-  const [receivables, setReceivables] = useState<Receivable[]>(() => readStoredData()?.receivables ?? initialReceivables);
-  const [closures, setClosures] = useState<FinancialClosure[]>(() => readStoredData()?.closures ?? []);
   const [needsLegacySessionMigration] = useState(() => hasLegacyStoredData());
+  const [shouldVerifyRemoteSession] = useState(() => hasRemoteSessionHint() || hasLegacyStoredData());
+  const [accounts, setAccounts] = useState<Account[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.accounts ?? initialAccounts);
+  const [journals, setJournals] = useState<Journal[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.journals ?? initialJournals);
+  const [receivables, setReceivables] = useState<Receivable[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.receivables ?? initialReceivables);
+  const [closures, setClosures] = useState<FinancialClosure[]>(() => shouldVerifyRemoteSession ? [] : readStoredData()?.closures ?? []);
   const [connectionMode, setConnectionMode] = useState<'loading' | 'remote' | 'local'>(
-    () => hasRemoteSessionHint() || needsLegacySessionMigration ? 'loading' : 'local',
+    () => shouldVerifyRemoteSession ? 'loading' : 'local',
   );
   const [canRetrySharedConnection, setCanRetrySharedConnection] = useState(
-    () => hasRemoteSessionHint() || needsLegacySessionMigration,
+    () => shouldVerifyRemoteSession,
   );
   const [legacyRecoveryPending, setLegacyRecoveryPending] = useState(needsLegacySessionMigration);
   const [currentUser, setCurrentUser] = useState<SharedUser | null>(null);
@@ -196,6 +197,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }));
   }, [accounts, journals, receivables, closures, legacyRecoveryPending]);
 
+  const clearSharedState = useCallback(() => {
+    clearStoredData();
+    setAccounts([]);
+    setJournals([]);
+    setReceivables([]);
+    setClosures([]);
+    setCurrentUser(null);
+    setLegacyRecoveryPending(false);
+  }, []);
+
   const loadSharedData = useCallback(async (isActive: () => boolean = () => true): Promise<void> => {
     if (!isActive()) return;
     setConnectionMode('loading');
@@ -205,9 +216,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (session.status === 401 || session.status === 403) {
           clearRemoteSessionHint();
           if (isActive()) {
-            setCurrentUser(null);
+            clearSharedState();
             setCanRetrySharedConnection(false);
-            setLegacyRecoveryPending(false);
           }
         } else if (isActive()) {
           setCanRetrySharedConnection(true);
@@ -220,9 +230,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!sessionPayload.user) {
         clearRemoteSessionHint();
         if (isActive()) {
-          setCurrentUser(null);
+          clearSharedState();
           setCanRetrySharedConnection(false);
-          setLegacyRecoveryPending(false);
           setConnectionMode('local');
         }
         return;
@@ -235,11 +244,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setLegacyRecoveryPending(false);
       }
 
+      const sharedUser = sessionPayload.user as SharedUser;
+      const canReadAccounting = sharedUser.roleId === 'owner' || sharedUser.permissions.accounting === true;
       const [accountResult, journalResult, receivableResult, closureResult] = await Promise.all([
-        getRecords<Account>('accounts'),
-        getRecords<Journal>('journalEntries'),
-        getRecords<Receivable>('receivables'),
-        getRecords<FinancialClosure>('financialClosures'),
+        canReadAccounting ? getRecords<Account>('accounts') : Promise.resolve([]),
+        canReadAccounting ? getRecords<Journal>('journalEntries') : Promise.resolve([]),
+        canReadAccounting ? getRecords<Receivable>('receivables') : Promise.resolve([]),
+        canReadAccounting ? getRecords<FinancialClosure>('financialClosures') : Promise.resolve([]),
       ]);
       if (!isActive()) return;
       setAccounts(accountResult.map(normalizeAccount));
@@ -255,19 +266,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setConnectionMode('local');
       }
     }
-  }, []);
+  }, [clearSharedState]);
 
   const signOut = useCallback(async (): Promise<void> => {
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
     } finally {
       clearRemoteSessionHint();
-      setCurrentUser(null);
+      clearSharedState();
       setConnectionMode('local');
       setCanRetrySharedConnection(false);
-      setLegacyRecoveryPending(false);
     }
-  }, []);
+  }, [clearSharedState]);
 
   useEffect(() => {
     if (!hasRemoteSessionHint() && !needsLegacySessionMigration) return;
@@ -507,6 +517,12 @@ function hasRemoteSessionHint(): boolean {
 function clearRemoteSessionHint(): void {
   if (typeof document !== 'undefined') {
     document.cookie = `${remoteSessionHintCookie}=; Max-Age=0; Path=/`;
+  }
+}
+
+function clearStoredData(): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(storageKey);
   }
 }
 
