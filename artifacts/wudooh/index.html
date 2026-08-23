@@ -460,6 +460,34 @@
     .btn-settings { background:none; border:none; color:var(--text-muted); font-size:20px; cursor:pointer; padding:6px 10px; border-radius:8px; transition:all .2s; }
     .btn-settings:hover { color:var(--primary); background:var(--primary-light); }
     .settings-sec-title { font-size:13px; font-weight:800; color:var(--text-muted); letter-spacing:.05em; text-transform:uppercase; padding-bottom:12px; border-bottom:1px solid var(--border); margin-bottom:20px; }
+    .team-stat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:20px; }
+    .team-stat { background:white; border:1px solid var(--border); border-radius:14px; padding:18px; display:flex; align-items:center; gap:14px; }
+    .team-stat-icon { width:42px; height:42px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:var(--primary-light); color:var(--primary); font-size:20px; }
+    .team-stat-value { font-size:23px; font-weight:800; color:var(--text); }
+    .team-stat-label { color:var(--text-muted); font-size:12px; font-weight:700; margin-top:2px; }
+    .team-layout { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(280px,.8fr); gap:20px; margin-bottom:20px; }
+    .role-card { border:1px solid var(--border); border-radius:14px; padding:16px; background:white; margin-bottom:12px; }
+    .role-card:last-child { margin-bottom:0; }
+    .role-card-head { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; }
+    .role-card-title { font-size:15px; font-weight:800; }
+    .permission-list { display:flex; flex-wrap:wrap; gap:6px; }
+    .permission-chip { display:inline-flex; align-items:center; gap:5px; padding:5px 9px; border-radius:999px; background:#f8fafc; color:var(--text-muted); font-size:11px; font-weight:700; }
+    .permission-chip.on { background:var(--primary-light); color:var(--primary); }
+    .team-member { display:flex; align-items:center; gap:10px; }
+    .team-avatar { width:36px; height:36px; border-radius:50%; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; font-weight:800; }
+    .team-member-name { font-weight:800; }
+    .team-member-email { font-size:11px; color:var(--text-muted); margin-top:2px; direction:ltr; text-align:right; }
+    .team-scope { color:var(--text-muted); font-size:12px; line-height:1.7; }
+    .team-checkbox-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; }
+    .team-checkbox { display:flex; align-items:center; gap:8px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; font-size:13px; font-weight:700; cursor:pointer; }
+    .team-checkbox input { accent-color:var(--primary); width:16px; height:16px; }
+    .audit-row { display:flex; align-items:flex-start; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); }
+    .audit-row:last-child { border-bottom:0; }
+    .audit-icon { width:30px; height:30px; border-radius:9px; background:var(--primary-light); color:var(--primary); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .audit-text { font-size:13px; font-weight:700; }
+    .audit-meta { color:var(--text-muted); font-size:11px; margin-top:3px; }
+    @media(max-width:900px) { .team-layout { grid-template-columns:1fr; } .team-stat-grid { grid-template-columns:1fr 1fr; } }
+    @media(max-width:600px) { .team-stat-grid { grid-template-columns:1fr; } .team-checkbox-grid { grid-template-columns:1fr; } }
     .modal-lg { max-width: 760px; }
     @media(max-width:600px) { .vat-summary-grid { grid-template-columns:1fr; } .po-item-row { grid-template-columns:1fr 70px 90px 80px 36px; } }
   </style>
@@ -584,6 +612,9 @@
         </div>
         <div class="nav-item" data-page="employees" onclick="navigate('employees')">
           <i class="bi bi-person-badge nav-icon"></i> الموارد البشرية
+        </div>
+        <div class="nav-item" data-page="team" data-permission="team" onclick="navigate('team')">
+          <i class="bi bi-shield-lock nav-icon"></i> الفريق والصلاحيات
         </div>
         <div class="nav-item" data-page="projects" onclick="navigate('projects')">
           <i class="bi bi-kanban nav-icon"></i> العمليات والمشاريع
@@ -1089,6 +1120,44 @@
         </div>
       </div>
 
+      <!-- ═══ TEAM & PERMISSIONS ═══ -->
+      <div class="page" id="page-team">
+        <div class="page-header">
+          <div>
+            <div class="page-title">الفريق والصلاحيات</div>
+            <div class="page-subtitle">تحكم في أعضاء المنشأة والوحدات والمواقع التي يمكنهم الوصول إليها</div>
+          </div>
+          <button class="btn btn-primary" onclick="openTeamMemberModal()"><i class="bi bi-person-plus"></i> إضافة عضو</button>
+        </div>
+        <div class="team-stat-grid" id="team-stats"></div>
+        <div class="team-layout">
+          <div class="card">
+            <div class="inventory-section-head">
+              <div class="section-title">أعضاء الفريق</div>
+              <div class="muted">يمكنك تعطيل الوصول دون حذف السجل</div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>العضو</th><th>الدور</th><th>الوحدات</th><th>المواقع</th><th>الحالة</th><th>الإجراءات</th></tr></thead>
+                <tbody id="team-members-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="section-title"><i class="bi bi-person-gear"></i> قوالب الأدوار</div>
+            <p class="modal-help">الصلاحيات الافتراضية تساعدك على ضبط الوصول بسرعة. يمكنك تخصيصها لكل عضو عند إضافته.</p>
+            <div id="role-cards"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="inventory-section-head">
+            <div class="section-title"><i class="bi bi-journal-text"></i> سجل التدقيق</div>
+            <div class="muted">آخر العمليات الإدارية المهمة</div>
+          </div>
+          <div id="audit-log-list"></div>
+        </div>
+      </div>
+
       <!-- ═══ PROJECTS & OPERATIONS ═══ -->
       <div class="page" id="page-projects">
         <div class="page-header">
@@ -1465,6 +1534,63 @@
   </div>
 </div>
 
+<!-- Team Member Modal -->
+<div class="modal-overlay" id="modal-team-member">
+  <div class="modal-box modal-lg">
+    <div class="modal-header">
+      <div class="modal-title" id="team-member-modal-title">إضافة عضو للفريق</div>
+      <button class="modal-close" onclick="closeModal('modal-team-member')">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="team-member-id">
+      <p class="modal-help">ينشئ العضو حساب دخول خاصاً به. لن يتمكن من رؤية أي وحدة أو موقع غير محدد له هنا.</p>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>اسم العضو *</label>
+          <input type="text" id="team-member-name" placeholder="الاسم الكامل">
+        </div>
+        <div class="form-group">
+          <label>البريد الإلكتروني *</label>
+          <input type="email" id="team-member-email" placeholder="team@example.com">
+        </div>
+        <div class="form-group">
+          <label>كلمة المرور *</label>
+          <input type="password" id="team-member-password" placeholder="6 أحرف على الأقل">
+        </div>
+        <div class="form-group">
+          <label>الدور</label>
+          <select id="team-member-role" onchange="applyRoleTemplate()"></select>
+        </div>
+        <div class="full form-group">
+          <label>الوحدات المسموح بها</label>
+          <div class="team-checkbox-grid" id="team-permissions"></div>
+        </div>
+        <div class="full form-group">
+          <label>المواقع المسموح بها</label>
+          <select id="team-location-scope" onchange="updateTeamLocationScope()">
+            <option value="all">كل المواقع الحالية والجديدة</option>
+            <option value="selected">مواقع محددة فقط</option>
+            <option value="none">لا مواقع</option>
+          </select>
+          <div class="team-checkbox-grid" id="team-locations"></div>
+          <div class="modal-help" style="margin-top:8px;margin-bottom:0">اختر نطاقاً صريحاً: «كل المواقع» يشمل المواقع الجديدة، و«لا مواقع» يمنع الوصول تماماً.</div>
+        </div>
+        <div class="full form-group">
+          <label>الحالة</label>
+          <select id="team-member-status">
+            <option value="active">نشط — يمكنه تسجيل الدخول</option>
+            <option value="inactive">معطّل — لا يمكنه تسجيل الدخول</option>
+          </select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modal-team-member')">إلغاء</button>
+      <button class="btn btn-primary" onclick="saveTeamMember()"><i class="bi bi-shield-check"></i> حفظ الصلاحيات</button>
+    </div>
+  </div>
+</div>
+
 <!-- Project Modal -->
 <div class="modal-overlay" id="modal-project">
   <div class="modal-box">
@@ -1644,6 +1770,87 @@ db.version(4).stores({
   stockTransfers: '++id, userId, fromWarehouseId, toWarehouseId, status, date',
   stockAdjustments: '++id, userId, productId, warehouseId, date'
 });
+// الإصدار 5: أعضاء المنشأة والأدوار وسجل التدقيق
+db.version(5).stores({
+  users: '++id, email, organizationId, status, roleId',
+  teamMembers: '++id, organizationId, userId, email, status, roleId',
+  auditLogs: '++id, organizationId, actorId, action, createdAt'
+});
+const REMOTE_TABLES = ['products', 'invoices', 'expenses', 'customers', 'sales', 'returns_', 'suppliers', 'purchaseOrders', 'warehouses', 'employees', 'projects', 'inventoryBalances', 'stockTransfers', 'stockAdjustments'];
+const localTableMethods = new Map();
+let remoteStoreActive = false;
+
+function installRemoteStore() {
+  REMOTE_TABLES.forEach(tableName => {
+    const table = db.table(tableName);
+    const original = {
+      add: table.add.bind(table),
+      update: table.update.bind(table),
+      delete: table.delete.bind(table),
+      bulkDelete: table.bulkDelete.bind(table),
+      bulkAdd: table.bulkAdd.bind(table),
+      put: table.put.bind(table),
+      clear: table.clear.bind(table),
+      bulkPut: table.bulkPut.bind(table)
+    };
+    localTableMethods.set(tableName, original);
+    table.add = async data => {
+      if (!remoteStoreActive) return original.add(data);
+      const { record } = await Dexie.waitFor(apiRequest(`/data/${tableName}`, { method: 'POST', body: JSON.stringify(data) }));
+      await original.add(record);
+      return record.id;
+    };
+    table.update = async (id, changes) => {
+      if (!remoteStoreActive) return original.update(id, changes);
+      const { record } = await Dexie.waitFor(apiRequest(`/data/${tableName}/${id}`, { method: 'PATCH', body: JSON.stringify(changes) }));
+      await original.update(id, record);
+      return 1;
+    };
+    table.delete = async id => {
+      if (!remoteStoreActive) return original.delete(id);
+      await Dexie.waitFor(apiRequest(`/data/${tableName}/${id}`, { method: 'DELETE' }));
+      return original.delete(id);
+    };
+    table.bulkDelete = async ids => {
+      for (const id of ids) await table.delete(id);
+    };
+    table.bulkAdd = async records => {
+      const ids = [];
+      for (const record of records) ids.push(await table.add(record));
+      return ids;
+    };
+    table.put = async record => {
+      if (!remoteStoreActive) return original.put(record);
+      if (record?.id) {
+        await table.update(record.id, record);
+        return record.id;
+      }
+      return table.add(record);
+    };
+    table.bulkPut = async records => {
+      if (!remoteStoreActive) return original.bulkPut(records);
+      const ids = [];
+      for (const record of records) ids.push(await table.put(record));
+      return ids;
+    };
+  });
+}
+
+async function syncRemoteStore() {
+  remoteStoreActive = false;
+  for (const tableName of REMOTE_TABLES) {
+    const local = localTableMethods.get(tableName);
+    await local.clear();
+    try {
+      const { records } = await apiRequest(`/data/${tableName}`);
+      if (records.length) await local.bulkPut(records);
+    } catch (error) {
+      if (!String(error.message || '').includes('صلاحية')) throw error;
+    }
+  }
+  remoteStoreActive = true;
+}
+installRemoteStore();
 
 // ══════════════════════════════════════════════════════════
 //  STATE
@@ -1652,20 +1859,148 @@ let currentUser = null;
 let cart = [];
 let invoiceItems = [];
 let currentInvoiceFilter = '';
+const MODULES = [
+  { key: 'dashboard', label: 'لوحة التحكم' },
+  { key: 'sales', label: 'المبيعات والعملاء' },
+  { key: 'accounting', label: 'المحاسبة' },
+  { key: 'inventory', label: 'المخزون والمواقع' },
+  { key: 'hr', label: 'الموارد البشرية' },
+  { key: 'operations', label: 'العمليات والمشاريع' },
+  { key: 'reports', label: 'التقارير' }
+];
+const ROLE_TEMPLATES = {
+  sales: { label: 'مسؤول مبيعات', description: 'الكاشير والفواتير والعملاء', permissions: { dashboard: true, sales: true } },
+  accountant: { label: 'محاسب', description: 'المصاريف والفواتير والتقارير', permissions: { dashboard: true, sales: true, accounting: true, reports: true } },
+  inventory: { label: 'مسؤول مخزون', description: 'المنتجات والمواقع والتحويلات', permissions: { dashboard: true, inventory: true } },
+  hr: { label: 'مسؤول موارد بشرية', description: 'سجل الموظفين والعمليات', permissions: { dashboard: true, hr: true, operations: true } },
+  manager: { label: 'مدير تشغيل', description: 'إدارة المبيعات والمخزون والتقارير', permissions: { dashboard: true, sales: true, inventory: true, operations: true, reports: true } }
+};
+const PAGE_PERMISSIONS = {
+  dashboard: 'dashboard', cashier: 'sales', invoices: 'sales', customers: 'sales',
+  products: 'inventory', warehouses: 'inventory', inventory: 'inventory',
+  suppliers: 'inventory', 'purchase-orders': 'inventory', returns: 'sales',
+  expenses: 'accounting', employees: 'hr', projects: 'operations',
+  reports: 'reports', 'vat-report': 'reports', team: 'team'
+};
+const ALL_PERMISSIONS = Object.fromEntries([...MODULES.map(module => [module.key, true]), ['team', true]]);
+let teamMembersCache = [];
+
+async function apiRequest(path, options = {}) {
+  const response = await fetch(`/api${path}`, {
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    ...options
+  });
+  const payload = response.status === 204 ? null : await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || 'تعذر إتمام الطلب. حاول مرة أخرى.');
+  return payload;
+}
+
+function setCurrentUser(user) {
+  currentUser = {
+    ...user,
+    accountId: user.id,
+    id: user.organizationId,
+    warehouseIds: Array.isArray(user.warehouseIds) ? user.warehouseIds : [],
+    locationScope: user.locationScope || 'all'
+  };
+}
+
+function organizationId() {
+  return currentUser?.organizationId || currentUser?.id;
+}
+
+function dataScopeId() {
+  return organizationId();
+}
+
+function isOwner() {
+  return currentUser?.roleId === 'owner' || (!currentUser?.isTeamMember && Boolean(currentUser));
+}
+
+function can(module, action = 'view') {
+  if (!currentUser) return false;
+  if (isOwner()) return true;
+  const value = currentUser.permissions?.[module];
+  return action === 'view' ? Boolean(value) : Boolean(value && (value === true || value === action || value === 'write'));
+}
+
+function canManageTeam() {
+  return isOwner();
+}
+
+function guardPermission(module, message = 'ليس لديك صلاحية لتنفيذ هذه العملية.') {
+  if (can(module, 'write')) return true;
+  toast(message, 'error');
+  return false;
+}
+
+function accessibleLocationIds(locations) {
+  if (isOwner() || currentUser?.locationScope === 'all') return locations;
+  if (currentUser?.locationScope === 'none') return [];
+  const allowed = new Set(currentUser.warehouseIds.map(Number));
+  return locations.filter(location => allowed.has(Number(location.id)));
+}
+
+function hasLocationAccess(...locationIds) {
+  if (isOwner() || currentUser?.locationScope === 'all') return true;
+  if (currentUser?.locationScope === 'none') return false;
+  const allowed = new Set(currentUser.warehouseIds.map(Number));
+  return locationIds.every(id => allowed.has(Number(id)));
+}
+
+function guardLocationAccess(...locationIds) {
+  if (hasLocationAccess(...locationIds)) return true;
+  toast('ليس لديك صلاحية للعمل على أحد المواقع المحددة.', 'error');
+  return false;
+}
+
+function auditActionLabel(action) {
+  return {
+    member_created: 'إضافة عضو للفريق',
+    member_updated: 'تعديل صلاحيات عضو',
+    member_disabled: 'تعطيل عضو',
+    member_enabled: 'تفعيل عضو',
+    role_changed: 'تغيير دور عضو',
+    login: 'تسجيل الدخول',
+    sale_completed: 'إتمام عملية بيع',
+    invoice_created: 'إنشاء فاتورة',
+    invoice_updated: 'تعديل فاتورة',
+    invoice_deleted: 'حذف فاتورة',
+    invoice_paid: 'تحصيل فاتورة',
+    expense_created: 'تسجيل مصروف',
+    expense_updated: 'تعديل مصروف',
+    expense_deleted: 'حذف مصروف',
+    product_deleted: 'حذف منتج',
+    employee_deleted: 'حذف موظف',
+    project_deleted: 'حذف مشروع',
+    transfer_created: 'تسجيل تحويل مخزون',
+    transfer_approved: 'اعتماد تحويل مخزون',
+    transfer_received: 'استلام تحويل مخزون',
+    transfer_cancelled: 'إلغاء تحويل مخزون',
+    inventory_adjusted: 'تسوية جرد',
+    warehouse_deleted: 'حذف موقع تشغيل',
+    employee_deleted: 'حذف موظف',
+    project_deleted: 'حذف مشروع',
+    customer_deleted: 'حذف عميل'
+  }[action] || action;
+}
+
+async function recordAudit(action, entity = '', details = '') {
+  // العمليات الحساسة الخاصة بالحساب والفريق تسجل من الخادم نفسه.
+  // عمليات Dexie المحلية لا تدّعي أنها سجل تدقيق موثوق.
+}
 
 // ══════════════════════════════════════════════════════════
 //  INIT
 // ══════════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', async () => {
-  // Restore session
-  const saved = localStorage.getItem('wudooh_session');
-  if (saved) {
-    const session = JSON.parse(saved);
-    const user = await db.users.get(session.id);
-    if (user) {
-      currentUser = user;
-      showApp();
-    }
+  try {
+    const { user } = await apiRequest('/auth/me');
+    setCurrentUser(user);
+    showApp();
+  } catch (_) {
+    // لا توجد جلسة خادم صالحة بعد.
   }
 
   // Connection indicator
@@ -1724,11 +2059,13 @@ async function doLogin() {
   const email = document.getElementById('login-email').value.trim();
   const pass = document.getElementById('login-password').value;
   if (!email || !pass) return showAuthError('يرجى إدخال البريد الإلكتروني وكلمة المرور');
-  const user = await db.users.where('email').equals(email).first();
-  if (!user || user.password !== btoa(pass)) return showAuthError('البريد الإلكتروني أو كلمة المرور غير صحيحة');
-  currentUser = user;
-  localStorage.setItem('wudooh_session', JSON.stringify({ id: user.id }));
-  showApp();
+  try {
+    const { user } = await apiRequest('/auth/login', { method: 'POST', body: JSON.stringify({ email, password: pass }) });
+    setCurrentUser(user);
+    showApp();
+  } catch (error) {
+    showAuthError(error.message);
+  }
 }
 
 async function doRegister() {
@@ -1738,17 +2075,18 @@ async function doRegister() {
   if (!project) return showAuthError('يرجى إدخال اسم المشروع');
   if (!email) return showAuthError('يرجى إدخال البريد الإلكتروني');
   if (pass.length < 6) return showAuthError('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
-  const exists = await db.users.where('email').equals(email).first();
-  if (exists) return showAuthError('هذا البريد الإلكتروني مسجّل مسبقاً');
-  const id = await db.users.add({ projectName: project, email, password: btoa(pass), createdAt: new Date() });
-  currentUser = { id, projectName: project, email };
-  localStorage.setItem('wudooh_session', JSON.stringify({ id }));
-  showApp();
+  try {
+    const { user } = await apiRequest('/auth/register', { method: 'POST', body: JSON.stringify({ projectName: project, email, password: pass, name: email.split('@')[0] }) });
+    setCurrentUser(user);
+    showApp();
+  } catch (error) {
+    showAuthError(error.message);
+  }
 }
 
-function doLogout() {
+async function doLogout() {
   if (!confirm('هل تريد تسجيل الخروج؟')) return;
-  localStorage.removeItem('wudooh_session');
+  try { await apiRequest('/auth/logout', { method: 'POST' }); } catch (_) {}
   currentUser = null;
   cart = [];
   document.getElementById('auth-screen').style.display = 'flex';
@@ -1759,14 +2097,35 @@ async function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   document.getElementById('project-name-display').textContent = currentUser.projectName || 'محل';
+  applyAccessControl();
+  try {
+    await syncRemoteStore();
+  } catch (error) {
+    remoteStoreActive = false;
+    toast('تعذر مزامنة بيانات المنشأة بشكل آمن. تحقق من الاتصال ثم أعد المحاولة.', 'error');
+    doLogout();
+    return;
+  }
   await ensureInventorySetup();
   navigate('dashboard');
+}
+
+function applyAccessControl() {
+  document.querySelectorAll('[data-page]').forEach(element => {
+    const permission = PAGE_PERMISSIONS[element.dataset.page];
+    element.style.display = permission === 'team'
+      ? (canManageTeam() ? '' : 'none')
+      : (can(permission) ? '' : 'none');
+  });
 }
 
 // ══════════════════════════════════════════════════════════
 //  NAVIGATION
 // ══════════════════════════════════════════════════════════
 function navigate(page) {
+  const permission = PAGE_PERMISSIONS[page];
+  if (permission === 'team' && !canManageTeam()) return toast('هذه الصفحة متاحة لمالك المنشأة فقط.', 'error');
+  if (permission !== 'team' && !can(permission)) return toast('ليس لديك صلاحية للوصول إلى هذه الوحدة.', 'error');
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
@@ -1789,6 +2148,7 @@ function navigate(page) {
   if (page === 'inventory') { renderInventory(); }
   if (page === 'employees') { renderEmployees(); }
   if (page === 'projects') { renderProjects(); }
+  if (page === 'team') { renderTeam(); }
 }
 
 function toggleSidebar() {
@@ -2019,6 +2379,7 @@ function resetProductBarcodeUI() {
 //  PRODUCTS CRUD
 // ══════════════════════════════════════════════════════════
 function openProductModal(prod=null) {
+  if (!guardPermission('inventory')) return;
   resetProductBarcodeUI();
   document.getElementById('product-modal-title').textContent = prod ? 'تعديل المنتج' : 'إضافة منتج جديد';
   document.getElementById('prod-id').value = prod?.id || '';
@@ -2056,6 +2417,7 @@ async function updateCatDatalist() {
 }
 
 async function saveProduct() {
+  if (!guardPermission('inventory')) return;
   const name = document.getElementById('prod-name').value.trim();
   const sellPrice = parseFloat(document.getElementById('prod-sell-price').value);
   if (!name) return toast('يرجى إدخال اسم المنتج', 'error');
@@ -2163,6 +2525,7 @@ async function editProduct(id) {
 }
 
 async function deleteProduct(id) {
+  if (!guardPermission('inventory')) return;
   if (!confirm('هل تريد حذف هذا المنتج؟')) return;
   const product = await db.products.get(id);
   if (!product || product.userId !== currentUser.id) return toast('تعذر العثور على هذا المنتج.', 'error');
@@ -2177,6 +2540,7 @@ async function deleteProduct(id) {
     await db.inventoryBalances.bulkDelete(balances.map(balance => balance.id));
     await db.products.delete(id);
   });
+  await recordAudit('product_deleted', product.name);
   toast('تم حذف المنتج', 'warning');
   renderProducts();
   renderInventory();
@@ -2212,7 +2576,7 @@ async function renderPOSProducts() {
 
 async function populatePOSLocations() {
   await ensureInventorySetup();
-  const locations = (await db.warehouses.where('userId').equals(currentUser.id).toArray()).filter(location => location.status === 'active');
+  const locations = accessibleLocationIds((await db.warehouses.where('userId').equals(currentUser.id).toArray()).filter(location => location.status === 'active'));
   const select = document.getElementById('pos-location');
   const previous = select.value;
   select.innerHTML = '<option value="">اختر موقع البيع</option>' + locations.map(location =>
@@ -2347,12 +2711,14 @@ function refocusBarcode() {
 }
 
 async function completeSale() {
+  if (!guardPermission('sales')) return;
   if (!cart.length) return toast('السلة فارغة', 'error');
   const { sub, tax, disc, total, taxPct, discPct } = calcCart();
   const customerId = parseInt(document.getElementById('cart-customer').value) || null;
   const paymentMethod = document.getElementById('cart-payment').value;
   const warehouseId = Number(document.getElementById('pos-location').value);
   if (!warehouseId) return toast('اختر موقع البيع قبل إتمام العملية.', 'error');
+  if (!guardLocationAccess(warehouseId)) return;
   let saleId;
   try {
     await db.transaction('rw', db.sales, db.products, db.inventoryBalances, async () => {
@@ -2419,6 +2785,7 @@ async function completeSale() {
   cart = [];
   renderCart();
   renderPOSProducts();
+  await recordAudit('sale_completed', `فاتورة #${saleId}`, `${fmt(total)} ر.س`);
   toast('تم البيع بنجاح');
 }
 
@@ -2475,6 +2842,7 @@ function filterInvoices(status) {
 }
 
 async function openInvoiceModal(inv=null) {
+  if (!guardPermission('sales')) return;
   invoiceItems = inv?.items ? JSON.parse(JSON.stringify(inv.items)) : [{ desc:'', qty:1, price:0 }];
   document.getElementById('invoice-modal-title').textContent = inv ? 'تعديل الفاتورة' : 'فاتورة جديدة';
   document.getElementById('inv-id').value = inv?.id || '';
@@ -2538,6 +2906,7 @@ function calcInvoiceTotal() {
 }
 
 async function saveInvoice() {
+  if (!guardPermission('sales')) return;
   const { sub, tax, disc, total } = calcInvoiceTotal();
   const customerId = parseInt(document.getElementById('inv-customer').value) || null;
   const data = {
@@ -2564,6 +2933,7 @@ async function saveInvoice() {
     toast('تمت إضافة الفاتورة');
   }
   closeModal('modal-invoice');
+  await recordAudit(id ? 'invoice_updated' : 'invoice_created', `فاتورة #${id || 'جديدة'}`, `${fmt(total)} ر.س`);
   renderInvoices();
 }
 
@@ -2596,7 +2966,11 @@ async function renderInvoices() {
 }
 
 async function markPaid(id) {
+  if (!guardPermission('sales')) return;
+  const invoice = await db.invoices.get(id);
+  if (!invoice || invoice.userId !== currentUser.id) return toast('تعذر العثور على الفاتورة.', 'error');
   await db.invoices.update(id, { status:'paid', updatedAt: new Date() });
+  await recordAudit('invoice_paid', `فاتورة #${id}`, `${fmt(invoice.total)} ر.س`);
   toast('تم تحديد الفاتورة كمدفوعة');
   renderInvoices();
 }
@@ -2607,8 +2981,12 @@ async function editInvoice(id) {
 }
 
 async function deleteInvoice(id) {
+  if (!guardPermission('sales')) return;
   if (!confirm('هل تريد حذف هذه الفاتورة؟')) return;
+  const invoice = await db.invoices.get(id);
+  if (!invoice || invoice.userId !== currentUser.id) return toast('تعذر العثور على الفاتورة.', 'error');
   await db.invoices.delete(id);
+  await recordAudit('invoice_deleted', `فاتورة #${id}`, `${fmt(invoice.total)} ر.س`);
   toast('تم حذف الفاتورة', 'warning');
   renderInvoices();
 }
@@ -2713,6 +3091,7 @@ function printInvoice() {
 //  EXPENSES CRUD
 // ══════════════════════════════════════════════════════════
 function openExpenseModal(exp=null) {
+  if (!guardPermission('accounting')) return;
   document.getElementById('exp-id').value = exp?.id || '';
   document.getElementById('exp-desc').value = exp?.description || '';
   document.getElementById('exp-amount').value = exp?.amount || '';
@@ -2724,6 +3103,7 @@ function openExpenseModal(exp=null) {
 }
 
 async function saveExpense() {
+  if (!guardPermission('accounting')) return;
   const desc = document.getElementById('exp-desc').value.trim();
   const amount = parseFloat(document.getElementById('exp-amount').value);
   if (!desc) return toast('يرجى إدخال وصف المصروف', 'error');
@@ -2750,6 +3130,7 @@ async function saveExpense() {
     toast('تمت إضافة المصروف');
   }
   closeModal('modal-expense');
+  await recordAudit(id ? 'expense_updated' : 'expense_created', desc, `${fmt(amount)} ر.س`);
   renderExpenses();
 }
 
@@ -2785,8 +3166,12 @@ async function editExpense(id) {
 }
 
 async function deleteExpense(id) {
+  if (!guardPermission('accounting')) return;
   if (!confirm('هل تريد حذف هذا المصروف؟')) return;
+  const expense = await db.expenses.get(id);
+  if (!expense || expense.userId !== currentUser.id) return toast('تعذر العثور على المصروف.', 'error');
   await db.expenses.delete(id);
+  await recordAudit('expense_deleted', expense.description, `${fmt(expense.amount)} ر.س`);
   toast('تم حذف المصروف', 'warning');
   renderExpenses();
 }
@@ -2795,6 +3180,7 @@ async function deleteExpense(id) {
 //  CUSTOMERS CRUD
 // ══════════════════════════════════════════════════════════
 function openCustomerModal(cust=null) {
+  if (!guardPermission('sales')) return;
   document.getElementById('customer-modal-title').textContent = cust ? 'تعديل العميل' : 'إضافة عميل';
   document.getElementById('cust-id').value = cust?.id || '';
   document.getElementById('cust-name').value = cust?.name || '';
@@ -2805,6 +3191,7 @@ function openCustomerModal(cust=null) {
 }
 
 async function saveCustomer() {
+  if (!guardPermission('sales')) return;
   const name = document.getElementById('cust-name').value.trim();
   if (!name) return toast('يرجى إدخال اسم العميل', 'error');
 
@@ -2866,8 +3253,12 @@ async function editCustomer(id) {
 }
 
 async function deleteCustomer(id) {
+  if (!guardPermission('sales')) return;
   if (!confirm('هل تريد حذف هذا العميل؟')) return;
+  const customer = await db.customers.get(id);
+  if (!customer || customer.userId !== currentUser.id) return toast('تعذر العثور على العميل.', 'error');
   await db.customers.delete(id);
+  await recordAudit('customer_deleted', customer.name);
   toast('تم حذف العميل', 'warning');
   renderCustomers();
 }
@@ -3009,6 +3400,7 @@ function erpStatusBadge(status, labels, styles) {
 }
 
 function openWarehouseModal(location = null) {
+  if (!guardPermission('inventory')) return;
   document.getElementById('warehouse-modal-title').textContent = location ? 'تعديل موقع التشغيل' : 'إضافة موقع تشغيل';
   document.getElementById('warehouse-id').value = location?.id || '';
   document.getElementById('warehouse-name').value = location?.name || '';
@@ -3020,6 +3412,7 @@ function openWarehouseModal(location = null) {
 }
 
 async function saveWarehouse() {
+  if (!guardPermission('inventory')) return;
   const name = document.getElementById('warehouse-name').value.trim();
   if (!name) return toast('يرجى إدخال اسم الموقع', 'error');
   const data = {
@@ -3033,6 +3426,7 @@ async function saveWarehouse() {
   };
   const id = document.getElementById('warehouse-id').value;
   if (id) {
+    if (!guardLocationAccess(id)) return;
     await db.warehouses.update(parseInt(id), data);
     toast('تم تحديث موقع التشغيل');
   } else {
@@ -3045,7 +3439,7 @@ async function saveWarehouse() {
 }
 
 async function renderWarehouses() {
-  const locations = await db.warehouses.where('userId').equals(currentUser.id).toArray();
+  const locations = accessibleLocationIds(await db.warehouses.where('userId').equals(currentUser.id).toArray());
   locations.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
   const types = { warehouse: 'مستودع', branch: 'فرع', store: 'متجر' };
   const statuses = { active: 'نشط', inactive: 'غير نشط' };
@@ -3067,10 +3461,11 @@ async function renderWarehouses() {
 
 async function editWarehouse(id) {
   const location = await db.warehouses.get(id);
-  if (location) openWarehouseModal(location);
+  if (location && location.userId === currentUser.id && guardLocationAccess(id)) openWarehouseModal(location);
 }
 
 async function deleteWarehouse(id) {
+  if (!guardPermission('inventory') || !guardLocationAccess(id)) return;
   if (!confirm('هل تريد حذف موقع التشغيل هذا؟')) return;
   const relatedBalances = await db.inventoryBalances.where('userId').equals(currentUser.id).filter(balance => balance.warehouseId === id && balance.quantity > 0).count();
   const activeTransfers = await db.stockTransfers.where('userId').equals(currentUser.id).filter(transfer =>
@@ -3080,6 +3475,7 @@ async function deleteWarehouse(id) {
     return toast('لا يمكن حذف موقع له رصيد أو تحويلات قيد التنفيذ. انقل الرصيد أو ألغِ التحويلات أولاً.', 'error');
   }
   await db.warehouses.delete(id);
+  await recordAudit('warehouse_deleted', 'موقع تشغيل');
   toast('تم حذف موقع التشغيل', 'warning');
   renderWarehouses();
 }
@@ -3123,7 +3519,7 @@ async function ensureInventorySetup() {
 }
 
 async function getPrimaryLocation() {
-  const locations = await db.warehouses.where('userId').equals(currentUser.id).toArray();
+  const locations = accessibleLocationIds(await db.warehouses.where('userId').equals(currentUser.id).toArray());
   return locations.find(location => location.status === 'active') || locations[0] || null;
 }
 
@@ -3155,13 +3551,17 @@ function transferStatus(status) {
 
 async function renderInventory() {
   await ensureInventorySetup();
-  const [locations, products, balances, transfers, adjustments] = await Promise.all([
+  const [allLocations, products, balances, transfers, adjustments] = await Promise.all([
     db.warehouses.where('userId').equals(currentUser.id).toArray(),
     db.products.where('userId').equals(currentUser.id).toArray(),
     db.inventoryBalances.where('userId').equals(currentUser.id).toArray(),
     db.stockTransfers.where('userId').equals(currentUser.id).toArray(),
     db.stockAdjustments.where('userId').equals(currentUser.id).toArray()
   ]);
+  const locations = accessibleLocationIds(allLocations);
+  const accessibleIds = new Set(locations.map(location => Number(location.id)));
+  const visibleTransfers = transfers.filter(transfer => accessibleIds.has(Number(transfer.fromWarehouseId)) && accessibleIds.has(Number(transfer.toWarehouseId)));
+  const visibleAdjustments = adjustments.filter(adjustment => accessibleIds.has(Number(adjustment.warehouseId)));
   const locationMap = Object.fromEntries(locations.map(location => [location.id, location]));
   const productMap = Object.fromEntries(products.map(product => [product.id, product]));
   const locationFilter = document.getElementById('inventory-location-filter');
@@ -3186,8 +3586,10 @@ async function renderInventory() {
     return { product, location, quantity: Number(balance?.quantity) || 0, minimumLevel: Number(balance?.minimumLevel) || INVENTORY_MINIMUM_LEVEL };
   }));
   const alerts = allRows.filter(row => row.quantity <= row.minimumLevel);
-  const totalUnits = balances.reduce((sum, balance) => sum + (Number(balance.quantity) || 0), 0);
-  const pendingTransfers = transfers.filter(transfer => transfer.status === 'pending').length;
+  const totalUnits = balances
+    .filter(balance => accessibleIds.has(Number(balance.warehouseId)))
+    .reduce((sum, balance) => sum + (Number(balance.quantity) || 0), 0);
+  const pendingTransfers = visibleTransfers.filter(transfer => transfer.status === 'pending').length;
   document.getElementById('inventory-kpis').innerHTML = `
     <div class="kpi-card"><div class="kpi-icon" style="background:#eff6ff"><i class="bi bi-boxes" style="font-size:20px;color:var(--primary)"></i></div><div class="kpi-value">${totalUnits}</div><div class="kpi-label">إجمالي الوحدات بالمواقع</div></div>
     <div class="kpi-card"><div class="kpi-icon" style="background:#f0fdf4"><i class="bi bi-building-check" style="font-size:20px;color:#047857"></i></div><div class="kpi-value">${locations.length}</div><div class="kpi-label">مواقع تشغيل</div></div>
@@ -3210,7 +3612,7 @@ async function renderInventory() {
       <td>${inventoryStatus(row.quantity, row.minimumLevel)}</td>
     </tr>`).join('') : '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon"><i class="bi bi-search"></i></div><div class="empty-text">لا توجد أرصدة مطابقة</div></div></td></tr>';
 
-  const recentTransfers = transfers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
+  const recentTransfers = visibleTransfers.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
   document.getElementById('transfer-tbody').innerHTML = recentTransfers.length ? recentTransfers.map(transfer => {
     const product = productMap[transfer.productId];
     const from = locationMap[transfer.fromWarehouseId];
@@ -3224,7 +3626,7 @@ async function renderInventory() {
   }).join('') : '<tr><td colspan="5"><div class="empty-state"><div class="empty-icon"><i class="bi bi-arrow-left-right"></i></div><div class="empty-text">لا توجد تحويلات بعد</div></div></td></tr>';
 
   const reasonLabels = { damage: 'تلف', 'count-difference': 'فرق جرد فعلي', loss: 'فقد', found: 'زيادة مكتشفة' };
-  const recentAdjustments = adjustments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
+  const recentAdjustments = visibleAdjustments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 6);
   document.getElementById('adjustment-tbody').innerHTML = recentAdjustments.length ? recentAdjustments.map(adjustment => `
     <tr><td>${productMap[adjustment.productId]?.name || 'منتج محذوف'}</td><td>${locationMap[adjustment.warehouseId]?.name || 'موقع محذوف'}</td><td style="font-weight:700;color:${adjustment.delta >= 0 ? '#047857' : 'var(--danger)'}">${adjustment.delta >= 0 ? '+' : ''}${adjustment.delta}</td><td>${reasonLabels[adjustment.reason] || adjustment.reason}</td></tr>
   `).join('') : '<tr><td colspan="4"><div class="empty-state"><div class="empty-icon"><i class="bi bi-clipboard2-check"></i></div><div class="empty-text">لا توجد تسويات بعد</div></div></td></tr>';
@@ -3240,10 +3642,11 @@ async function populateInventoryModalSelects(prefix) {
   productSelect.innerHTML = products.length ? '<option value="">اختر المنتج</option>' + products.map(product =>
     `<option value="${product.id}">${product.name} (${product.stock || 0} ${product.unit || 'قطعة'})</option>`
   ).join('') : '<option value="">أضف منتجاً أولاً</option>';
-  return { products, locations: locations.filter(location => location.status === 'active') };
+  return { products, locations: accessibleLocationIds(locations.filter(location => location.status === 'active')) };
 }
 
 async function openTransferModal() {
+  if (!guardPermission('inventory')) return;
   const { locations } = await populateInventoryModalSelects('transfer');
   if (locations.length < 2) return toast('أضف موقعين نشطين على الأقل لإتمام التحويل.', 'error');
   const options = locations.map(location => `<option value="${location.id}">${location.name}</option>`).join('');
@@ -3266,12 +3669,14 @@ async function updateTransferAvailable() {
 }
 
 async function saveTransfer() {
+  if (!guardPermission('inventory')) return;
   const productId = Number(document.getElementById('transfer-product').value);
   const fromWarehouseId = Number(document.getElementById('transfer-from').value);
   const toWarehouseId = Number(document.getElementById('transfer-to').value);
   const quantity = Number(document.getElementById('transfer-qty').value);
   if (!productId || !fromWarehouseId || !toWarehouseId || !Number.isInteger(quantity) || quantity <= 0) return toast('أكمل المنتج والمواقع والكمية الصحيحة.', 'error');
   if (fromWarehouseId === toWarehouseId) return toast('يجب أن يكون موقع الوجهة مختلفاً عن المصدر.', 'error');
+  if (!guardLocationAccess(fromWarehouseId, toWarehouseId)) return;
   const sourceBalance = await getInventoryBalance(productId, fromWarehouseId);
   if (!sourceBalance || sourceBalance.quantity < quantity) return toast('الكمية المطلوبة أكبر من المتاح في الموقع المصدر.', 'error');
   await db.stockTransfers.add({
@@ -3280,29 +3685,35 @@ async function saveTransfer() {
     note: document.getElementById('transfer-note').value.trim(), createdAt: new Date()
   });
   closeModal('modal-transfer');
+  await recordAudit('transfer_created', 'تحويل مخزون', `الكمية ${quantity}`);
   toast('تم تسجيل التحويل بانتظار الموافقة.');
   renderInventory();
 }
 
 async function approveTransfer(id) {
+  if (!guardPermission('inventory')) return;
   await db.transaction('rw', db.stockTransfers, db.inventoryBalances, db.products, async () => {
     const transfer = await db.stockTransfers.get(id);
     if (!transfer || transfer.userId !== currentUser.id || transfer.status !== 'pending') throw new Error('لم يعد هذا التحويل متاحاً للموافقة.');
+    if (!hasLocationAccess(transfer.fromWarehouseId, transfer.toWarehouseId)) throw new Error('ليس لديك صلاحية للمواقع المرتبطة بهذا التحويل.');
     const sourceBalance = await getInventoryBalance(transfer.productId, transfer.fromWarehouseId);
     if (!sourceBalance || sourceBalance.quantity < transfer.quantity) throw new Error('الرصيد في المصدر لم يعد كافياً للموافقة.');
     await db.inventoryBalances.update(sourceBalance.id, { quantity: sourceBalance.quantity - transfer.quantity, updatedAt: new Date() });
     await db.stockTransfers.update(id, { status: 'approved', approvedAt: new Date() });
     await syncProductTotal(transfer.productId);
   }).then(() => {
+    recordAudit('transfer_approved', 'تحويل مخزون');
     toast('تمت الموافقة وخصم الكمية من الموقع المصدر.');
     renderInventory();
   }).catch(error => toast(error.message || 'تعذر اعتماد التحويل.', 'error'));
 }
 
 async function receiveTransfer(id) {
+  if (!guardPermission('inventory')) return;
   await db.transaction('rw', db.stockTransfers, db.inventoryBalances, db.products, async () => {
     const transfer = await db.stockTransfers.get(id);
     if (!transfer || transfer.userId !== currentUser.id || transfer.status !== 'approved') throw new Error('لا يمكن استلام هذا التحويل قبل الموافقة عليه.');
+    if (!hasLocationAccess(transfer.fromWarehouseId, transfer.toWarehouseId)) throw new Error('ليس لديك صلاحية للمواقع المرتبطة بهذا التحويل.');
     const destinationBalance = await getInventoryBalance(transfer.productId, transfer.toWarehouseId);
     if (destinationBalance) {
       await db.inventoryBalances.update(destinationBalance.id, { quantity: destinationBalance.quantity + transfer.quantity, updatedAt: new Date() });
@@ -3315,14 +3726,17 @@ async function receiveTransfer(id) {
     await db.stockTransfers.update(id, { status: 'received', receivedAt: new Date() });
     await syncProductTotal(transfer.productId);
   }).then(() => {
+    recordAudit('transfer_received', 'تحويل مخزون');
     toast('تم استلام التحويل وإضافة الكمية إلى موقع الوجهة.');
     renderInventory();
   }).catch(error => toast(error.message || 'تعذر استلام التحويل.', 'error'));
 }
 
 async function cancelTransfer(id) {
+  if (!guardPermission('inventory')) return;
   const transfer = await db.stockTransfers.get(id);
   if (!transfer || transfer.userId !== currentUser.id || transfer.status !== 'pending') return toast('لا يمكن إلغاء تحويل تمت الموافقة عليه أو استلامه.', 'error');
+  if (!guardLocationAccess(transfer.fromWarehouseId, transfer.toWarehouseId)) return;
   if (!confirm('هل تريد إلغاء هذا التحويل؟')) return;
   await db.transaction('rw', db.stockTransfers, async () => {
     const latestTransfer = await db.stockTransfers.get(id);
@@ -3331,12 +3745,14 @@ async function cancelTransfer(id) {
     }
     await db.stockTransfers.update(id, { status: 'cancelled', cancelledAt: new Date() });
   }).then(() => {
+    recordAudit('transfer_cancelled', 'تحويل مخزون');
     toast('تم إلغاء التحويل.', 'warning');
     renderInventory();
   }).catch(error => toast(error.message || 'تعذر إلغاء التحويل.', 'error'));
 }
 
 async function openAdjustmentModal() {
+  if (!guardPermission('inventory')) return;
   const { locations } = await populateInventoryModalSelects('adjustment');
   if (!locations.length) return toast('أضف موقع تشغيل نشطاً أولاً.', 'error');
   document.getElementById('adjustment-location').innerHTML = '<option value="">اختر الموقع</option>' + locations.map(location => `<option value="${location.id}">${location.name}</option>`).join('');
@@ -3357,11 +3773,13 @@ async function updateAdjustmentCurrent() {
 }
 
 async function saveAdjustment() {
+  if (!guardPermission('inventory')) return;
   const productId = Number(document.getElementById('adjustment-product').value);
   const warehouseId = Number(document.getElementById('adjustment-location').value);
   const actualQuantity = Number(document.getElementById('adjustment-actual').value);
   const reason = document.getElementById('adjustment-reason').value;
   if (!productId || !warehouseId || !Number.isInteger(actualQuantity) || actualQuantity < 0) return toast('أكمل المنتج والموقع والعدد الفعلي الصحيح.', 'error');
+  if (!guardLocationAccess(warehouseId)) return;
   await db.transaction('rw', db.inventoryBalances, db.stockAdjustments, db.products, async () => {
     const balance = await getInventoryBalance(productId, warehouseId);
     const previousQuantity = Number(balance?.quantity) || 0;
@@ -3382,6 +3800,7 @@ async function saveAdjustment() {
     await syncProductTotal(productId);
   });
   closeModal('modal-adjustment');
+  await recordAudit('inventory_adjusted', 'تسوية جرد', `فرق ${actualQuantity}`);
   toast('تم حفظ تسوية الجرد وتحديث الرصيد.');
   renderInventory();
   renderProducts();
@@ -3389,6 +3808,7 @@ async function saveAdjustment() {
 }
 
 function openEmployeeModal(employee = null) {
+  if (!guardPermission('hr')) return;
   document.getElementById('employee-modal-title').textContent = employee ? 'تعديل بيانات موظف' : 'إضافة موظف';
   document.getElementById('employee-id').value = employee?.id || '';
   document.getElementById('employee-name').value = employee?.name || '';
@@ -3401,6 +3821,7 @@ function openEmployeeModal(employee = null) {
 }
 
 async function saveEmployee() {
+  if (!guardPermission('hr')) return;
   const name = document.getElementById('employee-name').value.trim();
   if (!name) return toast('يرجى إدخال اسم الموظف', 'error');
   const data = {
@@ -3459,10 +3880,153 @@ async function editEmployee(id) {
 }
 
 async function deleteEmployee(id) {
+  if (!guardPermission('hr')) return;
   if (!confirm('هل تريد حذف هذا الموظف؟')) return;
+  const employee = await db.employees.get(id);
+  if (!employee || employee.userId !== currentUser.id) return toast('تعذر العثور على الموظف.', 'error');
   await db.employees.delete(id);
+  await recordAudit('employee_deleted', employee.name);
   toast('تم حذف الموظف', 'warning');
   renderEmployees();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  TEAM, ROLES & AUDIT
+// ══════════════════════════════════════════════════════════════════
+function roleLabel(roleId) {
+  return roleId === 'owner' ? 'مالك المنشأة' : (ROLE_TEMPLATES[roleId]?.label || 'دور مخصص');
+}
+
+function permissionChips(permissions) {
+  const allowed = MODULES.filter(module => permissions?.[module.key]);
+  return allowed.length
+    ? allowed.map(module => `<span class="permission-chip on">${module.label}</span>`).join('')
+    : '<span class="permission-chip">بدون وحدات</span>';
+}
+
+async function teamLocationsByIds(ids, scope = 'selected') {
+  const locations = await db.warehouses.where('userId').equals(dataScopeId()).toArray();
+  if (scope === 'all') return 'كل المواقع';
+  if (scope === 'none') return 'لا مواقع';
+  const names = locations.filter(location => ids.map(Number).includes(Number(location.id))).map(location => location.name);
+  return names.length ? names.join('، ') : 'لا توجد مواقع محددة';
+}
+
+async function renderTeam() {
+  if (!canManageTeam()) return;
+  let members, logs;
+  try {
+    const [membersResult, logsResult] = await Promise.all([apiRequest('/team/members'), apiRequest('/audit-logs')]);
+    members = membersResult.members;
+    logs = logsResult.logs;
+    teamMembersCache = members;
+  } catch (error) {
+    toast(error.message || 'تعذر تحميل بيانات الفريق.', 'error');
+    return;
+  }
+  const active = members.filter(member => member.status !== 'inactive').length;
+  const locations = await db.warehouses.where('userId').equals(dataScopeId()).toArray();
+  document.getElementById('team-stats').innerHTML = `
+    <div class="team-stat"><div class="team-stat-icon"><i class="bi bi-people"></i></div><div><div class="team-stat-value">${members.length}</div><div class="team-stat-label">إجمالي أعضاء الفريق</div></div></div>
+    <div class="team-stat"><div class="team-stat-icon"><i class="bi bi-person-check"></i></div><div><div class="team-stat-value">${active}</div><div class="team-stat-label">أعضاء نشطون</div></div></div>
+    <div class="team-stat"><div class="team-stat-icon"><i class="bi bi-geo-alt"></i></div><div><div class="team-stat-value">${locations.length}</div><div class="team-stat-label">مواقع قابلة للتفويض</div></div></div>`;
+  document.getElementById('team-members-tbody').innerHTML = members.length ? (await Promise.all(members.map(async member => `
+    <tr>
+      <td><div class="team-member"><div class="team-avatar">${(member.name || member.email || '?').slice(0, 1)}</div><div><div class="team-member-name">${member.name || 'عضو فريق'}</div><div class="team-member-email">${member.email}</div></div></div></td>
+      <td><span class="badge badge-info">${roleLabel(member.roleId)}</span></td>
+      <td><div class="permission-list">${permissionChips(member.permissions)}</div></td>
+      <td><div class="team-scope">${await teamLocationsByIds(member.warehouseIds, member.locationScope)}</div></td>
+      <td>${member.status === 'inactive' ? '<span class="badge badge-muted">معطّل</span>' : '<span class="badge badge-success">نشط</span>'}</td>
+      <td><div class="actions-cell"><button class="btn btn-ghost btn-sm" onclick="editTeamMember(${member.id})" title="تعديل"><i class="bi bi-pencil"></i></button><button class="btn ${member.status === 'inactive' ? 'btn-secondary' : 'btn-danger'} btn-sm" onclick="toggleTeamMember(${member.id})">${member.status === 'inactive' ? 'تفعيل' : 'تعطيل'}</button></div></td>
+    </tr>`))).join('') : '<tr><td colspan="6"><div class="empty-state"><div class="empty-icon"><i class="bi bi-people"></i></div><div class="empty-text">لم تضف أعضاء للفريق بعد</div><div class="empty-sub">أضف حساباً ومنحه الوحدات والمواقع المناسبة لعمله.</div></div></td></tr>';
+  document.getElementById('role-cards').innerHTML = Object.entries(ROLE_TEMPLATES).map(([roleId, role]) => `
+    <div class="role-card"><div class="role-card-head"><div><div class="role-card-title">${role.label}</div><div class="audit-meta">${role.description}</div></div><button class="btn btn-ghost btn-sm" onclick="openTeamMemberModal('${roleId}')">استخدام</button></div><div class="permission-list">${permissionChips(role.permissions)}</div></div>`).join('');
+  const latestLogs = logs.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 12);
+  document.getElementById('audit-log-list').innerHTML = latestLogs.length ? latestLogs.map(log => `
+    <div class="audit-row"><div class="audit-icon"><i class="bi bi-shield-check"></i></div><div><div class="audit-text">${auditActionLabel(log.action)}${log.entity ? ` — ${log.entity}` : ''}</div><div class="audit-meta">${log.actorName || 'مالك المنشأة'} · ${fmtDate(log.createdAt)} · ${log.details || 'إدارة الصلاحيات'}</div></div></div>`).join('') : '<div class="empty-state" style="padding:38px 20px"><div class="empty-icon"><i class="bi bi-journal-text"></i></div><div class="empty-text">لا توجد عمليات مسجلة بعد</div></div>';
+}
+
+async function openTeamMemberModal(templateId = '', member = null) {
+  if (!canManageTeam()) return;
+  const locations = await db.warehouses.where('userId').equals(dataScopeId()).toArray();
+  document.getElementById('team-member-modal-title').textContent = member ? 'تعديل عضو وصلاحياته' : 'إضافة عضو للفريق';
+  document.getElementById('team-member-id').value = member?.id || '';
+  document.getElementById('team-member-name').value = member?.name || '';
+  document.getElementById('team-member-email').value = member?.email || '';
+  document.getElementById('team-member-password').value = '';
+  document.getElementById('team-member-password').placeholder = member ? 'اتركها فارغة للإبقاء على كلمة المرور' : '6 أحرف على الأقل';
+  document.getElementById('team-member-status').value = member?.status || 'active';
+  const roleSelect = document.getElementById('team-member-role');
+  roleSelect.innerHTML = Object.entries(ROLE_TEMPLATES).map(([id, role]) => `<option value="${id}">${role.label}</option>`).join('') + '<option value="custom">دور مخصص</option>';
+  roleSelect.value = member?.roleId || templateId || 'sales';
+  const selectedPermissions = member?.permissions || ROLE_TEMPLATES[roleSelect.value]?.permissions || {};
+  document.getElementById('team-permissions').innerHTML = MODULES.map(module => `<label class="team-checkbox"><input type="checkbox" value="${module.key}" ${selectedPermissions[module.key] ? 'checked' : ''}>${module.label}</label>`).join('');
+  const locationScope = member?.locationScope || 'all';
+  document.getElementById('team-location-scope').value = locationScope;
+  const selectedLocations = member?.warehouseIds || [];
+  document.getElementById('team-locations').innerHTML = locations.length
+    ? locations.map(location => `<label class="team-checkbox"><input type="checkbox" value="${location.id}" ${selectedLocations.map(Number).includes(Number(location.id)) ? 'checked' : ''}>${location.name}</label>`).join('')
+    : '<div class="modal-help">أضف موقع تشغيل أولاً لتتمكن من قصر الوصول على موقع معين.</div>';
+  updateTeamLocationScope();
+  openModal('modal-team-member');
+}
+
+function updateTeamLocationScope() {
+  const selected = document.getElementById('team-location-scope').value;
+  document.querySelectorAll('#team-locations input').forEach(input => {
+    input.disabled = selected !== 'selected';
+  });
+}
+
+function applyRoleTemplate() {
+  const template = ROLE_TEMPLATES[document.getElementById('team-member-role').value];
+  if (!template) return;
+  document.querySelectorAll('#team-permissions input').forEach(input => { input.checked = Boolean(template.permissions[input.value]); });
+}
+
+async function editTeamMember(id) {
+  const member = teamMembersCache.find(item => Number(item.id) === Number(id));
+  if (member) openTeamMemberModal('', member);
+}
+
+async function saveTeamMember() {
+  if (!canManageTeam()) return;
+  const id = Number(document.getElementById('team-member-id').value) || null;
+  const name = document.getElementById('team-member-name').value.trim();
+  const email = document.getElementById('team-member-email').value.trim().toLowerCase();
+  const password = document.getElementById('team-member-password').value;
+  const roleId = document.getElementById('team-member-role').value;
+  const status = document.getElementById('team-member-status').value;
+  if (!name || !email) return toast('أدخل اسم العضو وبريده الإلكتروني.', 'error');
+  if (!id && password.length < 6) return toast('كلمة المرور يجب أن تكون 6 أحرف على الأقل.', 'error');
+  if (id && password && password.length < 6) return toast('كلمة المرور يجب أن تكون 6 أحرف على الأقل.', 'error');
+  const permissions = Object.fromEntries([...document.querySelectorAll('#team-permissions input')].map(input => [input.value, input.checked]));
+  const locationScope = document.getElementById('team-location-scope').value;
+  const selectedLocationIds = [...document.querySelectorAll('#team-locations input:checked')].map(input => Number(input.value));
+  if (locationScope === 'selected' && selectedLocationIds.length === 0) return toast('اختر موقعاً واحداً على الأقل أو استخدم «لا مواقع».', 'error');
+  const data = { name, email, password, roleId, permissions, warehouseIds: locationScope === 'selected' ? selectedLocationIds : [], locationScope, status };
+  try {
+    await apiRequest(id ? `/team/members/${id}` : '/team/members', { method: id ? 'PATCH' : 'POST', body: JSON.stringify(data) });
+    closeModal('modal-team-member');
+    toast(id ? 'تم تحديث العضو وصلاحياته.' : 'تمت إضافة عضو الفريق.');
+    renderTeam();
+  } catch (error) {
+    toast(error.message || 'تعذر حفظ العضو.', 'error');
+  }
+}
+
+async function toggleTeamMember(id) {
+  if (!canManageTeam()) return;
+  const member = teamMembersCache.find(item => Number(item.id) === Number(id));
+  if (!member) return;
+  try {
+    const result = await apiRequest(`/team/members/${id}/toggle`, { method: 'POST' });
+    const status = result.member.status;
+    toast(status === 'inactive' ? 'تم تعطيل حساب العضو.' : 'تم تفعيل حساب العضو.', status === 'inactive' ? 'warning' : 'success');
+    renderTeam();
+  } catch (error) {
+    toast(error.message || 'تعذر تحديث حالة العضو.', 'error');
+  }
 }
 
 function filterProjects(button, status) {
@@ -3473,6 +4037,7 @@ function filterProjects(button, status) {
 }
 
 function openProjectModal(project = null) {
+  if (!guardPermission('operations')) return;
   document.getElementById('project-modal-title').textContent = project ? 'تعديل مشروع' : 'إضافة مشروع';
   document.getElementById('project-id').value = project?.id || '';
   document.getElementById('project-name').value = project?.name || '';
@@ -3486,6 +4051,7 @@ function openProjectModal(project = null) {
 }
 
 async function saveProject() {
+  if (!guardPermission('operations')) return;
   const name = document.getElementById('project-name').value.trim();
   if (!name) return toast('يرجى إدخال اسم المشروع', 'error');
   const data = {
@@ -3541,8 +4107,12 @@ async function editProject(id) {
 }
 
 async function deleteProject(id) {
+  if (!guardPermission('operations')) return;
   if (!confirm('هل تريد حذف هذا المشروع؟')) return;
+  const project = await db.projects.get(id);
+  if (!project || project.userId !== currentUser.id) return toast('تعذر العثور على المشروع.', 'error');
   await db.projects.delete(id);
+  await recordAudit('project_deleted', project.name);
   toast('تم حذف المشروع', 'warning');
   renderProjects();
 }
