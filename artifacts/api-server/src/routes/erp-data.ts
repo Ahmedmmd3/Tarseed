@@ -1,9 +1,10 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
 import { requireAuth, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
+const INVENTORY_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales"]);
 const TABLE_MODULES: Record<string, string> = {
   products: "inventory", invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: "inventory",
@@ -109,6 +110,10 @@ router.get("/data/:table", requireAuth, async (request: Request, response: Respo
 router.post("/data/:table", requireAuth, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   if (!access) return;
+  if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
+    response.status(405).json({ error: "تُسجّل حركات المخزون من المسار المعتمد فقط." });
+    return;
+  }
   if (access.tableName === "warehouses" && access.auth.roleId !== "owner") {
     response.status(403).json({ error: "إنشاء مواقع التشغيل متاح لمالك المنشأة فقط." });
     return;
@@ -120,6 +125,10 @@ router.post("/data/:table", requireAuth, async (request: Request, response: Resp
   const body = request.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     response.status(400).json({ error: "بيانات السجل غير صحيحة." });
+    return;
+  }
+  if (access.tableName === "products" && Object.hasOwn(body, "stock") && Number((body as Record<string, unknown>).stock) !== 0) {
+    response.status(409).json({ error: "الرصيد الافتتاحي للمنتج يُسجّل بتسوية مخزون بعد إنشاء المنتج." });
     return;
   }
   if (!isLocationAllowed(access.auth, access.tableName, body as Record<string, unknown>)) {
@@ -162,6 +171,36 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
     if (access) response.status(400).json({ error: "معرّف السجل غير صالح." });
     return;
   }
+  if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
+    response.status(405).json({ error: "تُعدّل حركات المخزون من المسار المعتمد فقط." });
+    return;
+  }
+  const body = request.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    response.status(400).json({ error: "بيانات السجل غير صحيحة." });
+    return;
+  }
+  if (access.tableName === "products" && Object.hasOwn(body, "stock")) {
+    response.status(405).json({ error: "إجمالي المنتج يُحدّث من أرصدة المواقع عبر حركات المخزون فقط." });
+    return;
+  }
+  if (access.tableName === "products") {
+    const [updated] = await db.transaction(async (tx) => {
+      const [current] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
+      )).for("update");
+      if (!current) return [];
+      const data = { ...current.data, ...(body as Record<string, unknown>), stock: current.data.stock };
+      return tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
+    });
+    if (!updated) {
+      response.status(404).json({ error: "السجل غير متاح." });
+      return;
+    }
+    await audit(access.auth, "products_updated", String(id));
+    response.json({ record: { ...updated.data, id: updated.id, userId: access.auth.organizationId } });
+    return;
+  }
   const [existing] = await db.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, access.tableName),
   ));
@@ -175,11 +214,6 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
   }
   if (access.tableName === "journalEntries" && existing.data.status === "posted") {
     response.status(409).json({ error: "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك." });
-    return;
-  }
-  const body = request.body;
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    response.status(400).json({ error: "بيانات السجل غير صحيحة." });
     return;
   }
   const data = { ...existing.data, ...(body as Record<string, unknown>) };
@@ -212,6 +246,37 @@ router.delete("/data/:table/:id", requireAuth, async (request: Request, response
   const id = Number(request.params.id);
   if (!access || !Number.isInteger(id)) {
     if (access) response.status(400).json({ error: "معرّف السجل غير صالح." });
+    return;
+  }
+  if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
+    response.status(405).json({ error: "لا يمكن حذف حركة مخزون معتمدة." });
+    return;
+  }
+  if (access.tableName === "products") {
+    const deleted = await db.transaction(async (tx) => {
+      const [product] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
+      )).for("update");
+      if (!product) return false;
+      const [reference] = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, access.auth.organizationId),
+        sql`${erpRecordsTable.tableName} in ('inventoryBalances', 'stockTransfers', 'stockAdjustments', 'sales')`,
+        sql`${erpRecordsTable.data}->>'productId' = ${String(id)}`,
+      )).limit(1);
+      if (reference) {
+        response.status(409).json({ error: "لا يمكن حذف منتج له أرصدة أو حركات مخزون." });
+        return null;
+      }
+      await tx.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
+      return true;
+    });
+    if (deleted === false) {
+      response.status(404).json({ error: "السجل غير متاح." });
+      return;
+    }
+    if (deleted === null) return;
+    await audit(access.auth, "products_deleted", String(id));
+    response.sendStatus(204);
     return;
   }
   const [record] = await db.select().from(erpRecordsTable).where(and(
