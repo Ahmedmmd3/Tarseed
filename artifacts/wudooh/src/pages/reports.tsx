@@ -43,10 +43,14 @@ export default function Reports() {
     }
     let active = true;
     void (async () => {
-      const response = await fetch(`/api/accounting/summary?from=${fromDate}&to=${toDate}`, { credentials: 'include' });
-      if (!response.ok) return;
-      const summary = await response.json() as ServerSummary;
-      if (active) setServerSummary(summary);
+      try {
+        const response = await fetch(`/api/accounting/summary?from=${fromDate}&to=${toDate}`, { credentials: 'include' });
+        if (!response.ok) return;
+        const summary = await response.json() as ServerSummary;
+        if (active) setServerSummary(summary);
+      } catch {
+        // The local report remains available when the shared service is down.
+      }
     })();
     return () => { active = false; };
   }, [connectionMode, fromDate, toDate]);

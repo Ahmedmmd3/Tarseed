@@ -10,10 +10,11 @@ import {
   type TeamUser,
 } from "@workspace/db";
 import { createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "../lib/team-auth";
-import { requireAuth, requireOwner, type AuthContext } from "../middleware/team-auth";
+import { getAuthContext, requireAuth, requireOwner, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const SESSION_DAYS = 14;
+const REMOTE_SESSION_HINT_COOKIE = "wudooh_remote_session";
 const PERMISSION_KEYS = new Set(["dashboard", "sales", "accounting", "inventory", "hr", "operations", "reports"]);
 const ROLE_IDS = new Set(["sales", "accountant", "inventory", "hr", "manager", "custom"]);
 const LOCATION_SCOPES = new Set(["all", "selected", "none"]);
@@ -38,6 +39,14 @@ function safeUser(user: TeamUser, projectName: string) {
 function setSession(response: Response, token: string): void {
   response.cookie("wudooh_session", token, {
     httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
+    path: "/",
+  });
+  // This is only a non-sensitive availability hint for the frontend. The
+  // actual session remains in the httpOnly cookie above.
+  response.cookie(REMOTE_SESSION_HINT_COOKIE, "1", {
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
@@ -152,12 +161,13 @@ router.post("/auth/logout", requireAuth, async (request: Request, response: Resp
     await db.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.tokenHash, hashSessionToken(token)));
   }
   response.clearCookie("wudooh_session", { path: "/" });
+  response.clearCookie(REMOTE_SESSION_HINT_COOKIE, { path: "/" });
   response.sendStatus(204);
 });
 
-router.get("/auth/me", requireAuth, (request: Request, response: Response): void => {
-  const auth = response.locals.auth as AuthContext;
-  response.json({ user: safeUser(auth, auth.projectName) });
+router.get("/auth/me", async (request: Request, response: Response): Promise<void> => {
+  const auth = await getAuthContext(request);
+  response.json({ user: auth ? safeUser(auth, auth.projectName) : null });
 });
 
 router.get("/team/members", requireAuth, requireOwner, async (_request: Request, response: Response): Promise<void> => {

@@ -1,11 +1,13 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { LayoutDashboard, Book, FileText, Wallet, BarChart3, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Book, FileText, Wallet, BarChart3, Menu, X, Cloud, CloudOff, LoaderCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useStore } from '@/context/store';
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const { connectionMode, canRetrySharedConnection, retrySharedConnection } = useStore();
   const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
 
   const navigation = [
@@ -61,9 +63,89 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {/* Main content */}
       <main className="flex-1 overflow-x-hidden overflow-y-auto">
         <div className="max-w-7xl mx-auto p-4 md:p-8">
+           <ConnectionStatus
+             mode={connectionMode}
+             canRetrySharedConnection={canRetrySharedConnection}
+             onRetry={() => void retrySharedConnection()}
+           />
           {children}
         </div>
       </main>
+    </div>
+  );
+}
+
+function ConnectionStatus({
+  mode,
+  canRetrySharedConnection,
+  onRetry,
+}: {
+  mode: 'loading' | 'remote' | 'local';
+  canRetrySharedConnection: boolean;
+  onRetry: () => void;
+}) {
+  if (mode === 'loading') {
+    return (
+      <div
+        className="mb-6 flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-slate-600 shadow-sm"
+        role="status"
+        aria-live="polite"
+        data-testid="connection-status-loading"
+      >
+        <LoaderCircle className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-slate-500" aria-hidden="true" />
+        <div>
+          <p className="font-semibold">جارٍ التحقق من مصدر البيانات</p>
+          <p className="mt-1 text-sm">نحاول الاتصال بسجل المنشأة المشترك قبل عرض البيانات.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === 'remote') {
+    return (
+      <div
+        className="mb-6 flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900 shadow-sm"
+        role="status"
+        aria-live="polite"
+        data-testid="connection-status-remote"
+      >
+        <Cloud className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" aria-hidden="true" />
+        <div>
+          <p className="font-semibold">متصل بسجل المنشأة المشترك</p>
+          <p className="mt-1 text-sm text-emerald-800">التغييرات محفوظة في الخدمة المشتركة وتظهر للأجهزة وأعضاء الفريق المصرح لهم.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="mb-6 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 shadow-sm"
+      role="alert"
+      aria-live="polite"
+      data-testid="connection-status-local"
+    >
+      <CloudOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden="true" />
+      <div className="flex-1">
+        <p className="font-semibold">{canRetrySharedConnection ? 'تعذر الوصول إلى السجل المشترك' : 'وضع البيانات المحلي'}</p>
+        <p className="mt-1 text-sm text-amber-900">
+          {canRetrySharedConnection
+            ? 'نعرض الآن البيانات المحفوظة في هذا المتصفح فقط. لن تتم مزامنة التغييرات حتى إعادة الاتصال بالسجل المشترك.'
+            : 'التغييرات محفوظة في هذا المتصفح فقط، ولن تظهر على الأجهزة أو لأعضاء الفريق. سجّل الدخول للاتصال بسجل المنشأة المشترك.'}
+        </p>
+      </div>
+      {canRetrySharedConnection && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="border-amber-300 bg-white text-amber-950 hover:bg-amber-100"
+          onClick={onRetry}
+          data-testid="button-retry-shared-connection"
+        >
+          إعادة الاتصال
+        </Button>
+      )}
     </div>
   );
 }
