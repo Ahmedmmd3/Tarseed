@@ -1,0 +1,4 @@
+{
+  "branch": "main",
+  "required_status_checks": ["API server clean typecheck", "Frontend typecheck"]
+}
