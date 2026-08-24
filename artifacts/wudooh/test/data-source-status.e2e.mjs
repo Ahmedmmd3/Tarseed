@@ -28,6 +28,16 @@ async function registerSharedSession(page) {
   return { email, projectName };
 }
 
+async function submitJournal(page, { description, debitAccountId, creditAccountId, amount }) {
+  await page.getByTestId('button-add-journal').click();
+  await page.getByTestId('input-journal-desc').fill(description);
+  await page.getByTestId('select-journal-account-0').selectOption(debitAccountId);
+  await page.getByTestId('input-journal-debit-0').fill(String(amount));
+  await page.getByTestId('select-journal-account-1').selectOption(creditAccountId);
+  await page.getByTestId('input-journal-credit-1').fill(String(amount));
+  await page.getByTestId('button-submit-journal').click();
+}
+
 test('يبقي الزائر المحلي على بيانات المتصفح عند توقف الخدمة المشتركة', async ({ page }) => {
   const apiRequests = [];
 
@@ -183,4 +193,144 @@ test('يستعيد السجل المشترك بعد عودة الخدمة دون
   await expect(page.getByTestId('shared-account-bar')).toContainText(session.projectName);
   await expect(page.getByTestId('shared-account-bar')).toContainText(session.email);
   await expect(page.getByTestId(`card-journal-${journal.id}`)).toContainText(journal.description);
+});
+
+test('يرسل القيد الذي أُنشئ أثناء الانقطاع بعد عودة السجل المشترك', async ({ page }) => {
+  await registerSharedSession(page);
+  await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  const apiOrigin = 'http://127.0.0.1:8081';
+  const requestHeaders = { Origin: apiOrigin };
+  const uniqueId = crypto.randomUUID().slice(0, 8);
+  const accounts = await Promise.all([
+    { code: `901${uniqueId.slice(0, 3)}`, name: `حساب مدين ${uniqueId}`, type: 'asset' },
+    { code: `902${uniqueId.slice(0, 3)}`, name: `حساب دائن ${uniqueId}`, type: 'revenue' },
+  ].map(async (account) => {
+    const response = await page.request.post(`${apiOrigin}/api/data/accounts`, {
+      headers: requestHeaders,
+      data: { ...account, parent: null, balance: 0, status: 'active' },
+    });
+    const payload = await response.json();
+    if (!response.ok() || !payload.record) {
+      throw new Error(`تعذر إنشاء حساب الاختبار: ${JSON.stringify(payload)}`);
+    }
+    return String(payload.record.id);
+  }));
+
+  await page.goto('/journals', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  await page.route('**/api/**', async (route) => {
+    await route.abort('failed');
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-local')).toContainText('تعذر الوصول إلى السجل المشترك');
+
+  const description = `قيد محفوظ أثناء الانقطاع ${uniqueId}`;
+  await submitJournal(page, { description, debitAccountId: accounts[0], creditAccountId: accounts[1], amount: 125 });
+
+  await expect(page.getByTestId('page-journals')).toContainText(description);
+  await expect(page.getByTestId('sync-queue-status')).toContainText('1 عملية محفوظة محلياً');
+
+  await page.unroute('**/api/**');
+  await page.route('**/api/data/journalEntries', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fetch();
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  await page.getByTestId('button-retry-shared-connection').click();
+
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+  await expect(page.getByTestId('page-journals')).toContainText(description);
+  await expect(page.getByTestId('sync-queue-status')).toContainText('تعذرت مزامنة 1 من 1 عملية');
+
+  await page.unroute('**/api/data/journalEntries');
+  await page.getByTestId('button-retry-sync-queue').click();
+
+  await expect(page.getByTestId('sync-queue-status')).toHaveCount(0);
+
+  const journalsResponse = await page.request.get(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders });
+  const journalsPayload = await journalsResponse.json();
+  expect(journalsResponse.ok(), JSON.stringify(journalsPayload)).toBeTruthy();
+  expect(journalsPayload.records.filter((journal) => journal.description === description)).toHaveLength(1);
+
+  const committedBeforeDropDescription = `قيد حفظ قبل فقدان الاستجابة ${uniqueId}`;
+  await page.route('**/api/data/journalEntries', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fetch();
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  await submitJournal(page, {
+    description: committedBeforeDropDescription,
+    debitAccountId: accounts[0],
+    creditAccountId: accounts[1],
+    amount: 50,
+  });
+  await expect(page.getByTestId('connection-status-local')).toBeVisible();
+  await expect(page.getByTestId('page-journals')).toContainText(committedBeforeDropDescription);
+
+  await page.unroute('**/api/data/journalEntries');
+  await page.getByTestId('button-retry-shared-connection').click();
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  const noResponseRetry = await page.request.get(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders });
+  const noResponseRetryPayload = await noResponseRetry.json();
+  expect(noResponseRetry.ok(), JSON.stringify(noResponseRetryPayload)).toBeTruthy();
+  expect(noResponseRetryPayload.records.filter((journal) => journal.description === committedBeforeDropDescription)).toHaveLength(1);
+
+  const droppedRequestDescription = `قيد حفظ بعد إسقاط الطلب ${uniqueId}`;
+  await page.route('**/api/data/journalEntries', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+  await submitJournal(page, {
+    description: droppedRequestDescription,
+    debitAccountId: accounts[0],
+    creditAccountId: accounts[1],
+    amount: 60,
+  });
+  await expect(page.getByTestId('connection-status-local')).toBeVisible();
+  await expect(page.getByTestId('page-journals')).toContainText(droppedRequestDescription);
+
+  await page.unroute('**/api/data/journalEntries');
+  await page.getByTestId('button-retry-shared-connection').click();
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  const droppedRequestRetry = await page.request.get(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders });
+  const droppedRequestRetryPayload = await droppedRequestRetry.json();
+  expect(droppedRequestRetry.ok(), JSON.stringify(droppedRequestRetryPayload)).toBeTruthy();
+  expect(droppedRequestRetryPayload.records.filter((journal) => journal.description === droppedRequestDescription)).toHaveLength(1);
+
+  const concurrentDescription = `قيد متزامن آمن ${uniqueId}`;
+  const clientOperationId = crypto.randomUUID();
+  const concurrentPayload = {
+    clientOperationId,
+    date: '2026-08-23',
+    description: concurrentDescription,
+    status: 'draft',
+    lines: [
+      { id: 'concurrent-debit', accountId: accounts[0], debit: 75, credit: 0 },
+      { id: 'concurrent-credit', accountId: accounts[1], debit: 0, credit: 75 },
+    ],
+  };
+  const concurrentResponses = await Promise.all([
+    page.request.post(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders, data: concurrentPayload }),
+    page.request.post(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders, data: concurrentPayload }),
+  ]);
+  expect(concurrentResponses.map((response) => response.status()).sort()).toEqual([200, 201]);
+
+  const afterConcurrentResponse = await page.request.get(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders });
+  const afterConcurrentPayload = await afterConcurrentResponse.json();
+  expect(afterConcurrentResponse.ok(), JSON.stringify(afterConcurrentPayload)).toBeTruthy();
+  expect(afterConcurrentPayload.records.filter((journal) => journal.description === concurrentDescription)).toHaveLength(1);
 });

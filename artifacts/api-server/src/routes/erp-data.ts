@@ -127,6 +127,9 @@ router.post("/data/:table", requireAuth, async (request: Request, response: Resp
     response.status(400).json({ error: "بيانات السجل غير صحيحة." });
     return;
   }
+  const data = body as Record<string, unknown>;
+  const clientOperationId = typeof data.clientOperationId === "string" ? data.clientOperationId : "";
+  const { clientOperationId: _clientOperationId, ...recordData } = data;
   if (access.tableName === "products" && Object.hasOwn(body, "stock") && Number((body as Record<string, unknown>).stock) !== 0) {
     response.status(409).json({ error: "الرصيد الافتتاحي للمنتج يُسجّل بتسوية مخزون بعد إنشاء المنتج." });
     return;
@@ -155,13 +158,27 @@ router.post("/data/:table", requireAuth, async (request: Request, response: Resp
       return;
     }
   }
-  const [record] = await db.insert(erpRecordsTable).values({
+  const [created] = await db.insert(erpRecordsTable).values({
     organizationId: access.auth.organizationId,
     tableName: access.tableName,
-    data: body as Record<string, unknown>,
+    clientOperationId: clientOperationId || null,
+    data: recordData,
+  }).onConflictDoNothing({
+    target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
   }).returning();
-  await audit(access.auth, `${access.tableName}_created`, String(record.id));
-  response.status(201).json({ record: { ...record.data, id: record.id, userId: access.auth.organizationId } });
+  const record = created ?? (clientOperationId
+    ? (await db.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, access.auth.organizationId),
+      eq(erpRecordsTable.tableName, access.tableName),
+      eq(erpRecordsTable.clientOperationId, clientOperationId),
+    )).limit(1))[0]
+    : undefined);
+  if (!record) {
+    response.status(500).json({ error: "تعذر حفظ السجل." });
+    return;
+  }
+  if (created) await audit(access.auth, `${access.tableName}_created`, String(record.id));
+  response.status(created ? 201 : 200).json({ record: { ...record.data, id: record.id, userId: access.auth.organizationId } });
 });
 
 router.patch("/data/:table/:id", requireAuth, async (request: Request, response: Response): Promise<void> => {

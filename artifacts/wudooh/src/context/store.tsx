@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
 
@@ -69,6 +69,7 @@ type StoreContextType = {
   closePeriod: (from: string, to: string) => Promise<FinancialClosure>;
   connectionMode: 'loading' | 'remote' | 'local';
   canRetrySharedConnection: boolean;
+  syncQueue: SyncOperation[];
   retrySharedConnection: () => Promise<void>;
 };
 
@@ -87,9 +88,22 @@ export type SharedUser = {
   isTeamMember: boolean;
 };
 
+export type SyncOperation = {
+  id: string;
+  table: 'accounts' | 'journalEntries' | 'receivables';
+  action: 'create' | 'update';
+  recordId: string;
+  data: Record<string, unknown>;
+  status: 'pending' | 'failed';
+  error?: string;
+  createdAt: string;
+};
+
 const demoYear = new Date().getFullYear();
 const storageKey = 'wudooh-accounting-data';
 const remoteSessionHintCookie = 'wudooh_remote_session';
+const sharedSessionKeyStorageKey = 'wudooh_shared_session_key';
+const syncQueueStoragePrefix = 'wudooh-sync-queue-';
 const storedDataVersion = 2;
 
 const initialAccounts: Account[] = [
@@ -189,6 +203,121 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
   const [legacyRecoveryPending, setLegacyRecoveryPending] = useState(needsLegacySessionMigration);
   const [currentUser, setCurrentUser] = useState<SharedUser | null>(null);
+  const [sharedSessionKey, setSharedSessionKey] = useState(() => readSharedSessionKey());
+  const [syncQueue, setSyncQueue] = useState<SyncOperation[]>(() => {
+    const sessionKey = readSharedSessionKey();
+    return sessionKey ? readSyncQueue(sessionKey) : [];
+  });
+  const syncQueueRef = useRef(syncQueue);
+  const syncFlushRef = useRef<Promise<boolean> | null>(null);
+
+  const persistSyncQueue = useCallback((sessionKey: string, queue: SyncOperation[]) => {
+    syncQueueRef.current = queue;
+    setSyncQueue(queue);
+    writeSyncQueue(sessionKey, queue);
+  }, []);
+
+  const enqueueSyncOperation = useCallback((operation: Omit<SyncOperation, 'id' | 'status' | 'createdAt'>): SyncOperation | null => {
+    if (!sharedSessionKey) return null;
+    const operationId = crypto.randomUUID();
+    const queuedOperation: SyncOperation = {
+      ...operation,
+      id: operationId,
+      data: operation.action === 'create'
+        ? { ...operation.data, clientOperationId: operationId }
+        : operation.data,
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    persistSyncQueue(sharedSessionKey, [
+      ...syncQueueRef.current,
+      queuedOperation,
+    ]);
+    return queuedOperation;
+  }, [persistSyncQueue, sharedSessionKey]);
+
+  const completeCreatedSyncOperation = useCallback((operation: SyncOperation, recordId: string) => {
+    if (!sharedSessionKey) return;
+    persistSyncQueue(sharedSessionKey, syncQueueRef.current
+      .filter((item) => item.id !== operation.id)
+      .map((item) => ({
+        ...item,
+        recordId: item.recordId === operation.recordId ? recordId : item.recordId,
+        data: replaceValue(item.data, operation.recordId, recordId) as Record<string, unknown>,
+      })));
+  }, [persistSyncQueue, sharedSessionKey]);
+
+  const failSyncOperation = useCallback((operation: SyncOperation, error: unknown) => {
+    if (!sharedSessionKey) return;
+    const message = error instanceof Error ? error.message : 'تعذر مزامنة العملية.';
+    persistSyncQueue(sharedSessionKey, syncQueueRef.current.map((item) => item.id === operation.id
+      ? { ...item, status: 'failed', error: message }
+      : item));
+  }, [persistSyncQueue, sharedSessionKey]);
+
+  const flushSyncQueue = useCallback((sessionKey: string, initialQueue?: SyncOperation[]): Promise<boolean> => {
+    if (syncFlushRef.current) return syncFlushRef.current;
+    const synchronize = async (): Promise<boolean> => {
+      let queue = initialQueue ?? syncQueueRef.current;
+      if (!queue.length) return true;
+
+      const saveQueue = (nextQueue: SyncOperation[]) => {
+        queue = nextQueue;
+        persistSyncQueue(sessionKey, nextQueue);
+      };
+
+      for (const operation of queue) {
+        if (operation.status === 'failed') return false;
+        try {
+          if (operation.action === 'create') {
+            const created = await createRecord<Record<string, unknown>>(operation.table, operation.data);
+            const normalized = normalizeRecord(operation.table, created);
+            const optimisticRecord = queue
+              .filter((item) => item.action === 'update' && item.recordId === operation.recordId)
+              .reduce<Account | Journal | Receivable>(
+                (record, item) => ({ ...record, ...item.data }) as Account | Journal | Receivable,
+                normalized,
+              );
+            replaceLocalRecord(operation.table, operation.recordId, optimisticRecord, {
+              accounts: setAccounts,
+              journals: setJournals,
+              receivables: setReceivables,
+            });
+            const nextQueue = queue
+              .filter((item) => item.id !== operation.id)
+              .map((item) => ({
+                ...item,
+                recordId: item.recordId === operation.recordId ? normalized.id : item.recordId,
+                data: replaceValue(item.data, operation.recordId, normalized.id) as Record<string, unknown>,
+              }));
+            saveQueue(nextQueue);
+          } else {
+            const updated = await updateRecord<Record<string, unknown>>(operation.table, operation.recordId, operation.data);
+            const normalized = normalizeRecord(operation.table, updated);
+            replaceLocalRecord(operation.table, operation.recordId, normalized, {
+              accounts: setAccounts,
+              journals: setJournals,
+              receivables: setReceivables,
+            });
+            saveQueue(queue.filter((item) => item.id !== operation.id));
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : 'تعذر مزامنة العملية.';
+          saveQueue(queue.map((item) => item.id === operation.id
+            ? { ...item, status: 'failed', error: message }
+            : item));
+          return false;
+        }
+      }
+      return true;
+    };
+    const inFlight = synchronize();
+    syncFlushRef.current = inFlight;
+    void inFlight.finally(() => {
+      if (syncFlushRef.current === inFlight) syncFlushRef.current = null;
+    });
+    return inFlight;
+  }, [persistSyncQueue]);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify({
@@ -202,6 +331,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [accounts, journals, receivables, closures, legacyRecoveryPending]);
 
   const clearSharedState = useCallback(() => {
+    clearSharedSessionKey();
     clearStoredData();
     setAccounts([]);
     setJournals([]);
@@ -209,6 +339,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setClosures([]);
     setCurrentUser(null);
     setLegacyRecoveryPending(false);
+    setSharedSessionKey(null);
+    syncQueueRef.current = [];
+    setSyncQueue([]);
   }, []);
 
   const loadSharedData = useCallback(async (isActive: () => boolean = () => true): Promise<void> => {
@@ -249,6 +382,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
 
       const sharedUser = sessionPayload.user as SharedUser;
+      const sessionKey = String(sharedUser.organizationId);
+      setSharedSessionKey(sessionKey);
+      localStorage.setItem(sharedSessionKeyStorageKey, sessionKey);
+      const queue = readSyncQueue(sessionKey);
+      syncQueueRef.current = queue;
+      setSyncQueue(queue);
+      await flushSyncQueue(sessionKey, queue);
       const canReadAccounting = sharedUser.roleId === 'owner' || sharedUser.permissions.accounting === true;
       const [accountResult, journalResult, receivableResult, closureResult] = await Promise.all([
         canReadAccounting ? getRecords<Account>('accounts') : Promise.resolve([]),
@@ -257,9 +397,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         canReadAccounting ? getRecords<FinancialClosure>('financialClosures') : Promise.resolve([]),
       ]);
       if (!isActive()) return;
-      setAccounts(accountResult.map(normalizeAccount));
-      setJournals(journalResult.map(normalizeJournal));
-      setReceivables(receivableResult.map(normalizeReceivable));
+      const queueAfterSync = syncQueueRef.current;
+      setAccounts((current) => mergeQueuedRecords(accountResult.map(normalizeAccount), current, queueAfterSync, 'accounts'));
+      setJournals((current) => mergeQueuedRecords(journalResult.map(normalizeJournal), current, queueAfterSync, 'journalEntries'));
+      setReceivables((current) => mergeQueuedRecords(receivableResult.map(normalizeReceivable), current, queueAfterSync, 'receivables'));
       setClosures(closureResult.map(normalizeClosure));
       setConnectionMode('remote');
     } catch {
@@ -270,7 +411,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setConnectionMode('local');
       }
     }
-  }, [clearSharedState]);
+  }, [clearSharedState, flushSyncQueue]);
 
   const signOut = useCallback(async (): Promise<void> => {
     try {
@@ -303,7 +444,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setAccounts((current) => [...current, created]);
       return;
     }
-    setAccounts((current) => [...current, { ...account, id: crypto.randomUUID() }]);
+    const id = crypto.randomUUID();
+    setAccounts((current) => [...current, { ...account, id }]);
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'accounts', action: 'create', recordId: id, data: account as Record<string, unknown> });
+    }
   };
 
   const updateAccount = async (id: string, account: Partial<Account>) => {
@@ -313,19 +458,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     setAccounts((current) => current.map(a => a.id === id ? { ...a, ...account } : a));
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'accounts', action: 'update', recordId: id, data: account as Record<string, unknown> });
+    }
   };
 
   const addJournal = async (journal: Omit<Journal, 'id' | 'number'>) => {
     if (closures.some((closure) => journal.date >= closure.from && journal.date <= closure.to)) return;
-    if (connectionMode === 'remote') {
-      const created = normalizeJournal(await createRecord<Journal>('journalEntries', journal));
-      setJournals((current) => [...current, created]);
-      return;
-    }
+    const id = crypto.randomUUID();
+    const localJournal = { ...journal, id, number: `J-${(journals.length + 1).toString().padStart(4, '0')}` };
     setJournals((current) => {
       const next = current.length + 1;
-      return [...current, { ...journal, id: crypto.randomUUID(), number: `J-${next.toString().padStart(4, '0')}` }];
+      return [...current, { ...localJournal, number: `J-${next.toString().padStart(4, '0')}` }];
     });
+    const { id: _localId, ...journalForSync } = localJournal;
+    const queuedOperation = (connectionMode === 'remote' || canRetrySharedConnection)
+      ? enqueueSyncOperation({ table: 'journalEntries', action: 'create', recordId: id, data: journalForSync as Record<string, unknown> })
+      : null;
+
+    if (connectionMode === 'remote' && queuedOperation) {
+      try {
+        const created = normalizeJournal(await createRecord<Journal>('journalEntries', queuedOperation.data));
+        setJournals((current) => current.map((item) => item.id === id ? created : item));
+        completeCreatedSyncOperation(queuedOperation, created.id);
+      } catch (error) {
+        failSyncOperation(queuedOperation, error);
+        setCanRetrySharedConnection(true);
+        setConnectionMode('local');
+      }
+    }
   };
 
   const updateJournal = async (id: string, journal: Partial<Journal>) => {
@@ -335,6 +496,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     setJournals((current) => current.map(j => j.id === id ? { ...j, ...journal } : j));
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'journalEntries', action: 'update', recordId: id, data: journal as Record<string, unknown> });
+    }
   };
 
   const postJournal = async (id: string) => {
@@ -367,6 +531,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     setAccounts(accountsUpdate);
     setJournals((current) => current.map(item => item.id === id ? { ...item, status: 'posted' } : item));
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'journalEntries', action: 'update', recordId: id, data: { status: 'posted' } });
+    }
   };
 
   const addReceivable = async (receivable: Omit<Receivable, 'id'>) => {
@@ -375,7 +542,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setReceivables((current) => [...current, created]);
       return;
     }
-    setReceivables((current) => [...current, { ...receivable, id: crypto.randomUUID() }]);
+    const id = crypto.randomUUID();
+    setReceivables((current) => [...current, { ...receivable, id }]);
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'receivables', action: 'create', recordId: id, data: receivable as Record<string, unknown> });
+    }
   };
 
   const updateReceivable = async (id: string, receivable: Partial<Receivable>) => {
@@ -385,6 +556,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return;
     }
     setReceivables((current) => current.map(r => r.id === id ? { ...r, ...receivable } : r));
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'receivables', action: 'update', recordId: id, data: receivable as Record<string, unknown> });
+    }
   };
 
   const payReceivable = async (id: string, amount: number) => {
@@ -408,6 +582,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return r;
     }));
+    if (connectionMode === 'local' && canRetrySharedConnection) {
+      enqueueSyncOperation({ table: 'receivables', action: 'update', recordId: id, data: { paid, status } });
+    }
   };
 
   const closePeriod = async (from: string, to: string): Promise<FinancialClosure> => {
@@ -431,6 +608,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     throw new Error('سجّل الدخول أولاً لاعتماد الإقفال في سجل المنشأة.');
   };
 
+  const retrySharedConnection = useCallback(async (): Promise<void> => {
+    if (sharedSessionKey && syncQueueRef.current.some((operation) => operation.status === 'failed')) {
+      persistSyncQueue(sharedSessionKey, syncQueueRef.current.map((operation) => ({
+        ...operation,
+        status: 'pending',
+        error: undefined,
+      })));
+    }
+    await loadSharedData();
+  }, [loadSharedData, persistSyncQueue, sharedSessionKey]);
+
   return (
     <StoreContext.Provider value={{
       currentUser, signOut,
@@ -438,7 +626,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       journals, addJournal, updateJournal, postJournal,
       receivables, addReceivable, updateReceivable, payReceivable,
       closures, closePeriod, connectionMode, canRetrySharedConnection,
-      retrySharedConnection: loadSharedData,
+      syncQueue,
+      retrySharedConnection,
     }}>
       {children}
     </StoreContext.Provider>
@@ -496,6 +685,66 @@ function normalizeReceivable(receivable: Receivable): Receivable {
   return { ...receivable, id: String(receivable.id), amount: Number(receivable.amount), paid: Number(receivable.paid) };
 }
 
+function normalizeRecord(table: SyncOperation['table'], record: Record<string, unknown>): Account | Journal | Receivable {
+  if (table === 'accounts') return normalizeAccount(record as unknown as Account);
+  if (table === 'journalEntries') return normalizeJournal(record as unknown as Journal);
+  return normalizeReceivable(record as unknown as Receivable);
+}
+
+function replaceLocalRecord(
+  table: SyncOperation['table'],
+  oldId: string,
+  record: Account | Journal | Receivable,
+  setters: {
+    accounts: React.Dispatch<React.SetStateAction<Account[]>>;
+    journals: React.Dispatch<React.SetStateAction<Journal[]>>;
+    receivables: React.Dispatch<React.SetStateAction<Receivable[]>>;
+  },
+): void {
+  if (table === 'accounts') {
+    const account = record as Account;
+    setters.accounts((current) => current.map((item) => item.id === oldId ? account : item));
+    if (account.id !== oldId) {
+      setters.journals((current) => current.map((journal) => replaceValue(journal, oldId, account.id) as Journal));
+      setters.receivables((current) => current.map((receivable) => replaceValue(receivable, oldId, account.id) as Receivable));
+    }
+    return;
+  }
+  if (table === 'journalEntries') {
+    const journal = record as Journal;
+    setters.journals((current) => current.map((item) => item.id === oldId ? journal : item));
+    return;
+  }
+  const receivable = record as Receivable;
+  setters.receivables((current) => current.map((item) => item.id === oldId ? receivable : item));
+}
+
+function replaceValue(value: unknown, oldValue: string, newValue: string): unknown {
+  if (value === oldValue) return newValue;
+  if (Array.isArray(value)) return value.map((item) => replaceValue(item, oldValue, newValue));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, replaceValue(item, oldValue, newValue)]));
+  }
+  return value;
+}
+
+function mergeQueuedRecords<T extends { id: string }>(
+  remoteRecords: T[],
+  localRecords: T[],
+  queue: SyncOperation[],
+  table: SyncOperation['table'],
+): T[] {
+  const result = [...remoteRecords];
+  for (const operation of queue.filter((item) => item.table === table)) {
+    const localRecord = localRecords.find((item) => item.id === operation.recordId);
+    if (!localRecord) continue;
+    const remoteIndex = result.findIndex((item) => item.id === operation.recordId);
+    if (remoteIndex === -1) result.push(localRecord);
+    else if (operation.action === 'update') result[remoteIndex] = localRecord;
+  }
+  return result;
+}
+
 function normalizeClosure(closure: FinancialClosure): FinancialClosure {
   return { ...closure, id: String(closure.id), netIncome: Number(closure.netIncome), totals: { ...closure.totals, revenue: Number(closure.totals.revenue), expense: Number(closure.totals.expense), netIncome: Number(closure.totals.netIncome) } };
 }
@@ -528,6 +777,54 @@ function clearStoredData(): void {
   if (typeof localStorage !== 'undefined') {
     localStorage.removeItem(storageKey);
   }
+}
+
+function readSharedSessionKey(): string | null {
+  if (typeof localStorage === 'undefined') return null;
+  return localStorage.getItem(sharedSessionKeyStorageKey);
+}
+
+function clearSharedSessionKey(): void {
+  const sessionKey = readSharedSessionKey();
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(sharedSessionKeyStorageKey);
+    if (sessionKey) localStorage.removeItem(getSyncQueueStorageKey(sessionKey));
+  }
+}
+
+function getSyncQueueStorageKey(sessionKey: string): string {
+  return `${syncQueueStoragePrefix}${encodeURIComponent(sessionKey)}`;
+}
+
+function readSyncQueue(sessionKey: string): SyncOperation[] {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(getSyncQueueStorageKey(sessionKey));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isSyncOperation);
+  } catch {
+    return [];
+  }
+}
+
+function writeSyncQueue(sessionKey: string, queue: SyncOperation[]): void {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(getSyncQueueStorageKey(sessionKey), JSON.stringify(queue));
+  }
+}
+
+function isSyncOperation(value: unknown): value is SyncOperation {
+  if (!value || typeof value !== 'object') return false;
+  const operation = value as Partial<SyncOperation>;
+  return typeof operation.id === 'string'
+    && (operation.table === 'accounts' || operation.table === 'journalEntries' || operation.table === 'receivables')
+    && (operation.action === 'create' || operation.action === 'update')
+    && typeof operation.recordId === 'string'
+    && Boolean(operation.data && typeof operation.data === 'object' && !Array.isArray(operation.data))
+    && (operation.status === 'pending' || operation.status === 'failed')
+    && typeof operation.createdAt === 'string';
 }
 
 function setRemoteSessionHint(): void {

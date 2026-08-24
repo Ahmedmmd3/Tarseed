@@ -7,7 +7,7 @@ import { useStore } from '@/context/store';
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
-  const { currentUser, signOut, connectionMode, canRetrySharedConnection, retrySharedConnection } = useStore();
+  const { currentUser, signOut, connectionMode, canRetrySharedConnection, syncQueue, retrySharedConnection } = useStore();
   const [isSigningOut, setIsSigningOut] = React.useState(false);
   const logoSrc = `${import.meta.env.BASE_URL}logo.png`;
   const canViewCurrentRoute = !currentUser || canAccessNavigationItem(location, currentUser);
@@ -99,6 +99,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
            <ConnectionStatus
              mode={connectionMode}
              canRetrySharedConnection={canRetrySharedConnection}
+              syncQueue={syncQueue}
              onRetry={() => void retrySharedConnection()}
            />
            {connectionMode === 'loading' ? (
@@ -151,12 +152,19 @@ function canAccessNavigationItem(href: string, user: { roleId: string; permissio
 function ConnectionStatus({
   mode,
   canRetrySharedConnection,
+  syncQueue,
   onRetry,
 }: {
   mode: 'loading' | 'remote' | 'local';
   canRetrySharedConnection: boolean;
+  syncQueue: Array<{ status: 'pending' | 'failed'; error?: string }>;
   onRetry: () => void;
 }) {
+  const failedOperations = syncQueue.filter((operation) => operation.status === 'failed').length;
+  const queueMessage = failedOperations
+    ? `تعذرت مزامنة ${failedOperations} من ${syncQueue.length} عملية محفوظة محلياً.`
+    : `هناك ${syncQueue.length} عملية محفوظة محلياً بانتظار المزامنة.`;
+
   if (mode === 'loading') {
     return (
       <div
@@ -186,6 +194,24 @@ function ConnectionStatus({
         <div>
           <p className="font-semibold">متصل بسجل المنشأة المشترك</p>
           <p className="mt-1 text-sm text-emerald-800">التغييرات محفوظة في الخدمة المشتركة وتظهر للأجهزة وأعضاء الفريق المصرح لهم.</p>
+          {syncQueue.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" data-testid="sync-queue-status">
+              <p>{queueMessage} ستبقى التغييرات ظاهرة هنا إلى أن تنجح المزامنة.</p>
+              {failedOperations > 0 && (
+                <p className="w-full text-xs text-amber-900">{syncQueue.find((operation) => operation.status === 'failed')?.error}</p>
+              )}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-amber-300 bg-white text-amber-950 hover:bg-amber-100"
+                onClick={onRetry}
+                data-testid="button-retry-sync-queue"
+              >
+                إعادة محاولة المزامنة
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -206,6 +232,11 @@ function ConnectionStatus({
             ? 'نعرض الآن البيانات المحفوظة في هذا المتصفح فقط. لن تتم مزامنة التغييرات حتى إعادة الاتصال بالسجل المشترك.'
             : 'التغييرات محفوظة في هذا المتصفح فقط، ولن تظهر على الأجهزة أو لأعضاء الفريق. سجّل الدخول للاتصال بسجل المنشأة المشترك.'}
         </p>
+        {syncQueue.length > 0 && (
+          <p className="mt-2 text-sm font-medium text-amber-950" data-testid="sync-queue-status">
+            {queueMessage} ستتم محاولة الإرسال بالترتيب عند إعادة الاتصال.
+          </p>
+        )}
       </div>
       {canRetrySharedConnection && (
         <Button

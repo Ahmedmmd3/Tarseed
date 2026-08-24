@@ -104,12 +104,14 @@ export const erpRecordsTable = pgTable(
       .notNull()
       .references(() => organizationsTable.id, { onDelete: "cascade" }),
     tableName: text("table_name").notNull(),
+    clientOperationId: text("client_operation_id"),
     data: jsonb("data").$type<Record<string, unknown>>().notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     index("erp_records_organization_table_idx").on(table.organizationId, table.tableName),
+    uniqueIndex("erp_records_client_operation_unique").on(table.organizationId, table.tableName, table.clientOperationId),
   ],
 );
 

@@ -73,7 +73,7 @@ export default defineConfig({
       ? {
           '/api': {
             target: process.env.API_PROXY_TARGET,
-            changeOrigin: true,
+            changeOrigin: false,
           },
         }
       : undefined,
