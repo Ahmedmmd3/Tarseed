@@ -9,7 +9,7 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "pretypecheck": "tsc --build ../../lib/db ../../lib/api-zod",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs"
+    "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.1",

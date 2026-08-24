@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { KeyRound, LoaderCircle, Mail, Pencil, Plus, ShieldCheck, UserRound, UserRoundX, UsersRound } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, KeyRound, LoaderCircle, Mail, Pencil, Plus, ShieldCheck, Upload, UserRound, UserRoundX, UsersRound } from 'lucide-react';
 import { useStore, type SharedUser } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -90,6 +90,10 @@ export default function Team() {
   const [formError, setFormError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [togglingId, setTogglingId] = useState<number | null>(null);
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [passwordResetConfigured, setPasswordResetConfigured] = useState<boolean | null>(null);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const isOwner = currentUser?.roleId === 'owner';
 
@@ -97,9 +101,10 @@ export default function Team() {
     setIsLoading(true);
     setPageError('');
     try {
-      const [membersResponse, warehousesResponse] = await Promise.all([
+      const [membersResponse, warehousesResponse, resetStatusResponse] = await Promise.all([
         fetch('/api/team/members', { credentials: 'include' }),
         fetch('/api/data/warehouses', { credentials: 'include' }),
+        fetch('/api/auth/password-reset/status', { credentials: 'include' }),
       ]);
       const membersPayload = await readPayload<{ members?: TeamMember[]; error?: string }>(membersResponse);
       if (!membersResponse.ok || !Array.isArray(membersPayload.members)) {
@@ -109,6 +114,10 @@ export default function Team() {
       if (warehousesResponse.ok) {
         const warehousesPayload = await readPayload<{ records?: Warehouse[] }>(warehousesResponse);
         setWarehouses((warehousesPayload.records ?? []).filter((warehouse) => warehouse.status !== 'inactive'));
+      }
+      if (resetStatusResponse.ok) {
+        const resetStatusPayload = await readPayload<{ emailDeliveryConfigured?: boolean }>(resetStatusResponse);
+        setPasswordResetConfigured(resetStatusPayload.emailDeliveryConfigured === true);
       }
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'تعذر تحميل أعضاء الفريق.');
@@ -259,6 +268,66 @@ export default function Team() {
     }
   };
 
+  const exportBackup = async () => {
+    setIsExportingBackup(true);
+    try {
+      const response = await fetch('/api/backup/export', { credentials: 'include' });
+      if (!response.ok) {
+        const payload = await readPayload<{ error?: string }>(response);
+        throw new Error(payload.error ?? 'تعذر إنشاء النسخة الاحتياطية.');
+      }
+      const content = await response.text();
+      const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `tarseed-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+      toast({ title: 'تم تنزيل النسخة الاحتياطية', description: 'احتفظ بالملف في مكان آمن ولا تشاركه مع غير المخولين.' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'تعذر إنشاء النسخة الاحتياطية.';
+      toast({ title: 'تعذر التنزيل', description: message, variant: 'destructive' });
+    } finally {
+      setIsExportingBackup(false);
+    }
+  };
+
+  const restoreBackup = async (file: File | undefined) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.json')) {
+      toast({ title: 'ملف غير صالح', description: 'اختر ملف نسخة احتياطية بصيغة JSON.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const backup = JSON.parse(await file.text()) as unknown;
+      if (!window.confirm('استعادة النسخة ستستبدل جميع بيانات التشغيل والمحاسبة الحالية لهذه المنشأة. هل تريد المتابعة؟')) {
+        return;
+      }
+      setIsRestoringBackup(true);
+      const response = await fetch('/api/backup/restore', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(backup),
+      });
+      const payload = await readPayload<{ message?: string; error?: string; recordCount?: number }>(response);
+      if (!response.ok) throw new Error(payload.error ?? 'تعذرت استعادة النسخة الاحتياطية.');
+      toast({
+        title: 'تمت استعادة النسخة الاحتياطية',
+        description: `تم استعادة ${payload.recordCount ?? 0} سجل. ستُحدَّث الصفحة الآن.`,
+      });
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.name === 'SyntaxError' ? 'ملف النسخة الاحتياطية ليس JSON صالحاً.' : error.message
+        : 'تعذرت استعادة النسخة الاحتياطية.';
+      toast({ title: 'تعذرت الاستعادة', description: message, variant: 'destructive' });
+    } finally {
+      setIsRestoringBackup(false);
+      if (backupFileInputRef.current) backupFileInputRef.current.value = '';
+    }
+  };
+
   const activeCount = useMemo(() => members.filter((member) => member.status === 'active').length, [members]);
 
   if (!currentUser) {
@@ -296,6 +365,56 @@ export default function Team() {
         <SummaryCard label="أعضاء نشطون" value={activeCount} icon={<ShieldCheck className="h-4 w-4" />} />
         <SummaryCard label="موقوفون" value={members.length - activeCount} icon={<UserRoundX className="h-4 w-4" />} />
       </div>
+
+      <Card>
+        <CardHeader className="border-b border-slate-100">
+          <CardTitle className="text-lg">النسخ الاحتياطي والاستعادة</CardTitle>
+          <CardDescription>نزّل نسخة من بيانات التشغيل والمحاسبة، واستعدها عند الحاجة. الاستعادة تستبدل البيانات الحالية للمنشأة.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <p className="max-w-xl text-sm leading-6 text-slate-600">لا يتضمن الملف كلمات المرور أو الجلسات. احتفظ به في مكان آمن لأنه يحتوي على بيانات المنشأة.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => void exportBackup()} disabled={isExportingBackup} data-testid="button-export-backup">
+              {isExportingBackup ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="h-4 w-4" aria-hidden="true" />}
+              {isExportingBackup ? 'جارٍ التجهيز...' : 'تنزيل نسخة احتياطية'}
+            </Button>
+            <input
+              ref={backupFileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="sr-only"
+              onChange={(event) => void restoreBackup(event.target.files?.[0])}
+              data-testid="input-restore-backup"
+            />
+            <Button type="button" onClick={() => backupFileInputRef.current?.click()} disabled={isRestoringBackup} data-testid="button-restore-backup">
+              {isRestoringBackup ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Upload className="h-4 w-4" aria-hidden="true" />}
+              {isRestoringBackup ? 'جارٍ الاستعادة...' : 'استعادة نسخة'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="border-b border-slate-100">
+          <CardTitle className="text-lg">استعادة كلمة المرور</CardTitle>
+          <CardDescription>تُرسل روابط الاستعادة عبر البريد، وتظهر هنا جاهزية الإرسال للإطلاق الفعلي.</CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-start gap-3 p-5">
+          <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${passwordResetConfigured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+            <KeyRound className="h-4 w-4" aria-hidden="true" />
+          </div>
+          <div>
+            <p className="font-semibold text-slate-900">
+              {passwordResetConfigured === true ? 'بريد الاستعادة جاهز للإرسال' : passwordResetConfigured === false ? 'يلزم ضبط بريد إرسال موثق قبل النشر' : 'جارٍ التحقق من إعدادات الإرسال'}
+            </p>
+            <p className="mt-1 text-sm leading-6 text-slate-600">
+              {passwordResetConfigured === true
+                ? 'يمكن للمستخدمين طلب رابط آمن لتغيير كلمة المرور.'
+                : 'اضبط RESEND_FROM_EMAIL بعنوان موثق في Resend. العنوان التجريبي لا يصلح عادةً لإرسال رسائل حقيقية لجميع العملاء.'}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="border-b border-slate-100">

@@ -95,11 +95,15 @@ function passwordResetUrl(request: Request, token: string): string {
 }
 
 async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string; name: string; resetUrl: string }): Promise<void> {
+  const configuredSender = process.env.RESEND_FROM_EMAIL?.trim();
+  if (!configuredSender && process.env.NODE_ENV === "production") {
+    throw new Error("Password reset email delivery is not configured.");
+  }
   const response = await connectors.proxy("resend", "/emails", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      from: process.env.RESEND_FROM_EMAIL || "Tarseed <onboarding@resend.dev>",
+      from: configuredSender || "Tarseed <onboarding@resend.dev>",
       to: [email],
       subject: "استعادة كلمة مرور ترصيد",
       html: `
@@ -295,6 +299,11 @@ router.post("/auth/logout", requireAuth, async (request: Request, response: Resp
 router.get("/auth/me", async (request: Request, response: Response): Promise<void> => {
   const auth = await getAuthContext(request);
   response.json({ user: auth ? safeUser(auth, auth.projectName) : null });
+});
+
+router.get("/auth/password-reset/status", requireAuth, requireOwner, (_request: Request, response: Response): void => {
+  const sender = process.env.RESEND_FROM_EMAIL?.trim() || null;
+  response.json({ emailDeliveryConfigured: Boolean(sender), sender });
 });
 
 router.get("/team/members", requireAuth, requireOwner, async (_request: Request, response: Response): Promise<void> => {
