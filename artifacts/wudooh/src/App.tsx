@@ -22,6 +22,15 @@ import Receivables from '@/pages/receivables';
 import Reports from '@/pages/reports';
 import Team from '@/pages/team';
 import ResetPassword from '@/pages/reset-password';
+import {
+  Features,
+  Pricing,
+  ProductPage,
+  ResourcePage,
+  SecurityPerformance,
+  Solutions,
+  WhyTarseed,
+} from '@/pages/marketing-pages';
 
 const queryClient = new QueryClient();
 
@@ -38,6 +47,19 @@ function Router() {
     <RoutedErrorBoundary>
       <Switch>
         <Route path="/" component={Landing} />
+        <Route path="/features" component={Features} />
+        <Route path="/solutions" component={Solutions} />
+        <Route path="/pricing" component={Pricing} />
+        <Route path="/why-tarseed" component={WhyTarseed} />
+        <Route path="/security-performance" component={SecurityPerformance} />
+        <Route path="/products/accounting" component={() => <ProductPage product="accounting" />} />
+        <Route path="/products/sales" component={() => <ProductPage product="sales" />} />
+        <Route path="/products/hr" component={() => <ProductPage product="hr" />} />
+        <Route path="/products/pos" component={() => <ProductPage product="pos" />} />
+        <Route path="/resources/help" component={() => <ResourcePage kind="help" />} />
+        <Route path="/resources/guide" component={() => <ResourcePage kind="guide" />} />
+        <Route path="/resources/operations" component={() => <ResourcePage kind="operations" />} />
+        <Route path="/resources/e-invoicing" component={() => <ResourcePage kind="e-invoicing" />} />
         <Route path="/reset-password" component={ResetPassword} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
         <Route path="/accounts" component={() => <DashboardLayout><Accounts /></DashboardLayout>} />
