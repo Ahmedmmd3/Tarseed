@@ -645,6 +645,10 @@ importers:
         version: 0.31.10
 
   scripts:
+    dependencies:
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

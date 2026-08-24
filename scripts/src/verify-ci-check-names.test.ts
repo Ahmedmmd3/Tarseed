@@ -14,9 +14,16 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - name: Check lint
+        run: |
+          pnpm lint
   test:
     name: Test
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
 `;
 
   assert.deepEqual(getWorkflowJobNames(workflow), ["Lint", "Test"]);
@@ -105,5 +112,102 @@ jobs:
   build
 `),
     new Error("Could not parse a job definition in the CI workflow."),
+  );
+});
+
+test("rejects unsupported nested job names alongside valid settings", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name:
+      value: Lint
+    runs-on: ubuntu-latest
+`),
+    new Error(
+      "Unsupported nested structure in a CI job definition. Job names must be scalar values.",
+    ),
+  );
+});
+
+test("rejects flow collections for job names", () => {
+  for (const name of [
+    "[Lint]",
+    "{value: Lint}",
+    "!!map {value: Lint}",
+    "&collection [Lint]",
+  ]) {
+    assert.throws(
+      () =>
+        getWorkflowJobNames(`
+jobs:
+  lint:
+    name: ${name}
+    runs-on: ubuntu-latest
+`),
+      new Error(
+        "Unsupported nested structure in a CI job definition. Job names must be scalar values.",
+      ),
+    );
+  }
+});
+
+test("rejects malformed nested job content alongside valid settings", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name: Lint
+    steps:
+      - name: Check lint
+        broken
+`),
+    new Error("Could not parse nested content in a CI job definition."),
+  );
+});
+
+test("rejects malformed flow values in nested job settings", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name: Lint
+    steps:
+      - name: [unterminated
+`),
+    new Error("Could not parse nested content in a CI job definition."),
+  );
+});
+
+test("rejects nested job settings with inconsistent indentation", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name: Lint
+    steps:
+      - name: Check lint
+      run: pnpm lint
+`),
+    new Error("Could not parse nested content in a CI job definition."),
+  );
+});
+
+test("rejects malformed step continuation indentation", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name: Lint
+    steps:
+      - name: Check lint
+       run: pnpm lint
+`),
+    new Error("Could not parse nested content in a CI job definition."),
   );
 });

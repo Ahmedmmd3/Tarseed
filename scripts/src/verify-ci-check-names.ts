@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isMap, isScalar, parseDocument } from "yaml";
 
 type BranchProtectionConfig = {
   branch: string;
@@ -9,121 +10,96 @@ type BranchProtectionConfig = {
 
 const malformedJobDefinitionMessage =
   "Could not parse a job definition in the CI workflow.";
+const malformedNestedJobDefinitionMessage =
+  "Could not parse nested content in a CI job definition.";
+const unsupportedNestedJobDefinitionMessage =
+  "Unsupported nested structure in a CI job definition. Job names must be scalar values.";
 
-function parseYamlScalar(value: string): string {
-  let quote: "'" | '"' | undefined;
-  let commentStart = value.length;
-
-  for (let index = 0; index < value.length; index += 1) {
-    const character = value[index];
-
-    if (quote === "'") {
-      if (character === "'" && value[index + 1] === "'") {
-        index += 1;
-      } else if (character === "'") {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (quote === '"') {
-      if (character === "\\") {
-        index += 1;
-      } else if (character === '"') {
-        quote = undefined;
-      }
-      continue;
-    }
-
-    if (character === "'" || character === '"') {
-      quote = character;
-    } else if (
-      character === "#" &&
-      (index === 0 || /\s/.test(value[index - 1]))
-    ) {
-      commentStart = index;
-      break;
-    }
-  }
-
-  const withoutComment = value.slice(0, commentStart).trim();
-
-  if (
-    withoutComment.length >= 2 &&
-    withoutComment.startsWith("'") &&
-    withoutComment.endsWith("'")
-  ) {
-    return withoutComment.slice(1, -1).replace(/''/g, "'");
-  }
-
-  if (
-    withoutComment.length >= 2 &&
-    withoutComment.startsWith('"') &&
-    withoutComment.endsWith('"')
-  ) {
-    return JSON.parse(withoutComment) as string;
-  }
-
-  return withoutComment;
-}
-
-export function getWorkflowJobNames(workflow: string): string[] {
+function hasMalformedSiblingJobDefinition(workflow: string): boolean {
   const lines = workflow.split(/\r?\n/);
   const jobsLine = lines.findIndex((line) => /^jobs:\s*(?:#.*)?$/.test(line));
 
   if (jobsLine === -1) {
-    throw new Error(
-      "Could not find the top-level jobs section in the CI workflow.",
-    );
+    return false;
   }
-
-  const names: string[] = [];
-  let currentJobId: string | undefined;
-  let currentJobName: string | undefined;
-
-  const finishJob = () => {
-    if (currentJobId) {
-      names.push(currentJobName ?? currentJobId);
-    }
-    currentJobId = undefined;
-    currentJobName = undefined;
-  };
 
   for (const line of lines.slice(jobsLine + 1)) {
     if (/^\S/.test(line) && line.trim() !== "") {
       break;
     }
-
-    const jobHeader = /^ {2}([A-Za-z_][A-Za-z0-9_-]*):\s*(?:#.*)?$/.exec(line);
-    if (jobHeader) {
-      finishJob();
-      currentJobId = jobHeader[1];
+    if (line.trim() === "" || /^ {2}#/.test(line)) {
       continue;
     }
-
-    if (/^ {2}#/.test(line)) {
-      continue;
-    }
-
-    if (/^ {2}\S/.test(line)) {
-      throw new Error(malformedJobDefinitionMessage);
-    }
-
-    if (currentJobId) {
-      const jobName = /^ {4}name:\s*(.*?)\s*$/.exec(line);
-      if (jobName) {
-        currentJobName = parseYamlScalar(jobName[1]);
-      }
+    if (
+      /^ {2}\S/.test(line) &&
+      !/^ {2}[A-Za-z_][A-Za-z0-9_-]*:\s*(?:#.*)?$/.test(line)
+    ) {
+      return true;
     }
   }
 
-  finishJob();
+  return false;
+}
 
-  if (names.length === 0) {
+export function getWorkflowJobNames(workflow: string): string[] {
+  const document = parseDocument(workflow, {
+    prettyErrors: false,
+    strict: true,
+  });
+
+  if (document.errors.length) {
+    throw new Error(
+      hasMalformedSiblingJobDefinition(workflow)
+        ? malformedJobDefinitionMessage
+        : malformedNestedJobDefinitionMessage,
+    );
+  }
+
+  if (!isMap(document.contents)) {
+    throw new Error(
+      "Could not find the top-level jobs section in the CI workflow.",
+    );
+  }
+
+  const jobs = document.contents.get("jobs", true);
+  if (jobs === undefined) {
+    throw new Error(
+      "Could not find the top-level jobs section in the CI workflow.",
+    );
+  }
+
+  if (!isMap(jobs)) {
+    if (isScalar(jobs) && jobs.value === null) {
+      throw new Error("Could not find any jobs in the CI workflow.");
+    }
+    throw new Error(malformedJobDefinitionMessage);
+  }
+
+  if (jobs.items.length === 0) {
     throw new Error("Could not find any jobs in the CI workflow.");
   }
 
-  return names;
+  return jobs.items.map((job) => {
+    if (
+      !isScalar(job.key) ||
+      typeof job.key.value !== "string" ||
+      !isMap(job.value)
+    ) {
+      throw new Error(malformedJobDefinitionMessage);
+    }
+
+    const jobName = job.value.items.find(
+      (setting) => isScalar(setting.key) && setting.key.value === "name",
+    )?.value;
+    if (jobName === undefined) {
+      return job.key.value;
+    }
+    if (!isScalar(jobName)) {
+      throw new Error(unsupportedNestedJobDefinitionMessage);
+    }
+
+    return String(jobName.value ?? "");
+  });
 }
 
 function sortedUnique(values: string[]): string[] {
