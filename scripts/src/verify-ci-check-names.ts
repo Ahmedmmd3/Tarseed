@@ -8,7 +8,42 @@ type BranchProtectionConfig = {
 };
 
 function parseYamlScalar(value: string): string {
-  const withoutComment = value.replace(/\s+#.*$/, "").trim();
+  let quote: "'" | '"' | undefined;
+  let commentStart = value.length;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+
+    if (quote === "'") {
+      if (character === "'" && value[index + 1] === "'") {
+        index += 1;
+      } else if (character === "'") {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (quote === '"') {
+      if (character === "\\") {
+        index += 1;
+      } else if (character === '"') {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (character === "'" || character === '"') {
+      quote = character;
+    } else if (
+      character === "#" &&
+      (index === 0 || /\s/.test(value[index - 1]))
+    ) {
+      commentStart = index;
+      break;
+    }
+  }
+
+  const withoutComment = value.slice(0, commentStart).trim();
 
   if (
     withoutComment.length >= 2 &&
@@ -165,7 +200,12 @@ async function main() {
   );
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}
