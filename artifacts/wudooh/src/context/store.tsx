@@ -255,6 +255,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       : item));
   }, [persistSyncQueue, sharedSessionKey]);
 
+  const completeSyncOperation = useCallback((operation: SyncOperation) => {
+    if (!sharedSessionKey) return;
+    persistSyncQueue(sharedSessionKey, syncQueueRef.current.filter((item) => item.id !== operation.id));
+  }, [persistSyncQueue, sharedSessionKey]);
+
   const flushSyncQueue = useCallback((sessionKey: string, initialQueue?: SyncOperation[]): Promise<boolean> => {
     if (syncFlushRef.current) return syncFlushRef.current;
     const synchronize = async (): Promise<boolean> => {
@@ -292,7 +297,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }));
             saveQueue(nextQueue);
           } else {
-            const updated = await updateRecord<Record<string, unknown>>(operation.table, operation.recordId, operation.data);
+            const updated = await updateRecord<Record<string, unknown>>(operation.table, operation.recordId, operation.data, operation.id);
             const normalized = normalizeRecord(operation.table, updated);
             replaceLocalRecord(operation.table, operation.recordId, normalized, {
               accounts: setAccounts,
@@ -490,14 +495,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   };
 
   const updateJournal = async (id: string, journal: Partial<Journal>) => {
-    if (connectionMode === 'remote') {
-      const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, journal));
-      setJournals((current) => current.map((item) => item.id === id ? updated : item));
-      return;
-    }
     setJournals((current) => current.map(j => j.id === id ? { ...j, ...journal } : j));
-    if (connectionMode === 'local' && canRetrySharedConnection) {
-      enqueueSyncOperation({ table: 'journalEntries', action: 'update', recordId: id, data: journal as Record<string, unknown> });
+    const queuedOperation = (connectionMode === 'remote' || canRetrySharedConnection)
+      ? enqueueSyncOperation({ table: 'journalEntries', action: 'update', recordId: id, data: journal as Record<string, unknown> })
+      : null;
+
+    if (connectionMode === 'remote' && queuedOperation) {
+      try {
+        const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, queuedOperation.data, queuedOperation.id));
+        setJournals((current) => current.map((item) => item.id === id ? updated : item));
+        completeSyncOperation(queuedOperation);
+      } catch (error) {
+        failSyncOperation(queuedOperation, error);
+        setCanRetrySharedConnection(true);
+        setConnectionMode('local');
+      }
     }
   };
 
@@ -506,8 +518,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!journal || journal.status === 'posted') return;
     if (closures.some((closure) => journal.date >= closure.from && journal.date <= closure.to)) return;
     if (connectionMode === 'remote') {
-      const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, { status: 'posted' }));
-      setJournals((current) => current.map((item) => item.id === id ? updated : item));
+      const queuedOperation = enqueueSyncOperation({
+        table: 'journalEntries',
+        action: 'update',
+        recordId: id,
+        data: { status: 'posted' },
+      });
+      setJournals((current) => current.map((item) => item.id === id ? { ...item, status: 'posted' } : item));
+      if (!queuedOperation) return;
+      try {
+        const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, queuedOperation.data, queuedOperation.id));
+        setJournals((current) => current.map((item) => item.id === id ? updated : item));
+        completeSyncOperation(queuedOperation);
+      } catch (error) {
+        failSyncOperation(queuedOperation, error);
+        setCanRetrySharedConnection(true);
+        setConnectionMode('local');
+      }
       return;
     }
     
@@ -661,11 +688,14 @@ async function createRecord<T>(table: string, data: unknown): Promise<T> {
   return payload.record;
 }
 
-async function updateRecord<T>(table: string, id: string, data: unknown): Promise<T> {
+async function updateRecord<T>(table: string, id: string, data: unknown, operationId?: string): Promise<T> {
   const response = await fetch(`/api/data/${table}/${id}`, {
     method: 'PATCH',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(operationId ? { 'Idempotency-Key': operationId } : {}),
+    },
     body: JSON.stringify(data),
   });
   const payload = await response.json() as { record?: T; error?: string };
@@ -737,10 +767,16 @@ function mergeQueuedRecords<T extends { id: string }>(
   const result = [...remoteRecords];
   for (const operation of queue.filter((item) => item.table === table)) {
     const localRecord = localRecords.find((item) => item.id === operation.recordId);
-    if (!localRecord) continue;
     const remoteIndex = result.findIndex((item) => item.id === operation.recordId);
-    if (remoteIndex === -1) result.push(localRecord);
-    else if (operation.action === 'update') result[remoteIndex] = localRecord;
+    if (operation.action === 'create') {
+      if (localRecord && remoteIndex === -1) result.push(localRecord);
+      continue;
+    }
+    const currentRecord = remoteIndex === -1 ? localRecord : result[remoteIndex];
+    if (!currentRecord) continue;
+    const queuedRecord = { ...currentRecord, ...(localRecord ?? {}), ...operation.data } as T;
+    if (remoteIndex === -1) result.push(queuedRecord);
+    else result[remoteIndex] = queuedRecord;
   }
   return result;
 }

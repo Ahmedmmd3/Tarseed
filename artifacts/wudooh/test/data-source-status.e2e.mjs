@@ -334,3 +334,84 @@ test('يرسل القيد الذي أُنشئ أثناء الانقطاع بعد
   expect(afterConcurrentResponse.ok(), JSON.stringify(afterConcurrentPayload)).toBeTruthy();
   expect(afterConcurrentPayload.records.filter((journal) => journal.description === concurrentDescription)).toHaveLength(1);
 });
+
+test('يحفظ ترحيل القيد محلياً ويعيد المحاولة بمعرّف العملية نفسه عند فقدان الاستجابة', async ({ page }) => {
+  await registerSharedSession(page);
+  await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  const apiOrigin = 'http://127.0.0.1:8081';
+  const requestHeaders = { Origin: apiOrigin };
+  const uniqueId = crypto.randomUUID().slice(0, 8);
+  const accounts = await Promise.all([
+    { code: `911${uniqueId.slice(0, 3)}`, name: `حساب ترحيل مدين ${uniqueId}`, type: 'asset' },
+    { code: `912${uniqueId.slice(0, 3)}`, name: `حساب ترحيل دائن ${uniqueId}`, type: 'revenue' },
+  ].map(async (account) => {
+    const response = await page.request.post(`${apiOrigin}/api/data/accounts`, {
+      headers: requestHeaders,
+      data: { ...account, parent: null, balance: 0, status: 'active' },
+    });
+    const payload = await response.json();
+    if (!response.ok() || !payload.record) {
+      throw new Error(`تعذر إنشاء حساب اختبار الترحيل: ${JSON.stringify(payload)}`);
+    }
+    return String(payload.record.id);
+  }));
+
+  const journalResponse = await page.request.post(`${apiOrigin}/api/data/journalEntries`, {
+    headers: requestHeaders,
+    data: {
+      date: '2026-08-23',
+      description: `قيد اختبار الترحيل ${uniqueId}`,
+      status: 'draft',
+      lines: [
+        { id: `post-debit-${uniqueId}`, accountId: accounts[0], debit: 125, credit: 0 },
+        { id: `post-credit-${uniqueId}`, accountId: accounts[1], debit: 0, credit: 125 },
+      ],
+    },
+  });
+  const journalPayload = await journalResponse.json();
+  if (!journalResponse.ok() || !journalPayload.record) {
+    throw new Error(`تعذر إنشاء قيد اختبار الترحيل: ${JSON.stringify(journalPayload)}`);
+  }
+  const journalId = String(journalPayload.record.id);
+
+  await page.goto('/journals', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId(`card-journal-${journalId}`)).toContainText(`قيد اختبار الترحيل ${uniqueId}`);
+
+  const operationIds = [];
+  let dropNextResponse = true;
+  await page.route(`**/api/data/journalEntries/${journalId}`, async (route) => {
+    if (route.request().method() !== 'PATCH') {
+      await route.continue();
+      return;
+    }
+    operationIds.push(route.request().headers()['idempotency-key']);
+    if (dropNextResponse) {
+      dropNextResponse = false;
+      await route.fetch();
+      await route.abort('failed');
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByTestId(`button-post-${journalId}`).click();
+  await expect(page.getByTestId('connection-status-local')).toContainText('تعذر الوصول إلى السجل المشترك');
+  await expect(page.getByTestId(`card-journal-${journalId}`)).toContainText('مرحّل');
+  await expect(page.getByTestId('sync-queue-status')).toContainText('تعذرت مزامنة 1 من 1 عملية');
+
+  await page.getByTestId('button-retry-shared-connection').click();
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+  await expect(page.getByTestId('sync-queue-status')).toHaveCount(0);
+  expect(operationIds).toHaveLength(2);
+  expect(operationIds[0]).toBeTruthy();
+  expect(operationIds[1]).toBe(operationIds[0]);
+
+  const savedJournalResponse = await page.request.get(`${apiOrigin}/api/data/journalEntries`, { headers: requestHeaders });
+  const savedJournalPayload = await savedJournalResponse.json();
+  expect(savedJournalResponse.ok(), JSON.stringify(savedJournalPayload)).toBeTruthy();
+  const savedJournals = savedJournalPayload.records.filter((journal) => String(journal.id) === journalId);
+  expect(savedJournals).toHaveLength(1);
+  expect(savedJournals[0].status).toBe('posted');
+});

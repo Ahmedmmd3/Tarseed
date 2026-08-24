@@ -84,6 +84,26 @@ function validateJournal(data: Record<string, unknown>): string | null {
   return Math.abs(debit - credit) > 0.005 ? "إجمالي المدين يجب أن يساوي إجمالي الدائن." : null;
 }
 
+class MutationRejected extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function operationFingerprint(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(operationFingerprint).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${operationFingerprint(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
 async function isClosedDate(auth: AuthContext, date: string): Promise<boolean> {
   const closures = await db.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, auth.organizationId),
@@ -197,6 +217,11 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
     response.status(400).json({ error: "بيانات السجل غير صحيحة." });
     return;
   }
+  const clientOperationId = request.get("Idempotency-Key")?.trim() ?? "";
+  if (clientOperationId.length > 200) {
+    response.status(400).json({ error: "معرّف العملية طويل جداً." });
+    return;
+  }
   if (access.tableName === "products" && Object.hasOwn(body, "stock")) {
     response.status(405).json({ error: "إجمالي المنتج يُحدّث من أرصدة المواقع عبر حركات المخزون فقط." });
     return;
@@ -225,6 +250,95 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
     await audit(access.auth, "products_updated", String(id));
     response.json({ record: { ...result.record.data, id: result.record.id, userId: access.auth.organizationId } });
     return;
+  }
+  if (access.tableName === "journalEntries" && clientOperationId) {
+    const fingerprint = operationFingerprint(body);
+    try {
+      const result = await db.transaction(async (tx) => {
+        const [claimedOperation] = await tx.insert(erpRecordsTable).values({
+          organizationId: access.auth.organizationId,
+          tableName: "mutationOperations",
+          clientOperationId,
+          data: {
+            targetTable: access.tableName,
+            targetId: id,
+            fingerprint,
+            state: "pending",
+          },
+        }).onConflictDoNothing({
+          target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+        }).returning();
+
+        if (!claimedOperation) {
+          const [completedOperation] = await tx.select().from(erpRecordsTable).where(and(
+            eq(erpRecordsTable.organizationId, access.auth.organizationId),
+            eq(erpRecordsTable.tableName, "mutationOperations"),
+            eq(erpRecordsTable.clientOperationId, clientOperationId),
+          )).limit(1);
+          const operationData = completedOperation?.data;
+          const savedRecord = operationData?.record;
+          if (
+            !completedOperation
+            || operationData?.targetTable !== access.tableName
+            || String(operationData.targetId) !== String(id)
+            || operationData.fingerprint !== fingerprint
+            || !savedRecord
+            || typeof savedRecord !== "object"
+            || Array.isArray(savedRecord)
+          ) {
+            throw new MutationRejected(409, "معرّف العملية مستخدم لطلب مختلف.");
+          }
+          return { record: savedRecord, replayed: true };
+        }
+
+        const [existing] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, id),
+          eq(erpRecordsTable.organizationId, access.auth.organizationId),
+          eq(erpRecordsTable.tableName, access.tableName),
+        )).for("update");
+        if (!existing || !isLocationAllowed(access.auth, access.tableName, existing.data, existing.id)) {
+          throw new MutationRejected(404, "السجل غير متاح.");
+        }
+        if (existing.data.status === "posted") {
+          throw new MutationRejected(409, "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك.");
+        }
+
+        const data = { ...existing.data, ...(body as Record<string, unknown>) };
+        const error = validateJournal(data);
+        if (error) throw new MutationRejected(400, error);
+        if (await isClosedDate(access.auth, String(data.date))) {
+          throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن ترحيل قيد فيها.");
+        }
+        if (!isLocationAllowed(access.auth, access.tableName, data, existing.id)) {
+          throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
+        }
+
+        const [updated] = await tx.update(erpRecordsTable)
+          .set({ data, updatedAt: new Date() })
+          .where(eq(erpRecordsTable.id, id))
+          .returning();
+        const responseRecord = { ...updated.data, id: updated.id, userId: access.auth.organizationId };
+        await tx.update(erpRecordsTable).set({
+          data: {
+            targetTable: access.tableName,
+            targetId: id,
+            fingerprint,
+            record: responseRecord,
+          },
+          updatedAt: new Date(),
+        }).where(eq(erpRecordsTable.id, claimedOperation.id));
+        return { record: responseRecord, replayed: false };
+      });
+      if (!result.replayed) await audit(access.auth, `${access.tableName}_updated`, String(id));
+      response.json({ record: result.record });
+      return;
+    } catch (error) {
+      if (error instanceof MutationRejected) {
+        response.status(error.status).json({ error: error.message });
+        return;
+      }
+      throw error;
+    }
   }
   const [existing] = await db.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, access.tableName),
