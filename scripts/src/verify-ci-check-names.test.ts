@@ -68,3 +68,28 @@ jobs:
     protectionOnly: ["CI"],
   });
 });
+
+test("rejects workflows without a top-level jobs section", () => {
+  assert.throws(
+    () => getWorkflowJobNames("name: CI\n"),
+    new Error("Could not find the top-level jobs section in the CI workflow."),
+  );
+});
+
+test("rejects an empty jobs section", () => {
+  assert.throws(
+    () => getWorkflowJobNames("jobs:\n  # jobs will be added later\n"),
+    new Error("Could not find any jobs in the CI workflow."),
+  );
+});
+
+test("rejects incomplete job definitions", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  build
+`),
+    new Error("Could not find any jobs in the CI workflow."),
+  );
+});
