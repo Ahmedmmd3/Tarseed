@@ -7,6 +7,9 @@ type BranchProtectionConfig = {
   required_status_checks: string[];
 };
 
+const malformedJobDefinitionMessage =
+  "Could not parse a job definition in the CI workflow.";
+
 function parseYamlScalar(value: string): string {
   let quote: "'" | '"' | undefined;
   let commentStart = value.length;
@@ -96,6 +99,14 @@ export function getWorkflowJobNames(workflow: string): string[] {
       finishJob();
       currentJobId = jobHeader[1];
       continue;
+    }
+
+    if (/^ {2}#/.test(line)) {
+      continue;
+    }
+
+    if (/^ {2}\S/.test(line)) {
+      throw new Error(malformedJobDefinitionMessage);
     }
 
     if (currentJobId) {

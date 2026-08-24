@@ -90,6 +90,20 @@ test("rejects incomplete job definitions", () => {
 jobs:
   build
 `),
-    new Error("Could not find any jobs in the CI workflow."),
+    new Error("Could not parse a job definition in the CI workflow."),
+  );
+});
+
+test("rejects malformed job definitions alongside valid jobs", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+  build
+`),
+    new Error("Could not parse a job definition in the CI workflow."),
   );
 });
