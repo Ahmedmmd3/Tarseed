@@ -1,7 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isMap, isScalar, parseDocument } from "yaml";
+import {
+  isAlias,
+  isMap,
+  isScalar,
+  parseDocument,
+  type Alias,
+  type Document,
+} from "yaml";
 
 type BranchProtectionConfig = {
   branch: string;
@@ -14,6 +21,39 @@ const malformedNestedJobDefinitionMessage =
   "Could not parse nested content in a CI job definition.";
 const unsupportedNestedJobDefinitionMessage =
   "Unsupported nested structure in a CI job definition. Job names must be scalar values.";
+const unsupportedYamlConstructMessage =
+  "Unsupported YAML construct in the CI workflow. Use mappings, sequences, " +
+  "scalar values, anchors, aliases, flow collections, or block scalars.";
+
+function unsupportedYamlConstruct(details: string): Error {
+  return new Error(`${unsupportedYamlConstructMessage} ${details}`);
+}
+
+function resolveYamlAliases(
+  value: unknown,
+  document: Document,
+  aliases = new Set<Alias>(),
+): unknown {
+  if (!isAlias(value)) {
+    return value;
+  }
+
+  if (aliases.has(value)) {
+    throw unsupportedYamlConstruct(
+      `Alias "*${value.source}" resolves recursively.`,
+    );
+  }
+  aliases.add(value);
+
+  const resolved = value.resolve(document);
+  if (resolved === undefined) {
+    throw unsupportedYamlConstruct(
+      `Alias "*${value.source}" does not reference a defined anchor.`,
+    );
+  }
+
+  return resolveYamlAliases(resolved, document, aliases);
+}
 
 function hasMalformedSiblingJobDefinition(workflow: string): boolean {
   const lines = workflow.split(/\r?\n/);
@@ -55,13 +95,22 @@ export function getWorkflowJobNames(workflow: string): string[] {
     );
   }
 
+  if (document.warnings.length) {
+    throw unsupportedYamlConstruct(
+      document.warnings.map((warning) => warning.message).join(" "),
+    );
+  }
+
   if (!isMap(document.contents)) {
     throw new Error(
       "Could not find the top-level jobs section in the CI workflow.",
     );
   }
 
-  const jobs = document.contents.get("jobs", true);
+  const jobs = resolveYamlAliases(
+    document.contents.get("jobs", true),
+    document,
+  );
   if (jobs === undefined) {
     throw new Error(
       "Could not find the top-level jobs section in the CI workflow.",
@@ -80,25 +129,29 @@ export function getWorkflowJobNames(workflow: string): string[] {
   }
 
   return jobs.items.map((job) => {
+    const jobKey = resolveYamlAliases(job.key, document);
+    const jobDefinition = resolveYamlAliases(job.value, document);
     if (
-      !isScalar(job.key) ||
-      typeof job.key.value !== "string" ||
-      !isMap(job.value)
+      !isScalar(jobKey) ||
+      typeof jobKey.value !== "string" ||
+      !isMap(jobDefinition)
     ) {
       throw new Error(malformedJobDefinitionMessage);
     }
 
-    const jobName = job.value.items.find(
-      (setting) => isScalar(setting.key) && setting.key.value === "name",
-    )?.value;
+    const jobName = jobDefinition.items.find((setting) => {
+      const settingKey = resolveYamlAliases(setting.key, document);
+      return isScalar(settingKey) && settingKey.value === "name";
+    })?.value;
     if (jobName === undefined) {
-      return job.key.value;
+      return jobKey.value;
     }
-    if (!isScalar(jobName)) {
+    const resolvedJobName = resolveYamlAliases(jobName, document);
+    if (!isScalar(resolvedJobName)) {
       throw new Error(unsupportedNestedJobDefinitionMessage);
     }
 
-    return String(jobName.value ?? "");
+    return String(resolvedJobName.value ?? "");
   });
 }
 

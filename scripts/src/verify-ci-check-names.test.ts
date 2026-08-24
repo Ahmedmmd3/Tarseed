@@ -58,6 +58,64 @@ jobs:
   ]);
 });
 
+test("supports anchors, aliases, quoted keys, flow collections, and scalar modifiers", () => {
+  const workflow = `
+shared-name: &shared_name "Lint"
+shared-settings: &shared_settings
+  runs-on: ubuntu-latest
+"jobs":
+  "lint":
+    "name": *shared_name
+    <<: *shared_settings
+    strategy: { matrix: { node: [20, 22] } }
+  test:
+    <<: *shared_settings
+    name: >-2
+      Continuous
+      Integration
+`;
+
+  assert.deepEqual(getWorkflowJobNames(workflow), [
+    "Lint",
+    "Continuous Integration",
+  ]);
+});
+
+test("supports flow mappings for jobs and job definitions", () => {
+  const workflow = `
+jobs: {
+  lint: { name: Lint, runs-on: ubuntu-latest },
+  test: { runs-on: ubuntu-latest, strategy: { matrix: { node: [20, 22] } } }
+}
+`;
+
+  assert.deepEqual(getWorkflowJobNames(workflow), ["Lint", "test"]);
+});
+
+test("supports aliases for job definitions while preserving fallback job IDs", () => {
+  const workflow = `
+jobs:
+  lint: &base_job
+    runs-on: ubuntu-latest
+  test: *base_job
+`;
+
+  assert.deepEqual(getWorkflowJobNames(workflow), ["lint", "test"]);
+});
+
+test("rejects unsupported YAML constructs with an actionable error", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  lint:
+    name: !custom Lint
+    runs-on: ubuntu-latest
+`),
+    /Unsupported YAML construct in the CI workflow.*Unresolved tag: !custom/,
+  );
+});
+
 test("reports a renamed job as a workflow/protection mismatch", () => {
   const workflow = `
 jobs:
