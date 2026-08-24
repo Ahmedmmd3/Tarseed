@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:inventory": "node --test test/inventory-concurrency.test.mjs"
+    "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs"
   },
   "dependencies": {
     "@replit/connectors-sdk": "^0.4.1",
