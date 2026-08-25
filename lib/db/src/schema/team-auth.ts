@@ -20,6 +20,8 @@ export const organizationsTable = pgTable("organizations", {
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }).notNull().default(sql`now() + interval '14 days'`),
   subscriptionStartedAt: timestamp("subscription_started_at", { withTimezone: true }),
   subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
+  stripeCustomerId: text("stripe_customer_id"),
+  stripeSubscriptionId: text("stripe_subscription_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -101,6 +103,19 @@ export const teamAuditLogsTable = pgTable(
   },
   (table) => [
     index("team_audit_logs_organization_created_idx").on(table.organizationId, table.createdAt),
+  ],
+);
+
+export const stripeWebhookEventsTable = pgTable(
+  "stripe_webhook_events",
+  {
+    id: text("id").primaryKey(),
+    eventType: text("event_type").notNull(),
+    organizationId: integer("organization_id").references(() => organizationsTable.id, { onDelete: "set null" }),
+    processedAt: timestamp("processed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index("stripe_webhook_events_organization_idx").on(table.organizationId, table.processedAt),
   ],
 );
 

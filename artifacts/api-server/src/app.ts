@@ -5,10 +5,26 @@ import pinoHttp from "pino-http";
 import { createHash } from "node:crypto";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { processStripeWebhook } from "./lib/stripe-webhooks";
 
 const app: Express = express();
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (request, response) => {
+  const signature = request.get("stripe-signature");
+  if (!signature || !Buffer.isBuffer(request.body)) {
+    response.status(400).json({ error: "طلب webhook غير صالح." });
+    return;
+  }
+  try {
+    await processStripeWebhook(request.body, signature);
+    response.json({ received: true });
+  } catch (error) {
+    logger.warn({ errorType: error instanceof Error ? error.name : "UnknownError" }, "Stripe webhook processing failed");
+    response.status(400).json({ error: "تعذر التحقق من حدث الدفع." });
+  }
+});
 const trustedOrigins = new Set(
   [process.env.REPLIT_DEV_DOMAIN, process.env.REPLIT_DOMAINS]
     .filter(Boolean)

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '@/context/store';
 import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
@@ -16,10 +16,71 @@ import {
   Briefcase
 } from 'lucide-react';
 
+type BillingPlan = {
+  id: string;
+  name: string;
+  description: string | null;
+  prices: Array<{
+    id: string;
+    amount: number | null;
+    currency: string;
+    interval: string | null;
+    intervalCount: number | null;
+  }>;
+};
+
 export default function ManagerPortal() {
-  const { currentUser, signOut, connectionMode } = useStore();
+  const { currentUser, signOut, connectionMode, refreshSession } = useStore();
   const [isSigningOut, setIsSigningOut] = useState(false);
+  const [plans, setPlans] = useState<BillingPlan[]>([]);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [plansError, setPlansError] = useState('');
+  const [billingError, setBillingError] = useState('');
+  const [billingMessage, setBillingMessage] = useState('');
+  const [billingAction, setBillingAction] = useState<'checkout' | 'portal' | null>(null);
   const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (!currentUser) {
+      setPlansLoading(false);
+      return;
+    }
+    let active = true;
+    const loadPlans = async () => {
+      setPlansLoading(true);
+      setPlansError('');
+      try {
+        const response = await fetch('/api/billing/plans', { cache: 'no-store' });
+        const payload = await response.json() as { plans?: BillingPlan[]; error?: string };
+        if (!response.ok || !Array.isArray(payload.plans)) throw new Error(payload.error ?? 'تعذر تحميل الباقات.');
+        if (active) setPlans(payload.plans);
+      } catch (error) {
+        if (active) setPlansError(error instanceof Error ? error.message : 'تعذر تحميل الباقات.');
+      } finally {
+        if (active) setPlansLoading(false);
+      }
+    };
+    void loadPlans();
+    return () => { active = false; };
+  }, [currentUser?.organizationId]);
+
+  useEffect(() => {
+    if (!currentUser || new URLSearchParams(window.location.search).get('billing') !== 'success') return;
+    let active = true;
+    setBillingMessage('تم استلام عملية الدفع. نتحقق الآن من تفعيل اشتراكك.');
+    const refresh = async () => {
+      await refreshSession();
+      if (active && currentUser.subscription.status === 'active') {
+        setBillingMessage('تم تفعيل اشتراكك بنجاح.');
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => { void refresh(); }, 3_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [currentUser?.subscription.status, refreshSession]);
 
   if (!currentUser) {
     return (
@@ -43,6 +104,8 @@ export default function ManagerPortal() {
 
   const user = currentUser;
   const sub = user.subscription;
+  const isOwner = user.roleId === 'owner';
+  const isActive = sub?.status === 'active';
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
@@ -51,6 +114,52 @@ export default function ManagerPortal() {
       setLocation('/');
     } catch (error) {
       setIsSigningOut(false);
+    }
+  };
+
+  const formatPrice = (price: BillingPlan['prices'][number]) => {
+    if (price.amount === null) return 'السعر عند الطلب';
+    return new Intl.NumberFormat('ar-SA', {
+      style: 'currency',
+      currency: price.currency.toUpperCase(),
+      maximumFractionDigits: 0,
+    }).format(price.amount / 100);
+  };
+
+  const checkout = async (priceId: string) => {
+    setBillingAction('checkout');
+    setBillingError('');
+    try {
+      const response = await fetch('/api/billing/checkout', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ priceId }),
+      });
+      const payload = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !payload.url) throw new Error(payload.error ?? 'تعذر فتح صفحة الدفع.');
+      window.location.assign(payload.url);
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'تعذر فتح صفحة الدفع.');
+      setBillingAction(null);
+    }
+  };
+
+  const openPortal = async () => {
+    setBillingAction('portal');
+    setBillingError('');
+    try {
+      const response = await fetch('/api/billing/portal', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const payload = await response.json() as { url?: string; error?: string };
+      if (!response.ok || !payload.url) throw new Error(payload.error ?? 'تعذر فتح إدارة الاشتراك.');
+      window.location.assign(payload.url);
+    } catch (error) {
+      setBillingError(error instanceof Error ? error.message : 'تعذر فتح إدارة الاشتراك.');
+      setBillingAction(null);
     }
   };
 
@@ -242,6 +351,52 @@ export default function ManagerPortal() {
                 </div>
               )}
 
+               <section className="border-t border-white/10 pt-6">
+                 <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                   <div>
+                     <h4 className="text-base font-bold text-white">اختر باقتك</h4>
+                     <p className="mt-1 text-sm leading-6 text-slate-400">تتم معالجة الدفع بأمان عبر Stripe، ويُحدّث الوصول تلقائياً بعد تأكيد الدفع.</p>
+                   </div>
+                   {isActive && isOwner && (
+                     <Button type="button" onClick={() => void openPortal()} disabled={billingAction !== null} className="bg-white/10 text-white hover:bg-white/15" data-testid="button-manage-subscription">
+                       {billingAction === 'portal' && <LoaderCircle className="h-4 w-4 animate-spin" />}
+                       إدارة الاشتراك
+                     </Button>
+                   )}
+                 </div>
+                 {!isOwner && <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm leading-7 text-slate-300">تتوفر إدارة الباقة لمالك المنشأة فقط.</div>}
+                 {billingMessage && <div className="mb-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-4 text-sm font-medium text-emerald-200" role="status">{billingMessage}</div>}
+                 {billingError && <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-400/10 p-4 text-sm font-medium text-rose-200" role="alert">{billingError}</div>}
+                 {plansLoading && <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-5 text-sm text-slate-300"><LoaderCircle className="h-4 w-4 animate-spin" />جارٍ تحميل الباقات المتاحة...</div>}
+                 {!plansLoading && plansError && <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-200">{plansError}</div>}
+                 {!plansLoading && !plansError && plans.length === 0 && <div className="rounded-xl border border-white/10 bg-white/5 p-5 text-sm text-slate-300">لا توجد باقات متاحة حالياً. حاول لاحقاً أو تواصل مع الدعم.</div>}
+                 {!plansLoading && !plansError && plans.length > 0 && (
+                   <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                     {plans.map((plan) => (
+                       <article key={plan.id} className={`rounded-2xl border p-4 ${sub?.planId === plan.id ? 'border-teal-400/50 bg-teal-400/10' : 'border-white/10 bg-white/5'}`} data-testid={`plan-card-${plan.id}`}>
+                         <p className="text-base font-bold text-white">{plan.name}</p>
+                         <p className="mt-1 min-h-10 text-xs leading-5 text-slate-400">{plan.description || 'باقة اشتراك لإدارة أعمالك.'}</p>
+                         <div className="mt-4 space-y-2">
+                           {plan.prices.map((price) => (
+                             <button
+                               key={price.id}
+                               type="button"
+                               disabled={!isOwner || isActive || billingAction !== null}
+                               onClick={() => void checkout(price.id)}
+                               className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-[#061d40] px-3 py-3 text-right transition hover:border-teal-300/50 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                               data-testid={`button-checkout-${price.id}`}
+                             >
+                               <span className="text-sm font-bold text-white">{formatPrice(price)}</span>
+                               <span className="text-xs text-slate-400">{price.interval === 'year' ? 'سنوي' : 'شهري'}</span>
+                             </button>
+                           ))}
+                         </div>
+                       </article>
+                     ))}
+                   </div>
+                 )}
+               </section>
+
               {/* Action Area */}
               <div className="pt-6 border-t border-white/10 flex flex-col md:flex-row items-center justify-between gap-5">
                 <div className="flex-1 w-full text-center md:text-right">
@@ -249,7 +404,7 @@ export default function ManagerPortal() {
                     <div className="flex items-start gap-3 text-amber-400/90 bg-amber-500/10 p-3 md:p-4 rounded-xl border border-amber-500/20">
                       <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
                       <p className="text-sm font-medium leading-relaxed">
-                        انتهت صلاحية الوصول. يرجى التواصل مع فريق المبيعات أو الدعم الفني لتجديد اشتراكك واستعادة الوصول لبياناتك بالكامل.
+                        انتهت صلاحية الوصول. اختر باقة لإتمام التجديد واستعادة الوصول تلقائياً بعد تأكيد الدفع.
                       </p>
                     </div>
                   )}

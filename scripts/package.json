@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "test": "tsx --test ./src/*.test.ts",
+    "seed:wudooh-plans": "tsx ./src/seed-wudooh-plans.ts",
     "verify:ci-check-names": "tsx ./src/verify-ci-check-names.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

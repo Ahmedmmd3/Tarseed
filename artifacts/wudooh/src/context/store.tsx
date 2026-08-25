@@ -69,6 +69,7 @@ type StoreContextType = {
   closePeriod: (from: string, to: string) => Promise<FinancialClosure>;
   connectionMode: 'loading' | 'remote' | 'local';
   canRetrySharedConnection: boolean;
+  refreshSession: () => Promise<void>;
   syncQueue: SyncOperation[];
   retrySharedConnection: () => Promise<void>;
   flushPendingSyncOperations: () => Promise<boolean>;
@@ -699,6 +700,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return (
     <StoreContext.Provider value={{
       currentUser, signOut,
+      refreshSession: loadSharedData,
       accounts, addAccount, updateAccount,
       journals, addJournal, updateJournal, postJournal,
       receivables, addReceivable, updateReceivable, payReceivable,

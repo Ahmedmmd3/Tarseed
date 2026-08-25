@@ -62,6 +62,10 @@ const actionLabels: Record<string, string> = {
   member_updated: 'تعديل عضو بالفريق',
   member_disabled: 'تعطيل عضو بالفريق',
   member_enabled: 'تفعيل عضو بالفريق',
+  subscription_activated: 'تفعيل الاشتراك',
+  subscription_plan_changed: 'تغيير الباقة',
+  subscription_renewed: 'تجديد الاشتراك',
+  subscription_deactivated: 'إيقاف الاشتراك',
   login: 'تسجيل دخول',
 };
 
