@@ -51,32 +51,57 @@ async function registerOwner() {
 
 test("يستعيد المالك نسخة بيانات منشأته دون إبقاء التغييرات اللاحقة", async () => {
   const { cookie, email, password } = await registerOwner();
-  const originalAccount = await request("/data/accounts", {
-    method: "POST",
-    cookie,
-    body: { code: unique("1000"), name: "حساب قبل النسخة", type: "asset", balance: 0, status: "active" },
-  });
-  assert.equal(originalAccount.response.status, 201, JSON.stringify(originalAccount.payload));
-  const originalJournal = await request("/data/journalEntries", {
-    method: "POST",
-    cookie,
-    body: {
+  const accountDefinitions = [
+    { code: "1000", name: "النقدية قبل النسخة", type: "asset" },
+    { code: "4000", name: "إيرادات المبيعات قبل النسخة", type: "revenue" },
+    { code: "5000", name: "مصروف التشغيل قبل النسخة", type: "expense" },
+  ];
+  const accountsByType = {};
+  for (const definition of accountDefinitions) {
+    const createdAccount = await request("/data/accounts", {
+      method: "POST",
+      cookie,
+      body: { ...definition, code: unique(definition.code), balance: 0, status: "active" },
+    });
+    assert.equal(createdAccount.response.status, 201, JSON.stringify(createdAccount.payload));
+    accountsByType[definition.type] = createdAccount.payload.record;
+  }
+
+  const originalJournals = [
+    {
       date: "2026-01-10",
-      description: "قيد محفوظ في النسخة",
-      status: "draft",
+      description: "إيراد مبيعات منشور محفوظ في النسخة",
       lines: [
-        { accountId: String(originalAccount.payload.record.id), debit: 100, credit: 0 },
-        { accountId: String(originalAccount.payload.record.id), debit: 0, credit: 100 },
+        { accountId: String(accountsByType.asset.id), debit: 1500, credit: 0 },
+        { accountId: String(accountsByType.revenue.id), debit: 0, credit: 1500 },
       ],
     },
-  });
-  assert.equal(originalJournal.response.status, 201, JSON.stringify(originalJournal.payload));
-  const postedJournal = await request(`/data/journalEntries/${originalJournal.payload.record.id}`, {
-    method: "PATCH",
-    cookie,
-    body: { status: "posted" },
-  });
-  assert.equal(postedJournal.response.status, 200, JSON.stringify(postedJournal.payload));
+    {
+      date: "2026-01-20",
+      description: "مصروف تشغيل منشور محفوظ في النسخة",
+      lines: [
+        { accountId: String(accountsByType.expense.id), debit: 300, credit: 0 },
+        { accountId: String(accountsByType.asset.id), debit: 0, credit: 300 },
+      ],
+    },
+  ];
+  const postedJournals = [];
+  for (const journal of originalJournals) {
+    const createdJournal = await request("/data/journalEntries", {
+      method: "POST",
+      cookie,
+      body: { ...journal, status: "draft" },
+    });
+    assert.equal(createdJournal.response.status, 201, JSON.stringify(createdJournal.payload));
+    const postedJournal = await request(`/data/journalEntries/${createdJournal.payload.record.id}`, {
+      method: "PATCH",
+      cookie,
+      body: { status: "posted" },
+    });
+    assert.equal(postedJournal.response.status, 200, JSON.stringify(postedJournal.payload));
+    assert.equal(postedJournal.payload.record.status, "posted");
+    postedJournals.push(postedJournal.payload.record);
+  }
 
   const originalClosure = await request("/accounting/close", {
     method: "POST",
@@ -86,6 +111,14 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   assert.equal(originalClosure.response.status, 201, JSON.stringify(originalClosure.payload));
   const summaryBeforeRestore = await request("/accounting/summary?from=2026-01-01&to=2026-01-31", { cookie });
   assert.equal(summaryBeforeRestore.response.status, 200, JSON.stringify(summaryBeforeRestore.payload));
+  assert.equal(summaryBeforeRestore.payload.totals.revenue, 1500);
+  assert.equal(summaryBeforeRestore.payload.totals.expense, 300);
+  assert.equal(summaryBeforeRestore.payload.totals.netIncome, 1200);
+  assert.equal(summaryBeforeRestore.payload.journals, postedJournals.length);
+  const { receivables: _receivables, payables: _payables, ...reportTotals } = summaryBeforeRestore.payload.totals;
+  assert.deepEqual(originalClosure.payload.closure.totals, reportTotals);
+  assert.deepEqual(originalClosure.payload.closure.trialBalance, summaryBeforeRestore.payload.trialBalance);
+  assert.equal(originalClosure.payload.closure.netIncome, summaryBeforeRestore.payload.totals.netIncome);
 
   const exported = await request("/backup/export", { cookie });
   assert.equal(exported.response.status, 200, JSON.stringify(exported.payload));
@@ -140,8 +173,8 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
             description: "قيد غير متوازن",
             status: "draft",
             lines: [
-              { accountId: String(originalAccount.payload.record.id), debit: 100, credit: 0 },
-              { accountId: String(originalAccount.payload.record.id), debit: 0, credit: 50 },
+              { accountId: String(accountsByType.asset.id), debit: 100, credit: 0 },
+              { accountId: String(accountsByType.asset.id), debit: 0, credit: 50 },
             ],
           },
         },
@@ -157,7 +190,7 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
     cookie,
     body: {
       ...exported.payload,
-      records: exported.payload.records.map((record) => record.id === originalAccount.payload.record.id
+      records: exported.payload.records.map((record) => record.id === accountsByType.asset.id
         ? { ...record, data: { ...record.data, balance: null } }
         : record),
     },
@@ -179,8 +212,8 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
             description: "تاريخ غير صالح",
             status: "draft",
             lines: [
-              { accountId: originalAccount.payload.record.id, debit: 50, credit: 0 },
-              { accountId: originalAccount.payload.record.id, debit: 0, credit: 50 },
+              { accountId: accountsByType.asset.id, debit: 50, credit: 0 },
+              { accountId: accountsByType.asset.id, debit: 0, credit: 50 },
             ],
           },
         },
@@ -254,16 +287,25 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
 
   const accounts = await request("/data/accounts", { cookie });
   assert.equal(accounts.response.status, 200, JSON.stringify(accounts.payload));
-  assert.ok(accounts.payload.records.some((account) => account.name === "حساب قبل النسخة"));
+  assert.ok(accounts.payload.records.some((account) => account.name === "النقدية قبل النسخة"));
+  assert.ok(accounts.payload.records.some((account) => account.name === "إيرادات المبيعات قبل النسخة"));
+  assert.ok(accounts.payload.records.some((account) => account.name === "مصروف التشغيل قبل النسخة"));
   assert.ok(!accounts.payload.records.some((account) => account.name === "حساب بعد النسخة"));
   assert.ok(!accounts.payload.records.some((account) => account.name === "تغيير قديم"));
   const journals = await request("/data/journalEntries", { cookie });
-  assert.ok(journals.payload.records.some((journal) => journal.description === "قيد محفوظ في النسخة"));
+  assert.ok(journals.payload.records.some((journal) => journal.description === "إيراد مبيعات منشور محفوظ في النسخة"));
+  assert.ok(journals.payload.records.some((journal) => journal.description === "مصروف تشغيل منشور محفوظ في النسخة"));
   const closures = await request("/data/financialClosures", { cookie });
   assert.equal(closures.response.status, 200, JSON.stringify(closures.payload));
-  assert.ok(closures.payload.records.some((closure) => closure.id === originalClosure.payload.closure.id));
+  const restoredClosure = closures.payload.records.find((closure) => closure.id === originalClosure.payload.closure.id);
+  assert.ok(restoredClosure);
+  const { userId: _userId, ...restoredClosureData } = restoredClosure;
+  assert.deepEqual(restoredClosureData, originalClosure.payload.closure);
   const summaryAfterRestore = await request("/accounting/summary?from=2026-01-01&to=2026-01-31", { cookie });
   assert.equal(summaryAfterRestore.response.status, 200, JSON.stringify(summaryAfterRestore.payload));
+  const { receivables: _restoredReceivables, payables: _restoredPayables, ...restoredReportTotals } = summaryAfterRestore.payload.totals;
+  assert.deepEqual(restoredClosureData.totals, restoredReportTotals);
+  assert.deepEqual(restoredClosureData.trialBalance, summaryAfterRestore.payload.trialBalance);
   assert.deepEqual(summaryAfterRestore.payload, summaryBeforeRestore.payload);
 
   const createdAfterRestore = await request("/data/accounts", {
