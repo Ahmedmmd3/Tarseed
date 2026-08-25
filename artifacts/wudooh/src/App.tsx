@@ -22,6 +22,7 @@ import Receivables from '@/pages/receivables';
 import Reports from '@/pages/reports';
 import Team from '@/pages/team';
 import ResetPassword from '@/pages/reset-password';
+import WorkspacePrep from '@/pages/workspace-prep';
 import {
   Features,
   Pricing,
@@ -62,6 +63,12 @@ function Router() {
         <Route path="/resources/e-invoicing" component={() => <ResourcePage kind="e-invoicing" />} />
         <Route path="/reset-password" component={ResetPassword} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
+        <Route path="/pos" component={() => <DashboardLayout><WorkspacePrep title="نقاط البيع" /></DashboardLayout>} />
+        <Route path="/sales" component={() => <DashboardLayout><WorkspacePrep title="إدارة المبيعات" /></DashboardLayout>} />
+        <Route path="/purchases" component={() => <DashboardLayout><WorkspacePrep title="إدارة المشتريات" /></DashboardLayout>} />
+        <Route path="/inventory" component={() => <DashboardLayout><WorkspacePrep title="إدارة المخزون" /></DashboardLayout>} />
+        <Route path="/hr" component={() => <DashboardLayout><WorkspacePrep title="الموارد البشرية" /></DashboardLayout>} />
+        <Route path="/operations" component={() => <DashboardLayout><WorkspacePrep title="العمليات التشغيلية" /></DashboardLayout>} />
         <Route path="/accounts" component={() => <DashboardLayout><Accounts /></DashboardLayout>} />
         <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />
         <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />
