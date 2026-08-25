@@ -65,7 +65,12 @@ function certificateExpiryWarningDays(raw: unknown, fallback = DEFAULT_CERTIFICA
 
 type CertificateStatus = "missing" | "valid" | "expiring" | "expired";
 
-function certificateState(unit: Pick<EInvoiceUnit, "certificateExpiresAt" | "certificateExpiryWarningDays">, now = new Date()): {
+type CertificateStateUnit = Pick<
+  EInvoiceUnit,
+  "certificateCiphertext" | "certificateExpiresAt" | "certificateExpiryWarningDays"
+>;
+
+function certificateState(unit: CertificateStateUnit, now = new Date()): {
   status: CertificateStatus;
   daysRemaining: number | null;
   warningDays: number;
@@ -75,7 +80,21 @@ function certificateState(unit: Pick<EInvoiceUnit, "certificateExpiresAt" | "cer
   if (!unit.certificateExpiresAt || Number.isNaN(unit.certificateExpiresAt.valueOf())) {
     return { status: "missing", daysRemaining: null, warningDays, usable: false };
   }
-  const millisecondsRemaining = unit.certificateExpiresAt.getTime() - now.getTime();
+  let certificateExpiry: Date;
+  try {
+    const certificatePem = decryptEInvoiceSecret(unit.certificateCiphertext);
+    if (!certificatePem) return { status: "missing", daysRemaining: null, warningDays, usable: false };
+    certificateExpiry = certificateExpiryFromPem(certificatePem);
+  } catch {
+    return { status: "missing", daysRemaining: null, warningDays, usable: false };
+  }
+  // Use the earlier of the persisted value and the X.509 value. A stale or
+  // tampered persisted date must never make an expired certificate usable.
+  const effectiveExpiry = new Date(Math.min(
+    unit.certificateExpiresAt.getTime(),
+    certificateExpiry.getTime(),
+  ));
+  const millisecondsRemaining = effectiveExpiry.getTime() - now.getTime();
   const daysRemaining = Math.ceil(millisecondsRemaining / DAY_IN_MILLISECONDS);
   if (millisecondsRemaining <= 0) {
     return { status: "expired", daysRemaining, warningDays, usable: false };
