@@ -15,6 +15,9 @@ const workflowPath = resolve(
 
 type WorkflowStep = {
   name?: string;
+  id?: string;
+  if?: string;
+  "continue-on-error"?: boolean;
   uses?: string;
   with?: {
     script?: string;
@@ -75,6 +78,7 @@ async function runWorkflowScript(
   script: string,
   github: WorkflowGithub,
   context: WorkflowContext,
+  errors: string[] = [],
 ): Promise<void> {
   const execute = new Function(
     "github",
@@ -84,9 +88,15 @@ async function runWorkflowScript(
   ) as (
     github: WorkflowGithub,
     context: WorkflowContext,
-    core: { notice: (message: string) => void },
+    core: {
+      notice: (message: string) => void;
+      error: (message: string) => void;
+    },
   ) => Promise<void>;
-  await execute(github, context, { notice: () => undefined });
+  await execute(github, context, {
+    notice: () => undefined,
+    error: (message) => errors.push(message),
+  });
 }
 
 async function startGitHubApi(
@@ -204,7 +214,7 @@ test("updates and closes the alert issue, not a same-title pull request", async 
     runId: 123,
   };
   const alertScript = await getWorkflowScript(
-    "Alert repository team about branch-protection drift",
+    "Synchronize branch-protection drift alert",
   );
   const closeScript = await getWorkflowScript(
     "Close resolved branch-protection alert",
@@ -277,6 +287,147 @@ test("updates and closes the alert issue, not a same-title pull request", async 
       process.env.BRANCH_PROTECTION_FAILURE = originalFailure;
     }
   }
+});
+
+test("reports alert synchronization failures from each GitHub API operation", async () => {
+  const alertScript = await getWorkflowScript(
+    "Synchronize branch-protection drift alert",
+  );
+  const closeScript = await getWorkflowScript(
+    "Close resolved branch-protection alert",
+  );
+  const context = {
+    serverUrl: "https://github.com",
+    repo: { owner: "example", repo: "repository" },
+    runId: 123,
+  };
+  const errors: string[] = [];
+
+  await assert.rejects(
+    runWorkflowScript(
+      alertScript,
+      {
+        paginate: async () => {
+          throw new Error("list unavailable");
+        },
+        rest: {
+          issues: {
+            listForRepo: () => undefined,
+            create: async () => {
+              throw new Error("create should not be called");
+            },
+            update: async () => {
+              throw new Error("update should not be called");
+            },
+          },
+        },
+      },
+      context,
+      errors,
+    ),
+    /Branch-protection alert synchronization failed while reading open alert issues: list unavailable/,
+  );
+  assert.match(errors.at(-1) ?? "", /synchronization failed/);
+
+  await assert.rejects(
+    runWorkflowScript(
+      alertScript,
+      {
+        paginate: async () => [],
+        rest: {
+          issues: {
+            listForRepo: () => undefined,
+            create: async () => {
+              throw new Error("create unavailable");
+            },
+            update: async () => {
+              throw new Error("update should not be called");
+            },
+          },
+        },
+      },
+      context,
+      errors,
+    ),
+    /Branch-protection alert synchronization failed while creating the alert issue: create unavailable/,
+  );
+
+  const existingIssue: WorkflowIssue = {
+    number: 7,
+    title: "Branch protection drift detected for main",
+    state: "open",
+  };
+  const updateFailureGithub = {
+    paginate: async () => [existingIssue],
+    rest: {
+      issues: {
+        listForRepo: () => undefined,
+        create: async () => {
+          throw new Error("create should not be called");
+        },
+        update: async () => {
+          throw new Error("update unavailable");
+        },
+      },
+    },
+  };
+  await assert.rejects(
+    runWorkflowScript(
+      alertScript,
+      updateFailureGithub,
+      context,
+      errors,
+    ),
+    /Branch-protection alert synchronization failed while updating existing alert issue #7: update unavailable/,
+  );
+
+  await assert.rejects(
+    runWorkflowScript(
+      closeScript,
+      {
+        paginate: async () => {
+          throw new Error("close list unavailable");
+        },
+        rest: {
+          issues: {
+            listForRepo: () => undefined,
+            create: async () => {
+              throw new Error("create should not be called");
+            },
+            update: async () => {
+              throw new Error("update should not be called");
+            },
+          },
+        },
+      },
+      context,
+      errors,
+    ),
+    /Branch-protection alert synchronization failed while reading open alert issues: close list unavailable/,
+  );
+
+  await assert.rejects(
+    runWorkflowScript(
+      closeScript,
+      {
+        paginate: async () => [existingIssue],
+        rest: {
+          issues: {
+            listForRepo: () => undefined,
+            create: async () => {
+              throw new Error("create should not be called");
+            },
+            update: async () => {
+              throw new Error("close update unavailable");
+            },
+          },
+        },
+      },
+      context,
+      errors,
+    ),
+    /Branch-protection alert synchronization failed while closing resolved alert issue #7: close update unavailable/,
+  );
 });
 
 test("explains how to fix insufficient branch-protection permission", async () => {

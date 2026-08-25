@@ -77,7 +77,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.branch-protection-token.outputs.token }}
 
-      - name: Alert repository team about branch-protection drift
+      - name: Synchronize branch-protection drift alert
+        id: synchronize-alert
+        continue-on-error: true
         if: ${{ steps.verify.outcome == 'failure' }}
         uses: actions/github-script@v7
         env:
@@ -110,65 +112,128 @@ jobs:
               `Workflow run: ${runUrl}`,
             ].join("\n");
 
-            const openIssues = await github.paginate(
-              github.rest.issues.listForRepo,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: "open",
-                per_page: 100,
-              },
-            );
+            const describeError = (error) =>
+              error instanceof Error ? error.message : String(error);
+            const failSynchronization = (operation, error) => {
+              const message =
+                `Branch-protection alert synchronization failed while ${operation}: ` +
+                describeError(error);
+              core.error(message);
+              throw new Error(message);
+            };
+
+            let openIssues;
+            try {
+              openIssues = await github.paginate(
+                github.rest.issues.listForRepo,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: "open",
+                  per_page: 100,
+                },
+              );
+            } catch (error) {
+              failSynchronization("reading open alert issues", error);
+            }
             const existingIssue = openIssues.find(
               (issue) => !issue.pull_request && issue.title === issueTitle,
             );
 
             if (existingIssue) {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existingIssue.number,
-                body: issueBody,
-              });
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  body: issueBody,
+                });
+              } catch (error) {
+                failSynchronization(
+                  `updating existing alert issue #${existingIssue.number}`,
+                  error,
+                );
+              }
               core.notice(`Updated existing alert issue #${existingIssue.number}.`);
             } else {
-              const { data: issue } = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: issueTitle,
-                body: issueBody,
-              });
+              let issue;
+              try {
+                ({ data: issue } = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: issueTitle,
+                  body: issueBody,
+                }));
+              } catch (error) {
+                failSynchronization("creating the alert issue", error);
+              }
               core.notice(`Created alert issue #${issue.number}.`);
             }
 
+      - name: Report branch-protection alert synchronization failure
+        if: ${{ always() && steps.synchronize-alert.outcome == 'failure' }}
+        run: |
+          echo "::error title=Branch-protection alert synchronization failed::The drift alert could not be read, created, or updated. Check the previous step for the GitHub API error."
+          exit 1
+
       - name: Close resolved branch-protection alert
+        id: close-alert
+        continue-on-error: true
         if: ${{ steps.verify.outcome == 'success' }}
         uses: actions/github-script@v7
         with:
           script: |
             const issueTitle = "Branch protection drift detected for main";
-            const openIssues = await github.paginate(
-              github.rest.issues.listForRepo,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: "open",
-                per_page: 100,
-              },
-            );
+            const describeError = (error) =>
+              error instanceof Error ? error.message : String(error);
+            const failSynchronization = (operation, error) => {
+              const message =
+                `Branch-protection alert synchronization failed while ${operation}: ` +
+                describeError(error);
+              core.error(message);
+              throw new Error(message);
+            };
+
+            let openIssues;
+            try {
+              openIssues = await github.paginate(
+                github.rest.issues.listForRepo,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: "open",
+                  per_page: 100,
+                },
+              );
+            } catch (error) {
+              failSynchronization("reading open alert issues", error);
+            }
             const existingIssue = openIssues.find(
               (issue) => !issue.pull_request && issue.title === issueTitle,
             );
 
             if (existingIssue) {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existingIssue.number,
-                state: "closed",
-              });
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existingIssue.number,
+                  state: "closed",
+                });
+              } catch (error) {
+                failSynchronization(
+                  `closing resolved alert issue #${existingIssue.number}`,
+                  error,
+                );
+              }
               core.notice(`Closed resolved alert issue #${existingIssue.number}.`);
             }
+
+      - name: Report resolved branch-protection alert synchronization failure
+        if: ${{ always() && steps.close-alert.outcome == 'failure' }}
+        run: |
+          echo "::error title=Resolved branch-protection alert synchronization failed::The resolved drift alert could not be read or closed. Check the previous step for the GitHub API error."
+          exit 1
 
       - name: Fail when branch-protection verification does not match
         if: ${{ steps.verify.outcome == 'failure' }}
