@@ -5,6 +5,7 @@ import {
   findMissingRequiredCheckNames,
   findCheckNameMismatches,
   formatMissingRequiredChecksError,
+  getActualRequiredCheckNames,
   getWorkflowCheckNames,
   getWorkflowJobNames,
 } from "./verify-ci-check-names";
@@ -376,6 +377,35 @@ test("reports protected checks missing from the workflow", () => {
       ["API server clean typecheck", "Frontend typecheck"],
     ),
     ["API server clean typecheck"],
+  );
+});
+
+test("reads both GitHub status-check response formats", () => {
+  assert.deepEqual(
+    getActualRequiredCheckNames({
+      required_status_checks: {
+        contexts: ["Frontend typecheck"],
+        checks: [{ context: "API server clean typecheck", app_id: -1 }],
+      },
+    }),
+    ["API server clean typecheck", "Frontend typecheck"],
+  );
+});
+
+test("treats an unprotected branch as having no required checks", () => {
+  assert.deepEqual(
+    getActualRequiredCheckNames({ required_status_checks: null }),
+    [],
+  );
+});
+
+test("rejects malformed GitHub status-check responses", () => {
+  assert.throws(
+    () =>
+      getActualRequiredCheckNames({
+        required_status_checks: { checks: [{ app_id: -1 }] },
+      }),
+    /invalid required status checks/,
   );
 });
 

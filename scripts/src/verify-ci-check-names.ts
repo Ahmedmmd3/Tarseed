@@ -11,10 +11,93 @@ import {
   type Document,
 } from "yaml";
 
-type BranchProtectionConfig = {
+export type BranchProtectionConfig = {
   branch: string;
   required_status_checks: string[];
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function parseBranchProtectionConfig(
+  value: unknown,
+  sourcePath: string,
+): BranchProtectionConfig {
+  if (
+    !isRecord(value) ||
+    typeof value.branch !== "string" ||
+    value.branch.length === 0 ||
+    !Array.isArray(value.required_status_checks) ||
+    value.required_status_checks.some(
+      (name) => typeof name !== "string" || name.length === 0,
+    )
+  ) {
+    throw new Error(
+      `Invalid branch protection config in ${sourcePath}. ` +
+        'Expected "branch" and a non-empty string array named "required_status_checks".',
+    );
+  }
+
+  return {
+    branch: value.branch,
+    required_status_checks: value.required_status_checks as string[],
+  };
+}
+
+export function getActualRequiredCheckNames(protection: unknown): string[] {
+  if (!isRecord(protection)) {
+    throw new Error("GitHub returned an invalid branch protection response.");
+  }
+
+  const requiredStatusChecks = protection.required_status_checks;
+  if (requiredStatusChecks === null) {
+    return [];
+  }
+  if (!isRecord(requiredStatusChecks)) {
+    throw new Error(
+      "GitHub returned an invalid required_status_checks object.",
+    );
+  }
+
+  const contexts = requiredStatusChecks.contexts;
+  const contextNames: string[] = [];
+  if (
+    contexts !== undefined &&
+    (!Array.isArray(contexts) ||
+      contexts.some((context) => typeof context !== "string"))
+  ) {
+    throw new Error("GitHub returned invalid legacy status-check contexts.");
+  }
+  if (contexts !== undefined) {
+    contextNames.push(...(contexts as string[]));
+  }
+
+  const checks = requiredStatusChecks.checks;
+  const checkNames: string[] = [];
+  if (
+    checks !== undefined &&
+    (!Array.isArray(checks) ||
+      checks.some(
+        (check) => !isRecord(check) || typeof check.context !== "string",
+      ))
+  ) {
+    throw new Error("GitHub returned invalid required status checks.");
+  }
+  if (checks !== undefined) {
+    checkNames.push(
+      ...(checks as Array<{ context: string }>).map((check) => check.context),
+    );
+  }
+
+  if (contexts === undefined && checks === undefined) {
+    throw new Error(
+      "GitHub returned required_status_checks without any check names.",
+    );
+  }
+
+  return sortedUnique([...contextNames, ...checkNames]);
+}
 
 const malformedJobDefinitionMessage =
   "Could not parse a job definition in the CI workflow.";
@@ -698,18 +781,10 @@ async function main() {
     readFile(workflowPath, "utf8"),
     readFile(protectionPath, "utf8"),
   ]);
-  const protection = JSON.parse(protectionFile) as BranchProtectionConfig;
-
-  if (
-    !protection.branch ||
-    !Array.isArray(protection.required_status_checks) ||
-    protection.required_status_checks.some((name) => typeof name !== "string")
-  ) {
-    throw new Error(
-      `Invalid branch protection config in ${protectionPath}. ` +
-        'Expected "branch" and a string array named "required_status_checks".',
-    );
-  }
+  const protection = parseBranchProtectionConfig(
+    JSON.parse(protectionFile) as unknown,
+    protectionPath,
+  );
 
   const workflowCheckNames = getWorkflowCheckNames(workflow);
   const workflowJobNames = workflowCheckNames.names;

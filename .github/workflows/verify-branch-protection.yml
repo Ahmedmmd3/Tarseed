@@ -1,0 +1,49 @@
+name: Verify branch protection
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify main branch protection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Configure these GitHub Actions secrets with a GitHub App that has
+      # Administration: read access to this repository:
+      # - BRANCH_PROTECTION_APP_ID
+      # - BRANCH_PROTECTION_APP_PRIVATE_KEY
+      - name: Create branch-protection reader token
+        id: branch-protection-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.BRANCH_PROTECTION_APP_ID }}
+          private-key: ${{ secrets.BRANCH_PROTECTION_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compare live main branch protection
+        run: pnpm run verify:branch-protection
+        env:
+          GITHUB_TOKEN: ${{ steps.branch-protection-token.outputs.token }}

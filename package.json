@@ -9,6 +9,7 @@
     "typecheck:api-server:clean": "rm -rf lib/db/dist lib/db/tsconfig.tsbuildinfo lib/api-zod/dist lib/api-zod/tsconfig.tsbuildinfo artifacts/api-server/.tsbuildinfo && pnpm --filter @workspace/api-server run typecheck",
     "typecheck:frontend": "pnpm --filter @workspace/wudooh --filter @workspace/mockup-sandbox run typecheck",
     "verify:ci-check-names": "pnpm --filter @workspace/scripts run verify:ci-check-names",
+    "verify:branch-protection": "pnpm --filter @workspace/scripts run verify:branch-protection",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
