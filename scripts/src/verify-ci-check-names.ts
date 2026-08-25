@@ -5,6 +5,7 @@ import {
   isAlias,
   isMap,
   isScalar,
+  isSeq,
   parseDocument,
   type Alias,
   type Document,
@@ -21,6 +22,10 @@ const malformedNestedJobDefinitionMessage =
   "Could not parse nested content in a CI job definition.";
 const unsupportedNestedJobDefinitionMessage =
   "Unsupported nested structure in a CI job definition. Job names must be scalar values.";
+const unsupportedMatrixJobMessage =
+  "Unsupported matrix job in the CI workflow. The CI check-name guard cannot " +
+  "determine GitHub's expanded matrix check names. Use separate non-matrix jobs " +
+  "or update the guard and branch protection checks together.";
 const unsupportedYamlConstructMessage =
   "Unsupported YAML construct in the CI workflow. Use mappings, sequences, " +
   "scalar values, anchors, aliases, flow collections, or block scalars.";
@@ -53,6 +58,68 @@ function resolveYamlAliases(
   }
 
   return resolveYamlAliases(resolved, document, aliases);
+}
+
+function findMapValue(
+  map: unknown,
+  key: string,
+  document: Document,
+  visited = new Set<object>(),
+): unknown {
+  if (!isMap(map)) {
+    return undefined;
+  }
+  if (visited.has(map)) {
+    throw unsupportedYamlConstruct(
+      `Merge key resolution for "${key}" is recursive.`,
+    );
+  }
+  visited.add(map);
+
+  try {
+    for (const item of map.items) {
+      const itemKey = resolveYamlAliases(item.key, document);
+      if (isScalar(itemKey) && itemKey.value === key) {
+        return item.value;
+      }
+    }
+
+    for (const item of map.items) {
+      const itemKey = resolveYamlAliases(item.key, document);
+      if (!isScalar(itemKey) || itemKey.value !== "<<") {
+        continue;
+      }
+
+      const mergeValue = resolveYamlAliases(item.value, document);
+      const mergeValues = isMap(mergeValue)
+        ? [mergeValue]
+        : isSeq(mergeValue)
+          ? mergeValue.items
+          : undefined;
+      if (mergeValues === undefined) {
+        throw unsupportedYamlConstruct(
+          `Merge key for "${key}" must reference a mapping or a sequence of mappings.`,
+        );
+      }
+
+      for (const merged of mergeValues) {
+        const resolvedMerged = resolveYamlAliases(merged, document);
+        if (!isMap(resolvedMerged)) {
+          throw unsupportedYamlConstruct(
+            `Merge key for "${key}" must reference a mapping or a sequence of mappings.`,
+          );
+        }
+        const value = findMapValue(resolvedMerged, key, document, visited);
+        if (value !== undefined) {
+          return value;
+        }
+      }
+    }
+  } finally {
+    visited.delete(map);
+  }
+
+  return undefined;
 }
 
 function hasMalformedSiblingJobDefinition(workflow: string): boolean {
@@ -137,6 +204,20 @@ export function getWorkflowJobNames(workflow: string): string[] {
       !isMap(jobDefinition)
     ) {
       throw new Error(malformedJobDefinitionMessage);
+    }
+
+    const strategy = findMapValue(jobDefinition, "strategy", document);
+    const resolvedStrategy =
+      strategy === undefined
+        ? undefined
+        : resolveYamlAliases(strategy, document);
+    if (
+      isMap(resolvedStrategy) &&
+      findMapValue(resolvedStrategy, "matrix", document) !== undefined
+    ) {
+      throw new Error(
+        `${unsupportedMatrixJobMessage} Job "${jobKey.value}" cannot be validated.`,
+      );
     }
 
     const jobName = jobDefinition.items.find((setting) => {

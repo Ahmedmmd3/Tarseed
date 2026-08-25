@@ -22,12 +22,25 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node: [20, 22]
 `;
 
   assert.deepEqual(getWorkflowJobNames(workflow), ["Lint", "Test"]);
+});
+
+test("rejects explicitly named matrix jobs before comparing branch protection", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  test:
+    name: Test (Node \${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+`),
+    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+  );
 });
 
 test("falls back to job IDs when jobs have no display name", () => {
@@ -40,6 +53,66 @@ jobs:
 `;
 
   assert.deepEqual(getWorkflowJobNames(workflow), ["build", "deploy"]);
+});
+
+test("rejects fallback matrix jobs before comparing branch protection", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+`),
+    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+  );
+});
+
+test("rejects matrix jobs inherited through a job merge alias", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+base-job: &base_job
+  runs-on: ubuntu-latest
+  strategy:
+    matrix:
+      node: [20, 22]
+jobs:
+  test:
+    <<: *base_job
+`),
+    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+  );
+});
+
+test("rejects matrix strategies inherited through a nested merge alias", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+base-strategy: &base_strategy
+  matrix:
+    node: [20, 22]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      <<: *base_strategy
+`),
+    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+  );
+});
+
+test("rejects matrix strategies inherited through flow-map merges", () => {
+  assert.throws(
+    () =>
+      getWorkflowJobNames(`
+base: &base { matrix: { node: [20, 22] } }
+jobs: { test: { runs-on: ubuntu-latest, strategy: { <<: *base } } }
+`),
+    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+  );
 });
 
 test("parses single- and double-quoted job names", () => {
@@ -68,7 +141,6 @@ shared-settings: &shared_settings
   "lint":
     "name": *shared_name
     <<: *shared_settings
-    strategy: { matrix: { node: [20, 22] } }
   test:
     <<: *shared_settings
     name: >-2
@@ -86,7 +158,7 @@ test("supports flow mappings for jobs and job definitions", () => {
   const workflow = `
 jobs: {
   lint: { name: Lint, runs-on: ubuntu-latest },
-  test: { runs-on: ubuntu-latest, strategy: { matrix: { node: [20, 22] } } }
+  test: { runs-on: ubuntu-latest }
 }
 `;
 
