@@ -148,12 +148,26 @@ async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string
   });
 }
 
+function deliveryFailureReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "Password reset email delivery is not configured.") {
+    return "لم يُضبط عنوان بريد الإرسال.";
+  }
+  const status = /Resend request failed with status (\d{3})/.exec(message)?.[1];
+  if (status) {
+    return `رفض مزود البريد Resend الطلب برمز الحالة ${status}.`;
+  }
+  return "تعذر الاتصال بمزود البريد Resend. راجع سجل الخادم.";
+}
+
 async function notifyOwnersAboutResetDeliveryFailure({
   organizationId,
   targetEmail,
+  reason,
 }: {
   organizationId: number;
   targetEmail: string;
+  reason: string;
 }): Promise<void> {
   const owners = await db.select({
     id: teamUsersTable.id,
@@ -171,7 +185,7 @@ async function notifyOwnersAboutResetDeliveryFailure({
     actorName: "النظام",
     action: "password_reset_delivery_failed",
     entity: targetEmail,
-    details: "تعذر تسليم رابط استعادة كلمة المرور. راجع إعدادات البريد وسجل الخدمة.",
+    details: `تعذر تسليم رابط استعادة كلمة المرور. السبب التشخيصي: ${reason}`,
   });
 
   await Promise.all(owners.map(async (owner) => {
@@ -184,6 +198,7 @@ async function notifyOwnersAboutResetDeliveryFailure({
             <h1 style="font-size:22px">تعذر إرسال رابط استعادة كلمة المرور</h1>
             <p>مرحباً ${escapeHtml(owner.name)}،</p>
             <p>تعذر على ترصيد تسليم رابط استعادة كلمة المرور لأحد أعضاء الفريق.</p>
+            <p>السبب التشخيصي: ${escapeHtml(reason)}</p>
             <p>راجع إعدادات البريد وسجل التدقيق في إدارة الفريق. لم يتم تضمين أي رمز أو رابط حساس في هذا التنبيه.</p>
           </div>`,
       });
@@ -340,11 +355,23 @@ router.post("/auth/password-reset/request", async (request: Request, response: R
     });
   } catch (error) {
     await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, record.id));
-    logger.error({ err: error, userId: user.id }, "Unable to deliver password reset email");
+    const reason = deliveryFailureReason(error);
+    logger.error(
+      {
+        err: error,
+        organizationId: user.organizationId,
+        userId: user.id,
+        provider: "resend",
+        operation: "password_reset_delivery",
+        deliveryFailureReason: reason,
+      },
+      "Unable to deliver password reset email",
+    );
     try {
       await notifyOwnersAboutResetDeliveryFailure({
         organizationId: user.organizationId,
         targetEmail: user.email,
+        reason,
       });
     } catch (notificationError) {
       logger.error(

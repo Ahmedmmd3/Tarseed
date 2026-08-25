@@ -10,6 +10,7 @@
     "pretypecheck": "tsc --build ../../lib/db ../../lib/api-zod",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:auth-security": "node --test test/auth-security.test.mjs",
+    "test:password-reset-delivery": "pnpm run build && node --test test/password-reset-delivery.test.mjs",
     "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs"
   },
   "dependencies": {
