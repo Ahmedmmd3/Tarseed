@@ -1,7 +1,7 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
-import { requireAuth, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -12,6 +12,12 @@ type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 class InventoryRouteError extends Error {
   constructor(message: string, readonly status: number = 409) {
     super(message);
+  }
+}
+
+async function requireLockedDataGeneration(tx: Transaction, response: Response): Promise<void> {
+  if (!await lockAndValidateDataGeneration(tx, response)) {
+    throw new InventoryRouteError("تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
   }
 }
 
@@ -140,7 +146,7 @@ async function runAction(response: Response, action: () => Promise<RecordData>):
   }
 }
 
-router.post("/inventory/transfers", requireAuth, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);
@@ -152,6 +158,7 @@ router.post("/inventory/transfers", requireAuth, requireInventory, async (reques
     requireLocations(auth, [fromWarehouseId, toWarehouseId]);
 
     const transfer = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
       const product = await lockRecord(tx, auth.organizationId, "products", productId);
       await lockWarehouses(tx, auth.organizationId, [fromWarehouseId, toWarehouseId]);
       const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
@@ -170,11 +177,12 @@ router.post("/inventory/transfers", requireAuth, requireInventory, async (reques
   });
 });
 
-router.post("/inventory/transfers/:id/approve", requireAuth, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers/:id/approve", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
     const transfer = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
       const current = await lockRecord(tx, auth.organizationId, "stockTransfers", transferId);
       const productId = integer(current.data.productId, "المنتج");
       const fromWarehouseId = integer(current.data.fromWarehouseId, "موقع المصدر");
@@ -198,11 +206,12 @@ router.post("/inventory/transfers/:id/approve", requireAuth, requireInventory, a
   });
 });
 
-router.post("/inventory/transfers/:id/cancel", requireAuth, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers/:id/cancel", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
     const transfer = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
       const current = await lockRecord(tx, auth.organizationId, "stockTransfers", transferId);
       const fromWarehouseId = integer(current.data.fromWarehouseId, "موقع المصدر");
       const toWarehouseId = integer(current.data.toWarehouseId, "موقع الوجهة");
@@ -217,11 +226,12 @@ router.post("/inventory/transfers/:id/cancel", requireAuth, requireInventory, as
   });
 });
 
-router.post("/inventory/transfers/:id/receive", requireAuth, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers/:id/receive", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
     const transfer = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
       const current = await lockRecord(tx, auth.organizationId, "stockTransfers", transferId);
       const productId = integer(current.data.productId, "المنتج");
       const fromWarehouseId = integer(current.data.fromWarehouseId, "موقع المصدر");
@@ -252,7 +262,7 @@ router.post("/inventory/transfers/:id/receive", requireAuth, requireInventory, a
   });
 });
 
-router.post("/inventory/sales", requireAuth, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/sales", requireAuth, requireCurrentDataGeneration, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);
@@ -261,6 +271,7 @@ router.post("/inventory/sales", requireAuth, requireSalesOrInventory, async (req
     const quantity = integer(body.quantity, "كمية البيع");
     requireLocations(auth, [warehouseId]);
     const sale = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
       const product = await lockRecord(tx, auth.organizationId, "products", productId);
       await lockWarehouses(tx, auth.organizationId, [warehouseId]);
       const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
@@ -280,7 +291,7 @@ router.post("/inventory/sales", requireAuth, requireSalesOrInventory, async (req
   });
 });
 
-router.post("/inventory/adjustments", requireAuth, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/adjustments", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);
@@ -289,6 +300,7 @@ router.post("/inventory/adjustments", requireAuth, requireInventory, async (requ
     const actualQuantity = nonNegativeInteger(body.actualQuantity, "الكمية الفعلية");
     requireLocations(auth, [warehouseId]);
     const adjustment = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
       const product = await lockRecord(tx, auth.organizationId, "products", productId);
       await lockWarehouses(tx, auth.organizationId, [warehouseId]);
       const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);

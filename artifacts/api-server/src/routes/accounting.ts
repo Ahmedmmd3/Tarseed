@@ -1,7 +1,7 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
-import { requireAuth, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -178,7 +178,7 @@ router.get("/accounting/summary", requireAuth, requireAccounting, async (request
   });
 });
 
-router.post("/accounting/sync-source-journals", requireAuth, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
+router.post("/accounting/sync-source-journals", requireAuth, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const [accounts, invoices, purchases, expenses, existingJournals] = await Promise.all([
     recordsFor(auth, "accounts"),
@@ -215,28 +215,36 @@ router.post("/accounting/sync-source-journals", requireAuth, requireAccounting, 
       skipped.push({ sourceId: source.record.id, reason: "تاريخ العملية يقع في فترة مالية مقفلة." });
       continue;
     }
-    await db.insert(erpRecordsTable).values({
-      organizationId: auth.organizationId,
-      tableName: "journalEntries",
-      data: {
-        number: `AUTO-${source.type.toUpperCase()}-${source.record.id}`,
-        date: sourceDate,
-        description: `${source.label} ${String(source.record.number ?? source.record.invoiceNumber ?? `#${source.record.id}`)}`,
-        status: "posted",
-        sourceType: source.type,
-        sourceId: source.record.id,
-        lines: [
-          { accountId: String(debitAccount.id), debit: amount, credit: 0 },
-          { accountId: String(creditAccount.id), debit: 0, credit: amount },
-        ],
-      },
+    const inserted = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) return false;
+      await tx.insert(erpRecordsTable).values({
+        organizationId: auth.organizationId,
+        tableName: "journalEntries",
+        data: {
+          number: `AUTO-${source.type.toUpperCase()}-${source.record.id}`,
+          date: sourceDate,
+          description: `${source.label} ${String(source.record.number ?? source.record.invoiceNumber ?? `#${source.record.id}`)}`,
+          status: "posted",
+          sourceType: source.type,
+          sourceId: source.record.id,
+          lines: [
+            { accountId: String(debitAccount.id), debit: amount, credit: 0 },
+            { accountId: String(creditAccount.id), debit: 0, credit: amount },
+          ],
+        },
+      });
+      return true;
     });
+    if (!inserted) {
+      response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+      return;
+    }
     created += 1;
   }
   response.json({ created, skipped });
 });
 
-router.post("/accounting/close", requireAuth, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+router.post("/accounting/close", requireAuth, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const body = request.body as Record<string, unknown>;
   const from = typeof body.from === "string" ? body.from : "";
@@ -259,23 +267,31 @@ router.post("/accounting/close", requireAuth, requireAccounting, async (request:
     return;
   }
   const report = calculateReport(accounts, journals, from, to);
-  const [closure] = await db.insert(erpRecordsTable).values({
-    organizationId: auth.organizationId,
-    tableName: "financialClosures",
-    data: {
-      from,
-      to,
-      closedAt: new Date().toISOString(),
-      closedBy: auth.id,
-      status: "closed",
-      policy: "snapshot_locked",
-      netIncome: report.totals.netIncome,
-      totals: report.totals,
-      trialBalance: report.trialBalance,
-      receivables: derivePartyBalances(receivables.length ? receivables : invoices, "receivable", to),
-      payables: derivePartyBalances(receivables.filter((record) => record.type === "payable").length ? receivables : purchases, "payable", to),
-    },
-  }).returning();
+  const closure = await db.transaction(async (tx) => {
+    if (!await lockAndValidateDataGeneration(tx, response)) return null;
+    const [created] = await tx.insert(erpRecordsTable).values({
+      organizationId: auth.organizationId,
+      tableName: "financialClosures",
+      data: {
+        from,
+        to,
+        closedAt: new Date().toISOString(),
+        closedBy: auth.id,
+        status: "closed",
+        policy: "snapshot_locked",
+        netIncome: report.totals.netIncome,
+        totals: report.totals,
+        trialBalance: report.trialBalance,
+        receivables: derivePartyBalances(receivables.length ? receivables : invoices, "receivable", to),
+        payables: derivePartyBalances(receivables.filter((record) => record.type === "payable").length ? receivables : purchases, "payable", to),
+      },
+    }).returning();
+    return created;
+  });
+  if (!closure) {
+    response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+    return;
+  }
   response.status(201).json({ closure: { ...closure.data, id: closure.id } });
 });
 

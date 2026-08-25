@@ -71,6 +71,8 @@ type StoreContextType = {
   canRetrySharedConnection: boolean;
   syncQueue: SyncOperation[];
   retrySharedConnection: () => Promise<void>;
+  flushPendingSyncOperations: () => Promise<boolean>;
+  clearPendingSyncOperations: () => void;
 };
 
 export type SharedUser = {
@@ -78,6 +80,7 @@ export type SharedUser = {
   accountId: number;
   organizationId: number;
   projectName: string;
+  dataGeneration: number;
   email: string;
   name: string;
   roleId: string;
@@ -94,6 +97,7 @@ export type SyncOperation = {
   action: 'create' | 'update';
   recordId: string;
   data: Record<string, unknown>;
+  dataGeneration: number;
   status: 'pending' | 'failed';
   error?: string;
   createdAt: string;
@@ -217,8 +221,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     writeSyncQueue(sessionKey, queue);
   }, []);
 
-  const enqueueSyncOperation = useCallback((operation: Omit<SyncOperation, 'id' | 'status' | 'createdAt'>): SyncOperation | null => {
-    if (!sharedSessionKey) return null;
+  const enqueueSyncOperation = useCallback((operation: Omit<SyncOperation, 'id' | 'status' | 'createdAt' | 'dataGeneration'>): SyncOperation | null => {
+    if (!sharedSessionKey || !currentUser) return null;
     const operationId = crypto.randomUUID();
     const queuedOperation: SyncOperation = {
       ...operation,
@@ -228,13 +232,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         : operation.data,
       status: 'pending',
       createdAt: new Date().toISOString(),
+      dataGeneration: currentUser.dataGeneration,
     };
     persistSyncQueue(sharedSessionKey, [
       ...syncQueueRef.current,
       queuedOperation,
     ]);
     return queuedOperation;
-  }, [persistSyncQueue, sharedSessionKey]);
+  }, [currentUser, persistSyncQueue, sharedSessionKey]);
 
   const completeCreatedSyncOperation = useCallback((operation: SyncOperation, recordId: string) => {
     if (!sharedSessionKey) return;
@@ -275,7 +280,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         if (operation.status === 'failed') return false;
         try {
           if (operation.action === 'create') {
-            const created = await createRecord<Record<string, unknown>>(operation.table, operation.data);
+            const created = await createRecord<Record<string, unknown>>(operation.table, operation.data, operation.dataGeneration);
             const normalized = normalizeRecord(operation.table, created);
             const optimisticRecord = queue
               .filter((item) => item.action === 'update' && item.recordId === operation.recordId)
@@ -297,7 +302,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               }));
             saveQueue(nextQueue);
           } else {
-            const updated = await updateRecord<Record<string, unknown>>(operation.table, operation.recordId, operation.data, operation.id);
+            const updated = await updateRecord<Record<string, unknown>>(operation.table, operation.recordId, operation.data, operation.dataGeneration, operation.id);
             const normalized = normalizeRecord(operation.table, updated);
             replaceLocalRecord(operation.table, operation.recordId, normalized, {
               accounts: setAccounts,
@@ -323,6 +328,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     });
     return inFlight;
   }, [persistSyncQueue]);
+
+  const flushPendingSyncOperations = useCallback(async (): Promise<boolean> => {
+    if (!sharedSessionKey || !syncQueueRef.current.length) return true;
+    return flushSyncQueue(sharedSessionKey);
+  }, [flushSyncQueue, sharedSessionKey]);
 
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify({
@@ -390,7 +400,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const sessionKey = String(sharedUser.organizationId);
       setSharedSessionKey(sessionKey);
       localStorage.setItem(sharedSessionKeyStorageKey, sessionKey);
-      const queue = readSyncQueue(sessionKey);
+      const storedQueue = readSyncQueue(sessionKey);
+      const queue = storedQueue.filter((operation) => operation.dataGeneration === sharedUser.dataGeneration);
+      if (queue.length !== storedQueue.length) writeSyncQueue(sessionKey, queue);
       syncQueueRef.current = queue;
       setSyncQueue(queue);
       await flushSyncQueue(sessionKey, queue);
@@ -443,9 +455,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('online', reconnect);
   }, [canRetrySharedConnection, loadSharedData]);
 
+  const currentDataGeneration = (): number => {
+    if (!currentUser) throw new Error('تعذر التحقق من إصدار بيانات المنشأة.');
+    return currentUser.dataGeneration;
+  };
+
   const addAccount = async (account: Omit<Account, 'id'>) => {
     if (connectionMode === 'remote') {
-      const created = normalizeAccount(await createRecord<Account>('accounts', account));
+      const created = normalizeAccount(await createRecord<Account>('accounts', account, currentDataGeneration()));
       setAccounts((current) => [...current, created]);
       return;
     }
@@ -458,7 +475,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const updateAccount = async (id: string, account: Partial<Account>) => {
     if (connectionMode === 'remote') {
-      const updated = normalizeAccount(await updateRecord<Account>('accounts', id, account));
+      const updated = normalizeAccount(await updateRecord<Account>('accounts', id, account, currentDataGeneration()));
       setAccounts((current) => current.map((item) => item.id === id ? updated : item));
       return;
     }
@@ -483,7 +500,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     if (connectionMode === 'remote' && queuedOperation) {
       try {
-        const created = normalizeJournal(await createRecord<Journal>('journalEntries', queuedOperation.data));
+        const created = normalizeJournal(await createRecord<Journal>('journalEntries', queuedOperation.data, queuedOperation.dataGeneration));
         setJournals((current) => current.map((item) => item.id === id ? created : item));
         completeCreatedSyncOperation(queuedOperation, created.id);
       } catch (error) {
@@ -502,7 +519,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     if (connectionMode === 'remote' && queuedOperation) {
       try {
-        const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, queuedOperation.data, queuedOperation.id));
+        const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, queuedOperation.data, queuedOperation.dataGeneration, queuedOperation.id));
         setJournals((current) => current.map((item) => item.id === id ? updated : item));
         completeSyncOperation(queuedOperation);
       } catch (error) {
@@ -527,7 +544,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setJournals((current) => current.map((item) => item.id === id ? { ...item, status: 'posted' } : item));
       if (!queuedOperation) return;
       try {
-        const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, queuedOperation.data, queuedOperation.id));
+        const updated = normalizeJournal(await updateRecord<Journal>('journalEntries', id, queuedOperation.data, queuedOperation.dataGeneration, queuedOperation.id));
         setJournals((current) => current.map((item) => item.id === id ? updated : item));
         completeSyncOperation(queuedOperation);
       } catch (error) {
@@ -565,7 +582,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const addReceivable = async (receivable: Omit<Receivable, 'id'>) => {
     if (connectionMode === 'remote') {
-      const created = normalizeReceivable(await createRecord<Receivable>('receivables', receivable));
+      const created = normalizeReceivable(await createRecord<Receivable>('receivables', receivable, currentDataGeneration()));
       setReceivables((current) => [...current, created]);
       return;
     }
@@ -578,7 +595,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const updateReceivable = async (id: string, receivable: Partial<Receivable>) => {
     if (connectionMode === 'remote') {
-      const updated = normalizeReceivable(await updateRecord<Receivable>('receivables', id, receivable));
+      const updated = normalizeReceivable(await updateRecord<Receivable>('receivables', id, receivable, currentDataGeneration()));
       setReceivables((current) => current.map((item) => item.id === id ? updated : item));
       return;
     }
@@ -595,7 +612,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const paid = Math.min(currentRecord.amount, currentRecord.paid + amount);
     const status: Receivable['status'] = paid >= currentRecord.amount ? 'paid' : 'partial';
     if (connectionMode === 'remote') {
-      const updated = normalizeReceivable(await updateRecord<Receivable>('receivables', id, { paid, status }));
+      const updated = normalizeReceivable(await updateRecord<Receivable>('receivables', id, { paid, status }, currentDataGeneration()));
       setReceivables((current) => current.map((item) => item.id === id ? updated : item));
       return;
     }
@@ -623,7 +640,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const response = await fetch('/api/accounting/close', {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentDataGeneration()),
+        },
         body: JSON.stringify({ from, to }),
       });
       const payload = await response.json() as { closure?: FinancialClosure; error?: string };
@@ -646,6 +666,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await loadSharedData();
   }, [loadSharedData, persistSyncQueue, sharedSessionKey]);
 
+  const clearPendingSyncOperations = useCallback((): void => {
+    if (!sharedSessionKey) return;
+    syncQueueRef.current = [];
+    setSyncQueue([]);
+    writeSyncQueue(sharedSessionKey, []);
+  }, [sharedSessionKey]);
+
   return (
     <StoreContext.Provider value={{
       currentUser, signOut,
@@ -655,6 +682,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       closures, closePeriod, connectionMode, canRetrySharedConnection,
       syncQueue,
       retrySharedConnection,
+       flushPendingSyncOperations,
+       clearPendingSyncOperations,
     }}>
       {children}
     </StoreContext.Provider>
@@ -676,11 +705,14 @@ async function getRecords<T>(table: string): Promise<T[]> {
   return payload.records ?? [];
 }
 
-async function createRecord<T>(table: string, data: unknown): Promise<T> {
+async function createRecord<T>(table: string, data: unknown, dataGeneration: number): Promise<T> {
   const response = await fetch(`/api/data/${table}`, {
     method: 'POST',
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Wudooh-Data-Generation': String(dataGeneration),
+    },
     body: JSON.stringify(data),
   });
   const payload = await response.json() as { record?: T; error?: string };
@@ -688,12 +720,13 @@ async function createRecord<T>(table: string, data: unknown): Promise<T> {
   return payload.record;
 }
 
-async function updateRecord<T>(table: string, id: string, data: unknown, operationId?: string): Promise<T> {
+async function updateRecord<T>(table: string, id: string, data: unknown, dataGeneration: number, operationId?: string): Promise<T> {
   const response = await fetch(`/api/data/${table}/${id}`, {
     method: 'PATCH',
     credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
+      'X-Wudooh-Data-Generation': String(dataGeneration),
       ...(operationId ? { 'Idempotency-Key': operationId } : {}),
     },
     body: JSON.stringify(data),
@@ -859,6 +892,7 @@ function isSyncOperation(value: unknown): value is SyncOperation {
     && (operation.action === 'create' || operation.action === 'update')
     && typeof operation.recordId === 'string'
     && Boolean(operation.data && typeof operation.data === 'object' && !Array.isArray(operation.data))
+    && Number.isSafeInteger(operation.dataGeneration)
     && (operation.status === 'pending' || operation.status === 'failed')
     && typeof operation.createdAt === 'string';
 }

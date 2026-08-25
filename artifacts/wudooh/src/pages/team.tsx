@@ -78,7 +78,7 @@ const createEmptyForm = (): MemberForm => ({
 });
 
 export default function Team() {
-  const { currentUser } = useStore();
+  const { currentUser, clearPendingSyncOperations, syncQueue, flushPendingSyncOperations } = useStore();
   const { toast } = useToast();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
@@ -300,7 +300,18 @@ export default function Team() {
     }
     try {
       const backup = JSON.parse(await file.text()) as unknown;
-      if (!window.confirm('استعادة النسخة ستستبدل جميع بيانات التشغيل والمحاسبة الحالية لهذه المنشأة. هل تريد المتابعة؟')) {
+      if (!await flushPendingSyncOperations()) {
+        toast({
+          title: 'تعذرت مزامنة التغييرات المحلية',
+          description: 'لن تبدأ الاستعادة قبل مزامنة التغييرات المعلقة. راجع الاتصال ثم أعد المحاولة.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      const pendingChangesWarning = syncQueue.length > 0
+        ? ' وستُحذف أيضاً التغييرات المحلية المعلقة التي لم تُزامن بعد.'
+        : '';
+      if (!window.confirm(`استعادة النسخة ستستبدل جميع بيانات التشغيل والمحاسبة الحالية لهذه المنشأة.${pendingChangesWarning} هل تريد المتابعة؟`)) {
         return;
       }
       setIsRestoringBackup(true);
@@ -316,6 +327,7 @@ export default function Team() {
         title: 'تمت استعادة النسخة الاحتياطية',
         description: `تم استعادة ${payload.recordCount ?? 0} سجل. ستُحدَّث الصفحة الآن.`,
       });
+      clearPendingSyncOperations();
       window.setTimeout(() => window.location.reload(), 700);
     } catch (error) {
       const message = error instanceof Error

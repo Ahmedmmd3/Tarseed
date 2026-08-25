@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
-import { requireAuth, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const INVENTORY_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales"]);
@@ -127,7 +127,7 @@ router.get("/data/:table", requireAuth, async (request: Request, response: Respo
   response.json({ records: data });
 });
 
-router.post("/data/:table", requireAuth, async (request: Request, response: Response): Promise<void> => {
+router.post("/data/:table", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   if (!access) return;
   if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
@@ -178,21 +178,37 @@ router.post("/data/:table", requireAuth, async (request: Request, response: Resp
       return;
     }
   }
-  const [created] = await db.insert(erpRecordsTable).values({
-    organizationId: access.auth.organizationId,
-    tableName: access.tableName,
-    clientOperationId: clientOperationId || null,
-    data: recordData,
-  }).onConflictDoNothing({
-    target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
-  }).returning();
-  const record = created ?? (clientOperationId
-    ? (await db.select().from(erpRecordsTable).where(and(
-      eq(erpRecordsTable.organizationId, access.auth.organizationId),
-      eq(erpRecordsTable.tableName, access.tableName),
-      eq(erpRecordsTable.clientOperationId, clientOperationId),
-    )).limit(1))[0]
-    : undefined);
+  let created;
+  let record;
+  try {
+    ({ created, record } = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) {
+        throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+      }
+      const [inserted] = await tx.insert(erpRecordsTable).values({
+        organizationId: access.auth.organizationId,
+        tableName: access.tableName,
+        clientOperationId: clientOperationId || null,
+        data: recordData,
+      }).onConflictDoNothing({
+        target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+      }).returning();
+      const saved = inserted ?? (clientOperationId
+        ? (await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, access.auth.organizationId),
+          eq(erpRecordsTable.tableName, access.tableName),
+          eq(erpRecordsTable.clientOperationId, clientOperationId),
+        )).limit(1))[0]
+        : undefined);
+      return { created: inserted, record: saved };
+    }));
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
   if (!record) {
     response.status(500).json({ error: "تعذر حفظ السجل." });
     return;
@@ -201,7 +217,7 @@ router.post("/data/:table", requireAuth, async (request: Request, response: Resp
   response.status(created ? 201 : 200).json({ record: { ...record.data, id: record.id, userId: access.auth.organizationId } });
 });
 
-router.patch("/data/:table/:id", requireAuth, async (request: Request, response: Response): Promise<void> => {
+router.patch("/data/:table/:id", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   const id = Number(request.params.id);
   if (!access || !Number.isInteger(id)) {
@@ -228,6 +244,7 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
   }
   if (access.tableName === "products") {
     const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) return { kind: "stale" as const };
       const [current] = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
@@ -243,6 +260,10 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
       response.status(404).json({ error: "السجل غير متاح." });
       return;
     }
+    if (result.kind === "stale") {
+      response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+      return;
+    }
     if (result.kind === "forbidden") {
       response.status(403).json({ error: "ليس لديك صلاحية للمواقع المحددة." });
       return;
@@ -255,6 +276,9 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
     const fingerprint = operationFingerprint(body);
     try {
       const result = await db.transaction(async (tx) => {
+        if (!await lockAndValidateDataGeneration(tx, response)) {
+          throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+        }
         const [claimedOperation] = await tx.insert(erpRecordsTable).values({
           organizationId: access.auth.organizationId,
           tableName: "mutationOperations",
@@ -375,12 +399,26 @@ router.patch("/data/:table/:id", requireAuth, async (request: Request, response:
     response.status(403).json({ error: "ليس لديك صلاحية للمواقع المحددة." });
     return;
   }
-  const [updated] = await db.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
+  let updated;
+  try {
+    [updated] = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) {
+        throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+      }
+      return tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
+    });
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
   await audit(access.auth, `${access.tableName}_updated`, String(id));
   response.json({ record: { ...updated.data, id: updated.id, userId: access.auth.organizationId } });
 });
 
-router.delete("/data/:table/:id", requireAuth, async (request: Request, response: Response): Promise<void> => {
+router.delete("/data/:table/:id", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   const id = Number(request.params.id);
   if (!access || !Number.isInteger(id)) {
@@ -393,6 +431,7 @@ router.delete("/data/:table/:id", requireAuth, async (request: Request, response
   }
   if (access.tableName === "products") {
     const deleted = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) return "stale" as const;
       const [product] = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
@@ -414,6 +453,10 @@ router.delete("/data/:table/:id", requireAuth, async (request: Request, response
     });
     if (deleted === "missing") {
       response.status(404).json({ error: "السجل غير متاح." });
+      return;
+    }
+    if (deleted === "stale") {
+      response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
       return;
     }
     if (deleted === "forbidden") {
@@ -444,7 +487,20 @@ router.delete("/data/:table/:id", requireAuth, async (request: Request, response
     response.status(409).json({ error: "لا يمكن حذف مصدر محاسبي من فترة مالية مقفلة." });
     return;
   }
-  await db.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
+  try {
+    await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) {
+        throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+      }
+      await tx.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
+    });
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
   await audit(access.auth, `${access.tableName}_deleted`, String(id));
   response.sendStatus(204);
 });

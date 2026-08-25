@@ -3,17 +3,20 @@ import test from "node:test";
 
 const origin = process.env.LOCATION_SCOPE_TEST_ORIGIN ?? "http://127.0.0.1:80";
 const apiBase = `${origin}/api`;
+const generationByCookie = new Map();
 
 function unique(value) {
   return `${value}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 async function request(path, { method = "GET", body, cookie } = {}) {
+  const generation = generationByCookie.get(cookie);
   const response = await fetch(`${apiBase}${path}`, {
     method,
     headers: {
       Origin: origin,
       ...(cookie ? { Cookie: cookie } : {}),
+      ...(Number.isSafeInteger(generation) ? { "X-Wudooh-Data-Generation": String(generation) } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
@@ -36,7 +39,9 @@ async function registerOwner() {
     body: { projectName: unique("منشأة نطاق المواقع"), name: "مالك الاختبار", email, password },
   });
   assert.equal(response.status, 201, JSON.stringify(payload));
-  return { email, password, cookie: cookieFrom(response) };
+  const cookie = cookieFrom(response);
+  generationByCookie.set(cookie, payload.user.dataGeneration);
+  return { email, password, cookie };
 }
 
 async function login(email, password) {
@@ -45,7 +50,9 @@ async function login(email, password) {
     body: { email, password },
   });
   assert.equal(response.status, 200, JSON.stringify(payload));
-  return cookieFrom(response);
+  const cookie = cookieFrom(response);
+  generationByCookie.set(cookie, payload.user.dataGeneration);
+  return cookie;
 }
 
 async function mutate(cookie, method, path, body) {

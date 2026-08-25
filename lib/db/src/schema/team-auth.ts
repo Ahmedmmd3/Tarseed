@@ -12,6 +12,7 @@ import {
 export const organizationsTable = pgTable("organizations", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
+  dataGeneration: integer("data_generation").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
