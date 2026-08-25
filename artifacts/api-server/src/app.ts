@@ -4,7 +4,7 @@ import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { createHash } from "node:crypto";
 import router from "./routes";
-import { logger, recordExpiredStripeWebhookSignature } from "./lib/logger";
+import { dispatchStripeWebhookSecurityAlert, logger, recordExpiredStripeWebhookSignature } from "./lib/logger";
 import { isExpiredStripeSignatureError, processStripeWebhook } from "./lib/stripe-webhooks";
 
 const app: Express = express();
@@ -24,7 +24,15 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
     const expiredSignature = isExpiredStripeSignatureError(error);
     if (expiredSignature) {
       try {
-        await recordExpiredStripeWebhookSignature();
+        const metric = await recordExpiredStripeWebhookSignature();
+        if (metric.alertTriggered) {
+          dispatchStripeWebhookSecurityAlert({
+            rejectionReason: "expired_signature",
+            attemptsInWindow: metric.attemptsInWindow,
+            windowSeconds: metric.windowSeconds,
+            windowStartedAt: metric.windowStartedAt,
+          });
+        }
       } catch {
         logger.error(
           { errorType: "ExpiredSignatureMetricPersistenceError" },

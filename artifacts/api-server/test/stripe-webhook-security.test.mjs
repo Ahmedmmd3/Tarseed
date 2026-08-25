@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  dispatchStripeWebhookSecurityAlert,
   recordExpiredStripeWebhookSignature,
   STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD,
   STRIPE_EXPIRED_SIGNATURE_WINDOW_MS,
@@ -30,6 +31,7 @@ test("يجمع الرفض المتزامن وينبه مرة واحدة داخل
     windowSeconds: STRIPE_EXPIRED_SIGNATURE_WINDOW_MS / 1000,
     alertThreshold: STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD,
     alertTriggered: false,
+    windowStartedAt: new Date(startedAt).toISOString(),
   });
 
   const concurrentMetrics = await Promise.all(
@@ -56,4 +58,27 @@ test("يجمع الرفض المتزامن وينبه مرة واحدة داخل
   metric = await recordExpiredStripeWebhookSignature(startedAt + STRIPE_EXPIRED_SIGNATURE_WINDOW_MS);
   assert.equal(metric.attemptsInWindow, 1);
   assert.equal(metric.alertTriggered, false);
+});
+
+test("يرسل التنبيه التشغيلي السبب والعدد والنافذة دون تعطيل مسار الرفض", async () => {
+  const alert = {
+    rejectionReason: "expired_signature",
+    attemptsInWindow: STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD,
+    windowSeconds: STRIPE_EXPIRED_SIGNATURE_WINDOW_MS / 1000,
+    windowStartedAt: new Date().toISOString(),
+  };
+  let delivered;
+  let releaseDelivery;
+  const deliveryStarted = new Promise((resolve) => {
+    releaseDelivery = resolve;
+  });
+
+  dispatchStripeWebhookSecurityAlert(alert, async (received) => {
+    delivered = received;
+    await deliveryStarted;
+  });
+
+  assert.deepEqual(delivered, alert);
+  releaseDelivery();
+  await new Promise((resolve) => setImmediate(resolve));
 });
