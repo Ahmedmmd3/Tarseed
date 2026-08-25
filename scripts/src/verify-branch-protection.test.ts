@@ -156,8 +156,14 @@ test("reads branch protection using the configured token", async () => {
   }
 });
 
-test("creates one alert, updates it on repeated failure, and closes it after recovery", async () => {
-  const issues: WorkflowIssue[] = [];
+test("updates and closes the alert issue, not a same-title pull request", async () => {
+  const pullRequest: WorkflowIssue = {
+    number: 99,
+    title: "Branch protection drift detected for main",
+    state: "open",
+    pull_request: { url: "https://api.github.com/repos/example/repository/pulls/99" },
+  };
+  const issues: WorkflowIssue[] = [pullRequest];
   const createCalls: IssueCall[] = [];
   const updateCalls: IssueCall[] = [];
   let nextIssueNumber = 1;
@@ -216,9 +222,10 @@ test("creates one alert, updates it on repeated failure, and closes it after rec
 
     assert.equal(createCalls.length, 1);
     assert.equal(updateCalls.length, 0);
-    assert.equal(issues.length, 1);
-    assert.equal(issues[0]?.number, 1);
-    assert.equal(issues[0]?.state, "open");
+    assert.equal(issues.length, 2);
+    assert.equal(issues[1]?.number, 1);
+    assert.equal(issues[1]?.state, "open");
+    assert.equal(pullRequest.state, "open");
     assert.match(
       createCalls[0]?.body ?? "",
       /Frontend typecheck[\s\S]*Legacy check/,
@@ -239,9 +246,14 @@ test("creates one alert, updates it on repeated failure, and closes it after rec
     assert.equal(createCalls.length, 1);
     assert.equal(updateCalls.length, 1);
     assert.equal(updateCalls[0]?.issue_number, 1);
-    assert.equal(issues.length, 1);
+    assert.equal(issues.length, 2);
     assert.match(updateCalls[0]?.body ?? "", /Frontend typecheck, Deploy/);
-    assert.equal(issues[0]?.state, "open");
+    assert.equal(issues[1]?.state, "open");
+    assert.equal(pullRequest.state, "open");
+    assert.equal(
+      updateCalls.some((call) => call.issue_number === pullRequest.number),
+      false,
+    );
 
     await runWorkflowScript(closeScript, github, context);
 
@@ -249,7 +261,15 @@ test("creates one alert, updates it on repeated failure, and closes it after rec
     assert.equal(updateCalls.length, 2);
     assert.equal(updateCalls[1]?.issue_number, 1);
     assert.equal(updateCalls[1]?.state, "closed");
-    assert.equal(issues[0]?.state, "closed");
+    assert.equal(issues[1]?.state, "closed");
+    assert.equal(pullRequest.state, "open");
+    assert.equal(
+      updateCalls.some(
+        (call) =>
+          call.issue_number === pullRequest.number && call.state === "closed",
+      ),
+      false,
+    );
   } finally {
     if (originalFailure === undefined) {
       delete process.env.BRANCH_PROTECTION_FAILURE;
