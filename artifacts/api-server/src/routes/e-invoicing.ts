@@ -1,4 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
+import { X509Certificate } from "node:crypto";
 import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import {
   db,
@@ -29,6 +30,10 @@ import {
 } from "../middleware/team-auth";
 
 const router: IRouter = Router();
+const DEFAULT_CERTIFICATE_EXPIRY_WARNING_DAYS = 30;
+const MIN_CERTIFICATE_EXPIRY_WARNING_DAYS = 1;
+const MAX_CERTIFICATE_EXPIRY_WARNING_DAYS = 365;
+const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 
 type RecordData = Record<string, unknown>;
 
@@ -47,6 +52,61 @@ function optionalText(raw: unknown, limit = 10_000): string | undefined {
   if (raw == null || raw === "") return undefined;
   if (typeof raw !== "string" || raw.trim().length > limit) throw new EInvoiceRouteError("إحدى القيم النصية غير صالحة.");
   return raw.trim();
+}
+
+function certificateExpiryWarningDays(raw: unknown, fallback = DEFAULT_CERTIFICATE_EXPIRY_WARNING_DAYS): number {
+  if (raw == null || raw === "") return fallback;
+  const days = Number(raw);
+  if (!Number.isInteger(days) || days < MIN_CERTIFICATE_EXPIRY_WARNING_DAYS || days > MAX_CERTIFICATE_EXPIRY_WARNING_DAYS) {
+    throw new EInvoiceRouteError(`فترة التنبيه يجب أن تكون بين ${MIN_CERTIFICATE_EXPIRY_WARNING_DAYS} و${MAX_CERTIFICATE_EXPIRY_WARNING_DAYS} يوماً.`);
+  }
+  return days;
+}
+
+type CertificateStatus = "missing" | "valid" | "expiring" | "expired";
+
+function certificateState(unit: Pick<EInvoiceUnit, "certificateExpiresAt" | "certificateExpiryWarningDays">, now = new Date()): {
+  status: CertificateStatus;
+  daysRemaining: number | null;
+  warningDays: number;
+  usable: boolean;
+} {
+  const warningDays = certificateExpiryWarningDays(unit.certificateExpiryWarningDays);
+  if (!unit.certificateExpiresAt || Number.isNaN(unit.certificateExpiresAt.valueOf())) {
+    return { status: "missing", daysRemaining: null, warningDays, usable: false };
+  }
+  const millisecondsRemaining = unit.certificateExpiresAt.getTime() - now.getTime();
+  const daysRemaining = Math.ceil(millisecondsRemaining / DAY_IN_MILLISECONDS);
+  if (millisecondsRemaining <= 0) {
+    return { status: "expired", daysRemaining, warningDays, usable: false };
+  }
+  return {
+    status: daysRemaining <= warningDays ? "expiring" : "valid",
+    daysRemaining,
+    warningDays,
+    usable: true,
+  };
+}
+
+function certificateExpiryFromPem(certificatePem: string): Date {
+  try {
+    const certificate = new X509Certificate(certificatePem);
+    const expiresAt = new Date(certificate.validTo);
+    if (Number.isNaN(expiresAt.valueOf())) throw new Error("Invalid certificate expiry");
+    return expiresAt;
+  } catch {
+    throw new EInvoiceRouteError("شهادة وحدة الإصدار غير صالحة. الصق شهادة PEM التي أصدرتها بوابة فاتورة.");
+  }
+}
+
+function requireUsableCertificate(unit: EInvoiceUnit): void {
+  const certificate = certificateState(unit);
+  if (certificate.status === "expired") {
+    throw new EInvoiceRouteError("انتهت شهادة وحدة الإصدار. جدّدها ثم أعد فحص الامتثال قبل إرسال الفواتير.", 409);
+  }
+  if (certificate.status === "missing") {
+    throw new EInvoiceRouteError("لا يمكن الإرسال قبل حفظ شهادة يمكن التحقق من تاريخ انتهائها.", 409);
+  }
 }
 
 function safeId(raw: unknown): number {
@@ -185,6 +245,15 @@ async function authorityRequest(
 
 function unitResponse(unit: EInvoiceUnit): RecordData {
   const seller = sellerFromUnit(unit);
+  const certificate = certificateState(unit);
+  const readyForSubmission = Boolean(
+    configurationIsComplete(seller)
+    && unit.certificateCiphertext
+    && unit.csidCiphertext
+    && unit.secretCiphertext
+    && unit.complianceSuiteStatus === "passed"
+    && certificate.usable,
+  );
   return {
     id: unit.id,
     unitName: unit.unitName,
@@ -205,6 +274,11 @@ function unitResponse(unit: EInvoiceUnit): RecordData {
     csrReady: Boolean(unit.csrPem && unit.privateKeyCiphertext),
     credentialsReady: Boolean(unit.certificateCiphertext && unit.csidCiphertext && unit.secretCiphertext),
     certificateExpiresAt: unit.certificateExpiresAt?.toISOString() ?? null,
+    certificateExpiryWarningDays: certificate.warningDays,
+    certificateStatus: certificate.status,
+    certificateDaysRemaining: certificate.daysRemaining,
+    certificateUsable: certificate.usable,
+    readyForSubmission,
     complianceStatus: unit.complianceStatus,
     complianceSuiteStatus: unit.complianceSuiteStatus,
     complianceSuiteResults: parseComplianceSuiteResults(unit.complianceSuiteResults),
@@ -274,6 +348,7 @@ router.put("/e-invoicing/setup", requireAuth, requireSubscriptionAccess, require
       environment: body.environment === "production" ? "production" : "sandbox",
       ...seller,
       vatRate: seller.vatRate.toFixed(2),
+      certificateExpiryWarningDays: certificateExpiryWarningDays(body.certificateExpiryWarningDays, current.certificateExpiryWarningDays),
       status: current.csrPem ? "csr_generated" : "configured",
       updatedAt: new Date(),
     }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
@@ -301,6 +376,22 @@ router.post("/e-invoicing/setup/csr", requireAuth, requireSubscriptionAccess, re
   });
 });
 
+router.put("/e-invoicing/setup/certificate-warning", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const auth = requireOwner(response);
+  if (!auth) return;
+  await run(response, async () => {
+    const current = await unitForOrganization(auth.organizationId);
+    const body = value(request.body);
+    const warningDays = certificateExpiryWarningDays(body.certificateExpiryWarningDays);
+    const [updated] = await db.update(eInvoiceUnitsTable).set({
+      certificateExpiryWarningDays: warningDays,
+      updatedAt: new Date(),
+    }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
+    await audit(auth, "einvoice_certificate_warning_updated", String(updated.id), String(warningDays));
+    return { unit: unitResponse(updated) };
+  });
+});
+
 router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const auth = requireOwner(response);
   if (!auth) return;
@@ -308,11 +399,10 @@ router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, r
     const body = value(request.body);
     const current = await unitForOrganization(auth.organizationId);
     if (!current.privateKeyCiphertext) throw new EInvoiceRouteError("أنشئ طلب الشهادة أولاً ثم أكمل اختبار الامتثال في بوابة فاتورة.");
-    const certificateExpiresAt = optionalText(body.certificateExpiresAt, 40);
-    const parsedExpiry = certificateExpiresAt ? new Date(certificateExpiresAt) : null;
-    if (parsedExpiry && Number.isNaN(parsedExpiry.valueOf())) throw new EInvoiceRouteError("تاريخ انتهاء الشهادة غير صالح.");
+    const certificatePem = requiredText(body.certificatePem, "شهادة وحدة الإصدار", 30_000);
+    const parsedExpiry = certificateExpiryFromPem(certificatePem);
     const [updated] = await db.update(eInvoiceUnitsTable).set({
-      certificateCiphertext: encryptEInvoiceSecret(requiredText(body.certificatePem, "شهادة وحدة الإصدار", 30_000)),
+      certificateCiphertext: encryptEInvoiceSecret(certificatePem),
       csidCiphertext: encryptEInvoiceSecret(requiredText(body.csid, "معرّف شهادة الحل", 5_000)),
       secretCiphertext: encryptEInvoiceSecret(requiredText(body.secret, "سر شهادة الحل", 5_000)),
       certificateExpiresAt: parsedExpiry,
@@ -324,6 +414,14 @@ router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, r
       lastComplianceCheckAt: null,
       updatedAt: new Date(),
     }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
+    await db.update(eInvoiceDocumentsTable).set({
+      status: "pending_compliance",
+      updatedAt: new Date(),
+    }).where(and(
+      eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+      eq(eInvoiceDocumentsTable.unitId, current.id),
+      inArray(eInvoiceDocumentsTable.status, ["pending_submission", "rejected"]),
+    ));
     await audit(auth, "einvoice_credentials_saved", String(updated.id));
     return { unit: unitResponse(updated) };
   });
@@ -333,6 +431,8 @@ router.get("/e-invoicing/documents", requireAuth, requireSubscriptionAccess, asy
   const auth = requireSales(response);
   if (!auth) return;
   await run(response, async () => {
+    const unit = await unitForOrganization(auth.organizationId);
+    const certificate = certificateState(unit);
     const records = await db.select().from(eInvoiceDocumentsTable).where(eq(
       eInvoiceDocumentsTable.organizationId,
       auth.organizationId,
@@ -343,7 +443,9 @@ router.get("/e-invoicing/documents", requireAuth, requireSubscriptionAccess, asy
         invoiceRecordId: document.invoiceRecordId,
         parentDocumentId: document.parentDocumentId,
         documentType: document.documentType,
-        status: document.status,
+        status: document.status === "pending_submission" && !certificate.usable
+          ? (certificate.status === "expired" ? "certificate_expired" : "certificate_action_required")
+          : document.status,
         invoiceNumber: document.invoiceNumber,
         uuid: document.uuid,
         invoiceCounter: document.invoiceCounter,
@@ -414,6 +516,7 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
     const body = value(request.body);
     const preferredDocumentId = body.documentId == null ? null : safeId(body.documentId);
     const unit = await unitForOrganization(auth.organizationId);
+    requireUsableCertificate(unit);
     const csid = decryptEInvoiceSecret(unit.csidCiphertext);
     const secret = decryptEInvoiceSecret(unit.secretCiphertext);
     if (!csid || !secret) throw new EInvoiceRouteError("احفظ Compliance CSID وبياناته قبل فحص الامتثال.", 409);
@@ -556,20 +659,15 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     )).limit(1);
     if (!document?.xmlObjectPath) throw new EInvoiceRouteError("لا يوجد XML مهيأ لإرساله.", 409);
     const unit = await unitForOrganization(auth.organizationId);
-    const csid = decryptEInvoiceSecret(unit.csidCiphertext);
-    const secret = decryptEInvoiceSecret(unit.secretCiphertext);
+    requireUsableCertificate(unit);
     const documentCompliancePassed = parseComplianceSuiteResults(unit.complianceSuiteResults)
       .some((result) => result.status === "passed" && result.documentId === document.id);
-    if (!csid || !secret || unit.complianceSuiteStatus !== "passed" || !documentCompliancePassed) {
+    if (!unit.csidCiphertext || !unit.secretCiphertext || unit.complianceSuiteStatus !== "passed" || !documentCompliancePassed) {
       throw new EInvoiceRouteError("لا يمكن الإرسال قبل اجتياز حزمة حالات الامتثال الرسمية في Sandbox، بما فيها هذا المستند.", 409);
     }
     if (!["pending_submission", "rejected"].includes(document.status)) {
       throw new EInvoiceRouteError("لا يمكن إرسال هذا المستند في حالته الحالية.", 409);
     }
-    const baseUrl = unit.environment === "production"
-      ? process.env.ZATCA_PRODUCTION_BASE_URL
-      : process.env.ZATCA_SANDBOX_BASE_URL;
-    if (!baseUrl) throw new EInvoiceRouteError("عنوان بيئة فاتورة غير مهيأ على الخادم. أضف عنوان البيئة المعتمد قبل الإرسال.", 409);
     const endpoint = document.documentType === "standard"
       ? "/invoices/clearance/single"
       : "/invoices/reporting/single";
@@ -585,9 +683,41 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       notInArray(eInvoiceDocumentsTable.status, ["submitting", "cleared", "reported", "submission_unknown"]),
     )).returning();
     if (!claimed) throw new EInvoiceRouteError("هناك محاولة إرسال قيد المعالجة أو نتيجة غير مؤكدة لهذا المستند.", 409);
+    const latestUnit = await unitForOrganization(auth.organizationId);
+    const latestCertificate = certificateState(latestUnit);
+    let submissionCredentials: { baseUrl: string; csid: string; secret: string } | null = null;
+    try {
+      requireUsableCertificate(latestUnit);
+      const latestCsid = decryptEInvoiceSecret(latestUnit.csidCiphertext);
+      const latestSecret = decryptEInvoiceSecret(latestUnit.secretCiphertext);
+      const latestDocumentCompliancePassed = parseComplianceSuiteResults(latestUnit.complianceSuiteResults)
+        .some((result) => result.status === "passed" && result.documentId === document.id);
+      if (!latestCsid || !latestSecret || latestUnit.complianceSuiteStatus !== "passed" || !latestDocumentCompliancePassed) {
+        throw new EInvoiceRouteError("تغيّرت بيانات الشهادة أو حالة الامتثال قبل الإرسال. أعد فحص الامتثال قبل المحاولة.", 409);
+      }
+      const latestBaseUrl = latestUnit.environment === "production"
+        ? process.env.ZATCA_PRODUCTION_BASE_URL
+        : process.env.ZATCA_SANDBOX_BASE_URL;
+      if (!latestBaseUrl) throw new EInvoiceRouteError("عنوان بيئة فاتورة غير مهيأ على الخادم. أضف عنوان البيئة المعتمد قبل الإرسال.", 409);
+      submissionCredentials = { baseUrl: latestBaseUrl, csid: latestCsid, secret: latestSecret };
+    } catch (error) {
+      await db.update(eInvoiceDocumentsTable).set({
+        status: latestCertificate.usable ? "pending_compliance" : "pending_submission",
+        submissionError: error instanceof Error ? error.message : "لم تعد الشهادة صالحة للإرسال.",
+        updatedAt: new Date(),
+      }).where(eq(eInvoiceDocumentsTable.id, document.id));
+      throw error;
+    }
+    if (!submissionCredentials) throw new EInvoiceRouteError("تعذر تجهيز بيانات الإرسال.", 500);
     let remote: { response: globalThis.Response; body: RecordData };
     try {
-      remote = await authorityRequest(baseUrl, endpoint, csid, secret, document);
+      remote = await authorityRequest(
+        submissionCredentials.baseUrl,
+        endpoint,
+        submissionCredentials.csid,
+        submissionCredentials.secret,
+        document,
+      );
     } catch {
       await db.update(eInvoiceDocumentsTable).set({
         status: "submission_unknown",

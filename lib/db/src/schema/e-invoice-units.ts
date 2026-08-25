@@ -38,6 +38,7 @@ export const eInvoiceUnitsTable = pgTable(
     csidCiphertext: text("csid_ciphertext"),
     secretCiphertext: text("secret_ciphertext"),
     certificateExpiresAt: timestamp("certificate_expires_at", { withTimezone: true }),
+    certificateExpiryWarningDays: integer("certificate_expiry_warning_days").notNull().default(30),
     complianceStatus: text("compliance_status").notNull().default("not_started"),
     complianceSuiteStatus: text("compliance_suite_status").notNull().default("not_started"),
     complianceSuiteResults: text("compliance_suite_results"),

@@ -13,7 +13,8 @@ import {
   Send,
   PlusCircle,
   Copy,
-  Info
+  Info,
+  CalendarClock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -36,6 +37,7 @@ import {
   FormMessage,
   FormDescription,
 } from '@/components/ui/form';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Select,
   SelectContent,
@@ -52,6 +54,7 @@ import {
   useUpdateSetup,
   useGenerateCsr,
   useUpdateCredentials,
+  useUpdateCertificateWarning,
   useEInvoicingDocuments,
   useSubmitDocument,
   useComplianceCheck,
@@ -81,7 +84,6 @@ const credentialsSchema = z.object({
   certificatePem: z.string().min(1, 'مطلوب'),
   csid: z.string().min(1, 'مطلوب'),
   secret: z.string().min(1, 'مطلوب'),
-  certificateExpiresAt: z.string().optional(),
 });
 
 const noteSchema = z.object({
@@ -103,6 +105,8 @@ const documentStatusLabels: Record<EInvoiceDocument['status'], { label: string; 
   pending_credentials: { label: 'ينتظر تفعيل الشهادة', className: 'border-amber-200 bg-amber-50 text-amber-700' },
   pending_compliance: { label: 'ينتظر اعتماد الامتثال', className: 'border-amber-200 bg-amber-50 text-amber-800' },
   pending_submission: { label: 'جاهز للإرسال', className: 'border-blue-200 bg-blue-50 text-blue-700' },
+  certificate_action_required: { label: 'يتطلب تحديث الشهادة', className: 'border-amber-200 bg-amber-50 text-amber-800' },
+  certificate_expired: { label: 'متوقف: الشهادة منتهية', className: 'border-rose-200 bg-rose-50 text-rose-700' },
   submitting: { label: 'جارٍ الإرسال', className: 'border-blue-200 bg-blue-50 text-blue-700' },
   submission_unknown: { label: 'نتيجة الإرسال غير مؤكدة', className: 'border-amber-200 bg-amber-50 text-amber-800' },
   reported: { label: 'تم التبليغ', className: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
@@ -156,6 +160,7 @@ export default function EInvoicing() {
 
 function DocumentsTab() {
   const { data: documents, isLoading, isError, refetch } = useEInvoicingDocuments();
+  const { data: setup } = useEInvoicingSetup();
   const submitDoc = useSubmitDocument();
   const complianceCheck = useComplianceCheck();
   const { currentUser } = useStore();
@@ -181,8 +186,13 @@ function DocumentsTab() {
 
   const handleComplianceCheck = async (id: number) => {
     try {
-      await complianceCheck.mutateAsync(id);
-      toast({ title: 'اجتازت الحزمة الرسمية', description: 'أقرت أدوات Sandbox الرسمية جميع الحالات المطلوبة، وأصبحت مستندات الحزمة جاهزة للإرسال.' });
+      const result = await complianceCheck.mutateAsync(id);
+      toast({
+        title: 'اجتازت الحزمة الرسمية',
+        description: result.unit.readyForSubmission
+          ? 'أقرت أدوات Sandbox الرسمية جميع الحالات المطلوبة، وأصبحت مستندات الحزمة جاهزة للإرسال.'
+          : 'أقرت أدوات Sandbox الرسمية جميع الحالات المطلوبة، لكن الإرسال سيبقى متوقفاً حتى تكون الشهادة سارية.',
+      });
     } catch (err: any) {
       toast({ title: 'لم يجتز فحص الامتثال', description: err.message, variant: 'destructive' });
     }
@@ -203,7 +213,9 @@ function DocumentsTab() {
   }
 
   return (
-    <div className="rounded-[28px] border border-slate-200 bg-white shadow-xl shadow-slate-950/5 overflow-hidden">
+    <div className="space-y-4">
+      {setup && <CertificateAlert setup={setup} />}
+      <div className="rounded-[28px] border border-slate-200 bg-white shadow-xl shadow-slate-950/5 overflow-hidden">
       <div className="border-b border-slate-100 bg-slate-50/50 p-5 flex items-center justify-between">
         <h2 className="text-lg font-black text-slate-900">أحدث المستندات الإلكترونية</h2>
         <Button variant="outline" size="sm" onClick={() => refetch()} className="gap-2 text-slate-600">
@@ -297,6 +309,7 @@ function DocumentsTab() {
           </tbody>
         </table>
       </div>
+      </div>
     </div>
   );
 }
@@ -334,6 +347,8 @@ function SetupTab() {
         {setup.configurationComplete && !setup.credentialsReady && (
           <CsrGenerationCard setup={setup} />
         )}
+        {setup.credentialsReady && <CertificateRenewalCard setup={setup} />}
+        <CertificateWarningSettings setup={setup} />
       </div>
     </div>
   );
@@ -389,6 +404,124 @@ function StatusCard({ setup }: { setup: EGSUnit }) {
             })}
           </div>
         </div>
+        <div className="flex items-start gap-3 border-t border-slate-200 pt-4">
+          {setup.certificateStatus === 'valid' || setup.certificateStatus === 'expiring'
+            ? <CheckCircle2 className={`mt-0.5 h-5 w-5 ${setup.certificateStatus === 'expiring' ? 'text-amber-500' : 'text-emerald-500'}`} />
+            : <AlertCircle className="mt-0.5 h-5 w-5 text-rose-500" />}
+          <div>
+            <span className={`block text-sm font-bold ${setup.certificateStatus === 'valid' ? 'text-emerald-700' : setup.certificateStatus === 'expiring' ? 'text-amber-700' : 'text-rose-700'}`}>
+              {setup.certificateStatus === 'missing'
+                ? 'تاريخ انتهاء الشهادة غير مسجل'
+                : setup.certificateStatus === 'expired'
+                  ? 'شهادة وحدة الإصدار منتهية'
+                  : setup.certificateStatus === 'expiring'
+                    ? `الشهادة ستنتهي خلال ${setup.certificateDaysRemaining} يوماً`
+                    : 'شهادة وحدة الإصدار سارية'}
+            </span>
+            <span className="mt-1 block text-xs text-slate-500">
+              {setup.readyForSubmission ? 'الوحدة مؤهلة للإرسال بعد اجتياز حزمة الامتثال.' : 'لن يُسمح بالإرسال حتى تكتمل المتطلبات وتكون الشهادة سارية.'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CertificateAlert({ setup }: { setup: EGSUnit }) {
+  if (setup.certificateStatus === 'valid') return null;
+  const isExpired = setup.certificateStatus === 'expired';
+  const isExpiring = setup.certificateStatus === 'expiring';
+  return (
+    <Alert
+      variant={isExpired || setup.certificateStatus === 'missing' ? 'destructive' : 'default'}
+      className={isExpiring ? 'border-amber-200 bg-amber-50 text-amber-900' : undefined}
+      data-testid="certificate-alert"
+    >
+      <CalendarClock className="h-5 w-5" />
+      <AlertTitle>
+        {isExpired ? 'توقّف إرسال الفواتير: الشهادة منتهية' : isExpiring ? 'اقترب انتهاء شهادة وحدة الإصدار' : 'أكمل تاريخ انتهاء شهادة وحدة الإصدار'}
+      </AlertTitle>
+      <AlertDescription>
+        {isExpired
+          ? 'حدّث الشهادة من بوابة فاتورة ثم أدخل الشهادة الجديدة وتاريخ انتهائها. لن تُرسل أي فاتورة قبل إتمام فحص الامتثال من جديد.'
+          : isExpiring
+            ? `متبقٍ ${setup.certificateDaysRemaining} يوماً حسب إعداد التنبيه (${setup.certificateExpiryWarningDays} يوماً). جدّد الشهادة مبكراً لتجنب توقف الإرسال.`
+            : 'لا يمكن اعتبار الوحدة جاهزة للإرسال قبل تسجيل تاريخ انتهاء الشهادة.'}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+function CertificateRenewalCard({ setup }: { setup: EGSUnit }) {
+  return (
+    <div className="rounded-[24px] border border-amber-200 bg-amber-50 p-6 shadow-sm" data-testid="certificate-renewal-card">
+      <h3 className="mb-2 font-black text-amber-950">التجديد الآمن للشهادة</h3>
+      <p className="mb-4 text-xs leading-5 text-amber-800">
+        لا نعرض بيانات الاعتماد المحفوظة. عند التجديد استخدم القيم الجديدة من بوابة فاتورة فقط.
+      </p>
+      <ol className="mb-5 list-decimal space-y-2 pr-5 text-xs leading-5 text-amber-900">
+        <li>جدّد شهادة وحدة الإصدار من بوابة فاتورة قبل موعد الانتهاء.</li>
+        <li>أدخل الشهادة الجديدة وCSID والسر؛ وسيقرأ النظام تاريخ الانتهاء من الشهادة.</li>
+        <li>أعد تشغيل حزمة الامتثال في Sandbox قبل استئناف الإرسال.</li>
+      </ol>
+      <div className="mb-4 rounded-xl border border-amber-200 bg-white/70 px-3 py-2 text-xs text-amber-900">
+        {setup.certificateStatus === 'expired'
+          ? 'الإرسال متوقف حالياً حتى تكتمل عملية التجديد وفحص الامتثال.'
+          : setup.certificateStatus === 'expiring'
+            ? `متبقٍ ${setup.certificateDaysRemaining} يوماً على الشهادة الحالية.`
+            : setup.certificateStatus === 'missing'
+              ? 'أدخل تاريخ انتهاء الشهادة حتى يتمكن النظام من التحقق من صلاحيتها.'
+              : 'الشهادة الحالية سارية.'}
+      </div>
+      <CredentialsDialog />
+    </div>
+  );
+}
+
+function CertificateWarningSettings({ setup }: { setup: EGSUnit }) {
+  const updateWarning = useUpdateCertificateWarning();
+  const { toast } = useToast();
+  const [warningDays, setWarningDays] = useState(String(setup.certificateExpiryWarningDays));
+
+  useEffect(() => {
+    setWarningDays(String(setup.certificateExpiryWarningDays));
+  }, [setup.certificateExpiryWarningDays]);
+
+  const handleSave = async () => {
+    const days = Number(warningDays);
+    if (!Number.isInteger(days) || days < 1 || days > 365) {
+      toast({ title: 'قيمة غير صالحة', description: 'اختر فترة تنبيه بين يوم واحد و365 يوماً.', variant: 'destructive' });
+      return;
+    }
+    try {
+      await updateWarning.mutateAsync(days);
+      toast({ title: 'تم الحفظ', description: 'تم تحديث فترة التنبيه قبل انتهاء الشهادة.' });
+    } catch (err: any) {
+      toast({ title: 'تعذر الحفظ', description: err.message, variant: 'destructive' });
+    }
+  };
+
+  return (
+    <div className="rounded-[24px] border border-slate-200 bg-white p-6 shadow-sm" data-testid="certificate-warning-settings">
+      <h3 className="mb-2 font-black text-slate-900">تنبيه انتهاء الشهادة</h3>
+      <p className="mb-4 text-xs leading-5 text-slate-500">سنظهر تنبيهاً في مركز الفوترة قبل انتهاء الشهادة بهذه المدة.</p>
+      <div className="flex items-end gap-3">
+        <div className="flex-1">
+          <label htmlFor="certificate-warning-days" className="mb-2 block text-xs font-bold text-slate-700">عدد الأيام</label>
+          <Input
+            id="certificate-warning-days"
+            type="number"
+            min={1}
+            max={365}
+            value={warningDays}
+            onChange={(event) => setWarningDays(event.target.value)}
+            dir="ltr"
+          />
+        </div>
+        <Button type="button" variant="outline" onClick={handleSave} disabled={updateWarning.isPending}>
+          {updateWarning.isPending ? 'جاري الحفظ...' : 'حفظ'}
+        </Button>
       </div>
     </div>
   );

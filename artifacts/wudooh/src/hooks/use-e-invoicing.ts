@@ -20,7 +20,12 @@ export type EGSUnit = {
   configurationComplete: boolean;
   csrReady: boolean;
   credentialsReady: boolean;
-  certificateExpiresAt?: string;
+  certificateExpiresAt: string | null;
+  certificateExpiryWarningDays: number;
+  certificateStatus: 'missing' | 'valid' | 'expiring' | 'expired';
+  certificateDaysRemaining: number | null;
+  certificateUsable: boolean;
+  readyForSubmission: boolean;
   complianceStatus: 'not_started' | 'checking' | 'passed' | 'failed' | 'unknown';
   complianceSuiteStatus: 'not_started' | 'checking' | 'passed' | 'failed' | 'unknown';
   complianceSuiteResults: ComplianceFixtureResult[];
@@ -56,7 +61,7 @@ export type EInvoiceDocument = {
   invoiceRecordId: number;
   parentDocumentId: number | null;
   documentType: 'simplified' | 'standard' | 'credit_note' | 'debit_note';
-  status: 'pending_configuration' | 'pending_credentials' | 'pending_compliance' | 'pending_submission' | 'submitting' | 'submission_unknown' | 'reported' | 'cleared' | 'rejected';
+  status: 'pending_configuration' | 'pending_credentials' | 'pending_compliance' | 'pending_submission' | 'certificate_action_required' | 'certificate_expired' | 'submitting' | 'submission_unknown' | 'reported' | 'cleared' | 'rejected';
   invoiceNumber: string;
   uuid: string;
   invoiceCounter: number;
@@ -148,12 +153,40 @@ export function useGenerateCsr() {
   });
 }
 
+export function useUpdateCertificateWarning() {
+  const queryClient = useQueryClient();
+  const { currentUser } = useStore();
+
+  return useMutation({
+    mutationFn: async (certificateExpiryWarningDays: number) => {
+      const res = await fetch('/api/e-invoicing/setup/certificate-warning', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ certificateExpiryWarningDays }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to update certificate warning');
+      }
+      const data = await res.json();
+      return data.unit as EGSUnit;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['e-invoicing-setup'], data);
+    },
+  });
+}
+
 export function useUpdateCredentials() {
   const queryClient = useQueryClient();
   const { currentUser } = useStore();
 
   return useMutation({
-    mutationFn: async (credentials: { certificatePem: string; csid: string; secret: string; certificateExpiresAt?: string }) => {
+    mutationFn: async (credentials: { certificatePem: string; csid: string; secret: string }) => {
       const res = await fetch('/api/e-invoicing/credentials', {
         method: 'PUT',
         headers: {
@@ -243,7 +276,7 @@ export function useComplianceCheck() {
         const d = await res.json().catch(() => ({}));
         throw new Error(d.error || 'Failed to run compliance check');
       }
-      return await res.json() as { unit: EGSUnit; document: EInvoiceDocument };
+      return await res.json() as { unit: EGSUnit };
     },
     onSuccess: (data) => {
       queryClient.setQueryData(['e-invoicing-setup'], data.unit);
