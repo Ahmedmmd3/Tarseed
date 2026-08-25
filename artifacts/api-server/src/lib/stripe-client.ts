@@ -5,6 +5,36 @@ type StripeCredentials = {
   secretKey: string;
 };
 
+type StripeSyncWebhookProcessor = Pick<StripeSync, "processWebhook">;
+
+let stripeSyncTestFactory: (() => StripeSyncWebhookProcessor) | null = null;
+
+export function setStripeSyncWebhookProcessorForTests(
+  factory: (() => StripeSyncWebhookProcessor) | null,
+): void {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Stripe Sync test overrides are only available in test mode.");
+  }
+  stripeSyncTestFactory = factory;
+}
+
+function stripeClientOptions(): Stripe.StripeConfig {
+  if (process.env.NODE_ENV !== "test") return {};
+
+  const configuredBaseUrl = process.env.STRIPE_API_BASE_URL?.trim();
+  if (!configuredBaseUrl) return {};
+
+  const baseUrl = new URL(configuredBaseUrl);
+  if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+    throw new Error("STRIPE_API_BASE_URL must use http or https.");
+  }
+  return {
+    host: baseUrl.hostname,
+    port: baseUrl.port || (baseUrl.protocol === "https:" ? 443 : 80),
+    protocol: baseUrl.protocol.slice(0, -1) as "http" | "https",
+  };
+}
+
 async function getStripeCredentials(): Promise<StripeCredentials> {
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
@@ -38,10 +68,12 @@ async function getStripeCredentials(): Promise<StripeCredentials> {
 
 export async function getUncachableStripeClient(): Promise<Stripe> {
   const { secretKey } = await getStripeCredentials();
-  return new Stripe(secretKey);
+  return new Stripe(secretKey, stripeClientOptions());
 }
 
 export async function getStripeSync(): Promise<StripeSync> {
+  if (stripeSyncTestFactory) return stripeSyncTestFactory() as StripeSync;
+
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("DATABASE_URL is required for Stripe sync.");
   const { secretKey } = await getStripeCredentials();

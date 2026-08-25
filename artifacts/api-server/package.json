@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:auth-security": "node --test test/auth-security.test.mjs",
     "test:password-reset-delivery": "pnpm run build && node --test test/password-reset-delivery.test.mjs",
+    "test:billing": "NODE_ENV=test sh -c 'out=test/.billing-flow.test.mjs; trap \"rm -f $out\" EXIT; esbuild test/billing-flow.test.mjs --bundle --platform=node --format=esm --banner:js=\"import { createRequire as __bannerCreateRequire } from '\\''node:module'\\''; import * as __bannerPath from '\\''node:path'\\''; import * as __bannerUrl from '\\''node:url'\\''; const require = __bannerCreateRequire(import.meta.url); const __filename = __bannerUrl.fileURLToPath(import.meta.url); const __dirname = __bannerPath.dirname(__filename);\" --outfile=\"$out\" --external:stripe --external:stripe-replit-sync --external:pino --external:pino-http --external:pino-pretty --external:thread-stream && node --test \"$out\"'",
     "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs"
     ,"test:e-invoicing": "esbuild test/e-invoicing-signature.test.mjs --bundle --platform=node --format=esm --outfile=/tmp/e-invoicing-signature.test.mjs && node --test /tmp/e-invoicing-signature.test.mjs"
     ,"test:zatca-compliance": "esbuild test/e-invoicing-compliance-fixtures.test.mjs --bundle --platform=node --format=esm --outfile=/tmp/e-invoicing-compliance-fixtures.test.mjs && node --test /tmp/e-invoicing-compliance-fixtures.test.mjs"
