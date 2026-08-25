@@ -4,7 +4,7 @@ import { db, erpRecordsTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
-const INVENTORY_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales"]);
+const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
@@ -65,6 +65,12 @@ function isLocationAllowed(auth: AuthContext, tableName: string, data: Record<st
 
 function isAccountingSource(tableName: string): boolean {
   return tableName === "invoices" || tableName === "purchaseOrders" || tableName === "expenses";
+}
+
+function specializedMutationMessage(tableName: string): string {
+  return tableName === "invoices"
+    ? "تُنشأ فواتير البيع وتُحفظ من نقطة البيع المعتمدة فقط."
+    : "تُسجّل حركات المخزون من المسار المعتمد فقط.";
 }
 
 async function audit(auth: AuthContext, action: string, entity: string): Promise<void> {
@@ -148,8 +154,8 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
   const access = requireTableAccess(request, response);
   if (!access) return;
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
-  if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
-    response.status(405).json({ error: "تُسجّل حركات المخزون من المسار المعتمد فقط." });
+  if (SPECIALIZED_MUTATION_TABLES.has(access.tableName)) {
+    response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
   if (access.tableName === "financialClosures") {
@@ -239,8 +245,8 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     return;
   }
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
-  if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
-    response.status(405).json({ error: "تُعدّل حركات المخزون من المسار المعتمد فقط." });
+  if (SPECIALIZED_MUTATION_TABLES.has(access.tableName)) {
+    response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
   const body = request.body;
@@ -441,8 +447,8 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
     return;
   }
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
-  if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
-    response.status(405).json({ error: "لا يمكن حذف حركة مخزون معتمدة." });
+  if (SPECIALIZED_MUTATION_TABLES.has(access.tableName)) {
+    response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
   if (access.tableName === "products") {

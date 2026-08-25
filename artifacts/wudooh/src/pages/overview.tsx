@@ -7,13 +7,13 @@ type Module = { title: string; description: string; href: string; icon: LucideIc
 
 const modules: Module[] = [
   { title: 'نقطة البيع', description: 'سجّل مبيعاتك وفواتيرك بسرعة من شاشة واحدة.', href: '/pos', icon: Store, tone: 'bg-teal-50 text-teal-700', permission: 'sales', ready: true, id: 'pos' },
-  { title: 'المبيعات والعملاء', description: 'تابع العملاء والفواتير وحركة البيع اليومية.', href: '/sales', icon: ShoppingCart, tone: 'bg-blue-50 text-blue-700', permission: 'sales', ready: false, id: 'sales' },
-  { title: 'المخزون والمنتجات', description: 'راقب الأرصدة والمنتجات وحركات المستودعات.', href: '/inventory', icon: Boxes, tone: 'bg-violet-50 text-violet-700', permission: 'inventory', ready: false, id: 'inventory' },
-  { title: 'المشتريات والموردون', description: 'نظّم أوامر الشراء والتزامات الموردين.', href: '/purchases', icon: Truck, tone: 'bg-amber-50 text-amber-700', permission: 'inventory', ready: false, id: 'purchases' },
+  { title: 'المبيعات والعملاء', description: 'تابع العملاء والفواتير وحركة البيع اليومية.', href: '/sales', icon: ShoppingCart, tone: 'bg-blue-50 text-blue-700', permission: 'sales', ready: true, id: 'sales' },
+  { title: 'المخزون والمنتجات', description: 'راقب الأرصدة والمنتجات وحركات المستودعات.', href: '/inventory', icon: Boxes, tone: 'bg-violet-50 text-violet-700', permission: 'inventory', ready: true, id: 'inventory' },
+  { title: 'المشتريات والموردون', description: 'نظّم أوامر الشراء والتزامات الموردين.', href: '/purchases', icon: Truck, tone: 'bg-amber-50 text-amber-700', permission: 'inventory', ready: true, id: 'purchases' },
   { title: 'المحاسبة', description: 'الحسابات والقيود والذمم في سجل مترابط.', href: '/accounts', icon: ReceiptText, tone: 'bg-sky-50 text-sky-700', permission: 'accounting', ready: true, id: 'accounting' },
   { title: 'التقارير المالية', description: 'اقرأ أداء منشأتك من أرقام واضحة ومترابطة.', href: '/reports', icon: BarChart3, tone: 'bg-indigo-50 text-indigo-700', permission: 'reports', ready: true, id: 'reports' },
-  { title: 'الموارد البشرية', description: 'رتّب بيانات فريقك وصلاحيات العمل.', href: '/hr', icon: UsersRound, tone: 'bg-rose-50 text-rose-700', permission: 'hr', ready: false, id: 'hr' },
-  { title: 'العمليات والمشاريع', description: 'تابع أعمالك ومشاريعك من البداية حتى الإنجاز.', href: '/operations', icon: BriefcaseBusiness, tone: 'bg-orange-50 text-orange-700', permission: 'operations', ready: false, id: 'operations' },
+  { title: 'الموارد البشرية', description: 'رتّب بيانات فريقك وصلاحيات العمل.', href: '/hr', icon: UsersRound, tone: 'bg-rose-50 text-rose-700', permission: 'hr', ready: true, id: 'hr' },
+  { title: 'العمليات والمشاريع', description: 'تابع أعمالك ومشاريعك من البداية حتى الإنجاز.', href: '/operations', icon: BriefcaseBusiness, tone: 'bg-orange-50 text-orange-700', permission: 'operations', ready: true, id: 'operations' },
 ];
 
 export default function Overview() {

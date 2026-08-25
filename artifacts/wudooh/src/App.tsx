@@ -23,8 +23,12 @@ import Reports from '@/pages/reports';
 import Team from '@/pages/team';
 import ActivityLog from '@/pages/activity-log';
 import ResetPassword from '@/pages/reset-password';
-import WorkspacePrep from '@/pages/workspace-prep';
 import POS from '@/pages/pos';
+import Sales from '@/pages/sales';
+import Purchases from '@/pages/purchases';
+import Inventory from '@/pages/inventory';
+import HR from '@/pages/hr';
+import Operations from '@/pages/operations';
 import ManagerPortal from '@/pages/manager-portal';
 import {
   Features,
@@ -72,11 +76,11 @@ function Router() {
         <Route path="/manager" component={() => <SessionLayout><ManagerPortal /></SessionLayout>} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
         <Route path="/pos" component={() => <DashboardLayout><POS /></DashboardLayout>} />
-        <Route path="/sales" component={() => <DashboardLayout><WorkspacePrep title="إدارة المبيعات" /></DashboardLayout>} />
-        <Route path="/purchases" component={() => <DashboardLayout><WorkspacePrep title="إدارة المشتريات" /></DashboardLayout>} />
-        <Route path="/inventory" component={() => <DashboardLayout><WorkspacePrep title="إدارة المخزون" /></DashboardLayout>} />
-        <Route path="/hr" component={() => <DashboardLayout><WorkspacePrep title="الموارد البشرية" /></DashboardLayout>} />
-        <Route path="/operations" component={() => <DashboardLayout><WorkspacePrep title="العمليات التشغيلية" /></DashboardLayout>} />
+        <Route path="/sales" component={() => <DashboardLayout><Sales /></DashboardLayout>} />
+        <Route path="/purchases" component={() => <DashboardLayout><Purchases /></DashboardLayout>} />
+        <Route path="/inventory" component={() => <DashboardLayout><Inventory /></DashboardLayout>} />
+        <Route path="/hr" component={() => <DashboardLayout><HR /></DashboardLayout>} />
+        <Route path="/operations" component={() => <DashboardLayout><Operations /></DashboardLayout>} />
         <Route path="/accounts" component={() => <DashboardLayout><Accounts /></DashboardLayout>} />
         <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />
         <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />

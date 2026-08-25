@@ -192,9 +192,9 @@ test("موظف المبيعات المخوّل يستطيع تسجيل البي�
   await assertProductMatchesBalances(scenario.firstCookie, scenario.productId);
 });
 
-test("تمنع مسارات CRUD العامة تجاوز البيع الذري", async () => {
+test("تمنع مسارات CRUD العامة تجاوز البيع الذري وفواتيره", async () => {
   const scenario = await createScenario({ initialQuantity: 10, transferQuantity: 3 });
-  const [created, updated, deleted] = await Promise.all([
+  const [created, updated, deleted, invoiceCreated, invoiceUpdated, invoiceDeleted] = await Promise.all([
     post(scenario.firstCookie, "/data/sales", {
       productId: scenario.productId,
       warehouseId: scenario.sourceId,
@@ -202,10 +202,16 @@ test("تمنع مسارات CRUD العامة تجاوز البيع الذري",
     }),
     patch(scenario.firstCookie, "/data/sales/999999", { quantity: 1 }),
     remove(scenario.firstCookie, "/data/sales/999999"),
+    post(scenario.firstCookie, "/data/invoices", { number: "غير مسموح", issueDate: "2026-01-01", total: 1 }),
+    patch(scenario.firstCookie, "/data/invoices/999999", { total: 1 }),
+    remove(scenario.firstCookie, "/data/invoices/999999"),
   ]);
   assert.equal(created.response.status, 405, JSON.stringify(created.payload));
   assert.equal(updated.response.status, 405, JSON.stringify(updated.payload));
   assert.equal(deleted.response.status, 405, JSON.stringify(deleted.payload));
+  assert.equal(invoiceCreated.response.status, 405, JSON.stringify(invoiceCreated.payload));
+  assert.equal(invoiceUpdated.response.status, 405, JSON.stringify(invoiceUpdated.payload));
+  assert.equal(invoiceDeleted.response.status, 405, JSON.stringify(invoiceDeleted.payload));
   await assertProductMatchesBalances(scenario.firstCookie, scenario.productId);
 });
 
