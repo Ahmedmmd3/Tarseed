@@ -10,3 +10,4 @@
 - [تجميع اختبارات API](api-integration-test-bundling.md) — اختبارات Node المجمّعة التي تستورد التطبيق وقاعدة البيانات تحتاج `createRequire` في مخرجات ESM.
 - [ترحيل مخطط الإنتاج](managed-schema-publish.md) — تغييرات مخطط PostgreSQL المُدار تصل للإنتاج عبر النشر، لا عبر DDL وقت التشغيل.
 - [مزامنة Stripe والتجميع](stripe-sync-bundling.md) — استثنِ مكتبة Stripe Sync من تجميع خادم API كي تجد ملفات ترحيلها وقت التشغيل.
+- [مقياس رفض Stripe Webhook المشترك](stripe-webhook-rejection-metrics.md) — اجمع رفض التوقيع ذرياً خارج ذاكرة الخادم واحجز تنبيهاً واحداً لكل نافذة.

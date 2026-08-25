@@ -22,7 +22,16 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
     response.json({ received: true });
   } catch (error) {
     const expiredSignature = isExpiredStripeSignatureError(error);
-    if (expiredSignature) recordExpiredStripeWebhookSignature();
+    if (expiredSignature) {
+      try {
+        await recordExpiredStripeWebhookSignature();
+      } catch {
+        logger.error(
+          { errorType: "ExpiredSignatureMetricPersistenceError" },
+          "Unable to persist expired Stripe webhook signature metric",
+        );
+      }
+    }
     logger.warn(
       { errorType: expiredSignature ? "ExpiredSignature" : "WebhookProcessingError" },
       "Stripe webhook processing failed",

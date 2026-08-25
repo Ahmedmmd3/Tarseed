@@ -21,10 +21,10 @@ test("يتعرف فقط على خطأ انتهاء مهلة توقيع Stripe", 
   assert.equal(isExpiredStripeSignatureError(null), false);
 });
 
-test("ينبه عند تكرار الرفض مرة واحدة داخل النافذة ثم يعيد العد بعدها", () => {
+test("يجمع الرفض المتزامن وينبه مرة واحدة داخل النافذة ثم يعيد العد بعدها", async () => {
   const startedAt = Date.now() + 60_000;
 
-  let metric = recordExpiredStripeWebhookSignature(startedAt);
+  let metric = await recordExpiredStripeWebhookSignature(startedAt);
   assert.deepEqual(metric, {
     attemptsInWindow: 1,
     windowSeconds: STRIPE_EXPIRED_SIGNATURE_WINDOW_MS / 1000,
@@ -32,20 +32,28 @@ test("ينبه عند تكرار الرفض مرة واحدة داخل النا�
     alertTriggered: false,
   });
 
-  for (let attempt = 2; attempt < STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD; attempt += 1) {
-    metric = recordExpiredStripeWebhookSignature(startedAt + attempt);
-    assert.equal(metric.alertTriggered, false);
-  }
+  const concurrentMetrics = await Promise.all(
+    Array.from(
+      { length: STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD - 1 },
+      () => recordExpiredStripeWebhookSignature(startedAt),
+    ),
+  );
 
-  metric = recordExpiredStripeWebhookSignature(startedAt + STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD);
-  assert.equal(metric.attemptsInWindow, STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD);
-  assert.equal(metric.alertTriggered, true);
+  assert.equal(
+    concurrentMetrics.filter((result) => result.alertTriggered).length,
+    1,
+    "لا ينبغي أن ترسل النسخ المتزامنة أكثر من تنبيه واحد",
+  );
+  assert.equal(
+    Math.max(...concurrentMetrics.map((result) => result.attemptsInWindow)),
+    STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD,
+  );
 
-  metric = recordExpiredStripeWebhookSignature(startedAt + STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD + 1);
+  metric = await recordExpiredStripeWebhookSignature(startedAt + STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD);
   assert.equal(metric.attemptsInWindow, STRIPE_EXPIRED_SIGNATURE_ALERT_THRESHOLD + 1);
   assert.equal(metric.alertTriggered, false);
 
-  metric = recordExpiredStripeWebhookSignature(startedAt + STRIPE_EXPIRED_SIGNATURE_WINDOW_MS);
+  metric = await recordExpiredStripeWebhookSignature(startedAt + STRIPE_EXPIRED_SIGNATURE_WINDOW_MS);
   assert.equal(metric.attemptsInWindow, 1);
   assert.equal(metric.alertTriggered, false);
 });
