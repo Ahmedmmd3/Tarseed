@@ -25,6 +25,6 @@ packages = ["glib", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat"
 
 [userenv]
 
-[userenv.shared]
+[userenv.production]
 RESEND_FROM_EMAIL = "no-reply@amd-network.com"
-PUBLIC_APP_URL = "https://amd-network.com/"
+PUBLIC_APP_URL = "https://amd-network.com"
