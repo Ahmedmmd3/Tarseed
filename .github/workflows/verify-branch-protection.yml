@@ -1,12 +1,21 @@
 name: Verify branch protection
 
 on:
+  branch_protection_rule:
+    types: [created, edited, deleted]
+  repository_ruleset:
+    types: [created, edited, deleted]
   workflow_dispatch:
   schedule:
     - cron: "17 6 * * 1"
 
 permissions:
   contents: read
+  issues: write
+
+concurrency:
+  group: verify-branch-protection
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -15,6 +24,10 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # A manual dispatch can select another ref. The protection baseline and
+          # alert lifecycle must always be evaluated from the default branch.
+          ref: ${{ github.event.repository.default_branch }}
 
       # Configure these GitHub Actions secrets with a GitHub App that has
       # Administration: read access to this repository:
@@ -44,6 +57,119 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Compare live main branch protection
-        run: pnpm run verify:branch-protection
+        id: verify
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          pnpm run verify:branch-protection 2>&1 |
+            tee "$RUNNER_TEMP/branch-protection-verification.log"
+          exit_code=${PIPESTATUS[0]}
+
+          {
+            echo "message<<BRANCH_PROTECTION_VERIFICATION"
+            cat "$RUNNER_TEMP/branch-protection-verification.log"
+            echo "BRANCH_PROTECTION_VERIFICATION"
+          } >> "$GITHUB_OUTPUT"
+
+          exit "$exit_code"
         env:
           GITHUB_TOKEN: ${{ steps.branch-protection-token.outputs.token }}
+
+      - name: Alert repository team about branch-protection drift
+        if: ${{ steps.verify.outcome == 'failure' }}
+        uses: actions/github-script@v7
+        env:
+          BRANCH_PROTECTION_FAILURE: ${{ steps.verify.outputs.message }}
+        with:
+          script: |
+            const issueTitle = "Branch protection drift detected for main";
+            const verificationOutput =
+              process.env.BRANCH_PROTECTION_FAILURE?.trim() ||
+              "The verification command failed without producing diagnostic output.";
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}` +
+              `/actions/runs/${context.runId}`;
+            const issueBody = [
+              "## Main branch protection drift",
+              "",
+              "The branch-protection verification found a mismatch.",
+              "The required check names and the protection baseline must be updated together.",
+              "",
+              "### Verification details",
+              "",
+              "```text",
+              verificationOutput,
+              "```",
+              "",
+              "### How to fix",
+              "",
+              "Update the GitHub branch protection and `.github/branch-protection-required-checks.json` together, then rerun the verification workflow.",
+              "",
+              `Workflow run: ${runUrl}`,
+            ].join("\n");
+
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100,
+              },
+            );
+            const existingIssue = openIssues.find(
+              (issue) => !issue.pull_request && issue.title === issueTitle,
+            );
+
+            if (existingIssue) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                body: issueBody,
+              });
+              core.notice(`Updated existing alert issue #${existingIssue.number}.`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+              });
+              core.notice(`Created alert issue #${issue.number}.`);
+            }
+
+      - name: Close resolved branch-protection alert
+        if: ${{ steps.verify.outcome == 'success' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueTitle = "Branch protection drift detected for main";
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: "open",
+                per_page: 100,
+              },
+            );
+            const existingIssue = openIssues.find(
+              (issue) => !issue.pull_request && issue.title === issueTitle,
+            );
+
+            if (existingIssue) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existingIssue.number,
+                state: "closed",
+              });
+              core.notice(`Closed resolved alert issue #${existingIssue.number}.`);
+            }
+
+      - name: Fail when branch-protection verification does not match
+        if: ${{ steps.verify.outcome == 'failure' }}
+        run: exit 1
