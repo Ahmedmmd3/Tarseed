@@ -374,3 +374,72 @@ test("يرفض webhook باشتراك صالح وتوقيع خاطئ قبل تغ
     ));
   assert.equal(activationAuditLogs.length, 0, "يجب ألا يسجل الخادم تفعيل اشتراك غير موثوق");
 });
+
+test("يرفض webhook باشتراك صالح وتوقيع صحيح منتهي الصلاحية دون تغيير بيانات المنشأة أو السجلات", async () => {
+  const ownerEmail = `${unique("expired-webhook-owner")}@example.test`;
+  const registered = await request("/api/auth/register", {
+    method: "POST",
+    body: {
+      projectName: unique("منشأة اختبار webhook منتهي"),
+      name: "مالك اختبار webhook منتهي",
+      email: ownerEmail,
+      password: "Safe-test-password-123",
+    },
+  });
+  assert.equal(registered.response.status, 201, JSON.stringify(registered.payload));
+  const organizationId = registered.payload.user?.organizationId;
+  assert.equal(typeof organizationId, "number");
+
+  const [before] = await db.select({
+    planId: organizationsTable.planId,
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    stripeCustomerId: organizationsTable.stripeCustomerId,
+    stripeSubscriptionId: organizationsTable.stripeSubscriptionId,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId));
+  assert.ok(before, "يجب حفظ المنشأة قبل اختبار webhook منتهي الصلاحية");
+
+  const eventId = `evt_${randomUUID().replaceAll("-", "")}`;
+  const event = activeSubscriptionEvent(organizationId, eventId);
+  const rawPayload = JSON.stringify(event);
+  const expiredSignature = Stripe.webhooks.generateTestHeaderString({
+    payload: rawPayload,
+    secret: stripeWebhookSecret,
+    timestamp: Math.floor(Date.now() / 1000) - (10 * 60),
+  });
+
+  const webhook = await originalFetch(`${origin}/api/stripe/webhook`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Stripe-Signature": expiredSignature,
+    },
+    body: rawPayload,
+  });
+  assert.equal(webhook.status, 400);
+  assert.deepEqual(await webhook.json(), { error: "تعذر التحقق من حدث الدفع." });
+
+  const [after] = await db.select({
+    planId: organizationsTable.planId,
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    stripeCustomerId: organizationsTable.stripeCustomerId,
+    stripeSubscriptionId: organizationsTable.stripeSubscriptionId,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId));
+  assert.deepEqual(after, before, "يجب ألا يغيّر التوقيع المنتهي بيانات الاشتراك");
+
+  const eventRows = await db.select({ id: stripeWebhookEventsTable.id })
+    .from(stripeWebhookEventsTable)
+    .where(eq(stripeWebhookEventsTable.id, eventId));
+  assert.equal(eventRows.length, 0, "يجب ألا يحفظ الخادم حدثاً منتهي التوقيع");
+
+  const activationAuditLogs = await db.select({ id: teamAuditLogsTable.id })
+    .from(teamAuditLogsTable)
+    .where(and(
+      eq(teamAuditLogsTable.organizationId, organizationId),
+      eq(teamAuditLogsTable.action, "subscription_activated"),
+    ));
+  assert.equal(activationAuditLogs.length, 0, "يجب ألا يسجل الخادم تفعيل اشتراك منتهي التوقيع");
+});
