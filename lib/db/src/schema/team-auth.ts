@@ -8,11 +8,18 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const organizationsTable = pgTable("organizations", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
   dataGeneration: integer("data_generation").notNull().default(1),
+  planId: text("plan_id").notNull().default("trial"),
+  subscriptionStatus: text("subscription_status").notNull().default("trialing"),
+  trialStartedAt: timestamp("trial_started_at", { withTimezone: true }).notNull().defaultNow(),
+  trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }).notNull().default(sql`now() + interval '14 days'`),
+  subscriptionStartedAt: timestamp("subscription_started_at", { withTimezone: true }),
+  subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

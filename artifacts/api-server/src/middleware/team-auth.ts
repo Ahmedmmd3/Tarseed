@@ -3,8 +3,35 @@ import { and, eq, gt, isNull } from "drizzle-orm";
 import { authSessionsTable, db, organizationsTable, teamUsersTable, type TeamUser } from "@workspace/db";
 import { hashSessionToken } from "../lib/team-auth";
 
-export type AuthContext = TeamUser & { projectName: string; dataGeneration: number };
+export type SubscriptionStatus = "trialing" | "active" | "expired" | "inactive";
+export type SubscriptionFields = {
+  planId: string;
+  subscriptionStatus: string;
+  trialStartedAt: Date | null;
+  trialEndsAt: Date | null;
+  subscriptionStartedAt: Date | null;
+  subscriptionEndsAt: Date | null;
+};
+export type AuthContext = TeamUser & { projectName: string; dataGeneration: number } & SubscriptionFields;
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+export function subscriptionState(subscription: SubscriptionFields, now = new Date()): SubscriptionStatus {
+  if (subscription.subscriptionStatus === "active"
+    && (!subscription.subscriptionEndsAt || subscription.subscriptionEndsAt > now)) {
+    return "active";
+  }
+  if (subscription.subscriptionStatus === "trialing"
+    && Boolean(subscription.trialEndsAt && subscription.trialEndsAt > now)) {
+    return "trialing";
+  }
+  if (subscription.subscriptionStatus === "trialing" || subscription.subscriptionStatus === "active") return "expired";
+  return "inactive";
+}
+
+export function hasSubscriptionAccess(subscription: SubscriptionFields, now = new Date()): boolean {
+  const state = subscriptionState(subscription, now);
+  return state === "active" || state === "trialing";
+}
 
 export async function getAuthContext(request: Request): Promise<AuthContext | null> {
   const token = request.cookies?.wudooh_session;
@@ -14,6 +41,12 @@ export async function getAuthContext(request: Request): Promise<AuthContext | nu
       user: teamUsersTable,
       projectName: organizationsTable.name,
       dataGeneration: organizationsTable.dataGeneration,
+      planId: organizationsTable.planId,
+      subscriptionStatus: organizationsTable.subscriptionStatus,
+      trialStartedAt: organizationsTable.trialStartedAt,
+      trialEndsAt: organizationsTable.trialEndsAt,
+      subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
+      subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
     })
     .from(authSessionsTable)
     .innerJoin(teamUsersTable, eq(authSessionsTable.userId, teamUsersTable.id))
@@ -25,7 +58,17 @@ export async function getAuthContext(request: Request): Promise<AuthContext | nu
       eq(teamUsersTable.status, "active"),
     ))
     .limit(1);
-  return result ? { ...result.user, projectName: result.projectName, dataGeneration: result.dataGeneration } : null;
+  return result ? {
+    ...result.user,
+    projectName: result.projectName,
+    dataGeneration: result.dataGeneration,
+    planId: result.planId,
+    subscriptionStatus: result.subscriptionStatus,
+    trialStartedAt: result.trialStartedAt,
+    trialEndsAt: result.trialEndsAt,
+    subscriptionStartedAt: result.subscriptionStartedAt,
+    subscriptionEndsAt: result.subscriptionEndsAt,
+  } : null;
 }
 
 export async function requireAuth(request: Request, response: Response, next: NextFunction): Promise<void> {
@@ -58,6 +101,18 @@ export function requireCurrentDataGeneration(request: Request, response: Respons
     return;
   }
   response.locals.dataGeneration = generation;
+  next();
+}
+
+export function requireSubscriptionAccess(_request: Request, response: Response, next: NextFunction): void {
+  const auth = response.locals.auth as AuthContext | undefined;
+  if (!auth || !hasSubscriptionAccess(auth)) {
+    response.status(402).json({
+      error: "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.",
+      code: "subscription_required",
+    });
+    return;
+  }
   next();
 }
 

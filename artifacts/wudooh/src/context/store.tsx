@@ -89,6 +89,15 @@ export type SharedUser = {
   warehouseIds: number[];
   status: string;
   isTeamMember: boolean;
+  subscription: {
+    planId: string;
+    status: 'trialing' | 'active' | 'expired' | 'inactive';
+    accessActive: boolean;
+    trialStartedAt: string | null;
+    trialEndsAt: string | null;
+    subscriptionStartedAt: string | null;
+    subscriptionEndsAt: string | null;
+  };
 };
 
 export type SyncOperation = {
@@ -398,6 +407,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
 
       const sharedUser = sessionPayload.user as SharedUser;
+      if (!sharedUser.subscription?.accessActive) {
+        if (isActive()) setConnectionMode('remote');
+        return;
+      }
       const sessionKey = String(sharedUser.organizationId);
       setSharedSessionKey(sessionKey);
       localStorage.setItem(sharedSessionKeyStorageKey, sessionKey);

@@ -25,6 +25,7 @@ import ActivityLog from '@/pages/activity-log';
 import ResetPassword from '@/pages/reset-password';
 import WorkspacePrep from '@/pages/workspace-prep';
 import POS from '@/pages/pos';
+import ManagerPortal from '@/pages/manager-portal';
 import {
   Features,
   Pricing,
@@ -43,6 +44,10 @@ function DashboardLayout({ children }: { children: ReactNode }) {
       <AppLayout>{children}</AppLayout>
     </StoreProvider>
   );
+}
+
+function SessionLayout({ children }: { children: ReactNode }) {
+  return <StoreProvider>{children}</StoreProvider>;
 }
 
 function Router() {
@@ -64,6 +69,7 @@ function Router() {
         <Route path="/resources/operations" component={() => <ResourcePage kind="operations" />} />
         <Route path="/resources/e-invoicing" component={() => <ResourcePage kind="e-invoicing" />} />
         <Route path="/reset-password" component={ResetPassword} />
+        <Route path="/manager" component={() => <SessionLayout><ManagerPortal /></SessionLayout>} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
         <Route path="/pos" component={() => <DashboardLayout><POS /></DashboardLayout>} />
         <Route path="/sales" component={() => <DashboardLayout><WorkspacePrep title="إدارة المبيعات" /></DashboardLayout>} />

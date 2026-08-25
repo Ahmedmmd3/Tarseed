@@ -13,7 +13,7 @@ import {
 } from "@workspace/db";
 import { createPasswordResetToken, createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "../lib/team-auth";
 import { logger } from "../lib/logger";
-import { getAuthContext, requireAuth, requireOwner, type AuthContext } from "../middleware/team-auth";
+import { getAuthContext, hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, subscriptionState, type AuthContext, type SubscriptionFields } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const SESSION_DAYS = 14;
@@ -24,13 +24,21 @@ const LOCATION_SCOPES = new Set(["all", "selected", "none"]);
 const PASSWORD_RESET_MINUTES = 30;
 const connectors = new ReplitConnectors();
 
-function safeUser(user: TeamUser, projectName: string, dataGeneration: number) {
+function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" | "dataGeneration" | "planId" | "subscriptionStatus" | "trialStartedAt" | "trialEndsAt" | "subscriptionStartedAt" | "subscriptionEndsAt">) {
+  const subscription: SubscriptionFields = {
+    planId: organization.planId,
+    subscriptionStatus: organization.subscriptionStatus,
+    trialStartedAt: organization.trialStartedAt,
+    trialEndsAt: organization.trialEndsAt,
+    subscriptionStartedAt: organization.subscriptionStartedAt,
+    subscriptionEndsAt: organization.subscriptionEndsAt,
+  };
   return {
     id: user.id,
     accountId: user.id,
     organizationId: user.organizationId,
-    projectName,
-    dataGeneration,
+    projectName: organization.projectName,
+    dataGeneration: organization.dataGeneration,
     email: user.email,
     name: user.name,
     roleId: user.roleId,
@@ -39,6 +47,15 @@ function safeUser(user: TeamUser, projectName: string, dataGeneration: number) {
     warehouseIds: user.warehouseIds,
     status: user.status,
     isTeamMember: user.roleId !== "owner",
+    subscription: {
+      planId: subscription.planId,
+      status: subscriptionState(subscription),
+      accessActive: hasSubscriptionAccess(subscription),
+      trialStartedAt: subscription.trialStartedAt?.toISOString() ?? null,
+      trialEndsAt: subscription.trialEndsAt?.toISOString() ?? null,
+      subscriptionStartedAt: subscription.subscriptionStartedAt?.toISOString() ?? null,
+      subscriptionEndsAt: subscription.subscriptionEndsAt?.toISOString() ?? null,
+    },
   };
 }
 
@@ -213,8 +230,16 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
   }
   const passwordHash = await hashPassword(validation.data.password);
   const { password: _password, ...ownerData } = validation.data;
+  const trialStartedAt = new Date();
+  const trialEndsAt = new Date(trialStartedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
   const result = await db.transaction(async (tx) => {
-    const [organization] = await tx.insert(organizationsTable).values({ name: projectName }).returning();
+    const [organization] = await tx.insert(organizationsTable).values({
+      name: projectName,
+      planId: "trial",
+      subscriptionStatus: "trialing",
+      trialStartedAt,
+      trialEndsAt,
+    }).returning();
     const [user] = await tx.insert(teamUsersTable).values({
       organizationId: organization.id,
       ...ownerData,
@@ -240,7 +265,16 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
   });
   const token = await createSession(result.user.id);
   setSession(response, token);
-  response.status(201).json({ user: safeUser(result.user, result.organization.name, result.organization.dataGeneration) });
+  response.status(201).json({ user: safeUser(result.user, {
+    projectName: result.organization.name,
+    dataGeneration: result.organization.dataGeneration,
+    planId: result.organization.planId,
+    subscriptionStatus: result.organization.subscriptionStatus,
+    trialStartedAt: result.organization.trialStartedAt,
+    trialEndsAt: result.organization.trialEndsAt,
+    subscriptionStartedAt: result.organization.subscriptionStartedAt,
+    subscriptionEndsAt: result.organization.subscriptionEndsAt,
+  }) });
 });
 
 router.post("/auth/login", async (request: Request, response: Response): Promise<void> => {
@@ -251,6 +285,12 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
     user: teamUsersTable,
     projectName: organizationsTable.name,
     dataGeneration: organizationsTable.dataGeneration,
+    planId: organizationsTable.planId,
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    trialStartedAt: organizationsTable.trialStartedAt,
+    trialEndsAt: organizationsTable.trialEndsAt,
+    subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
   })
     .from(teamUsersTable)
     .innerJoin(organizationsTable, eq(teamUsersTable.organizationId, organizationsTable.id))
@@ -262,8 +302,9 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
   }
   const token = await createSession(result.user.id);
   setSession(response, token);
-  await recordAudit({ ...result.user, projectName: result.projectName, dataGeneration: result.dataGeneration }, "login", "user", result.user.email);
-  response.json({ user: safeUser(result.user, result.projectName, result.dataGeneration) });
+  const auth = { ...result.user, ...result } as AuthContext;
+  await recordAudit(auth, "login", "user", result.user.email);
+  response.json({ user: safeUser(result.user, result) });
 });
 
 router.post("/auth/password-reset/request", async (request: Request, response: Response): Promise<void> => {
@@ -370,21 +411,21 @@ router.post("/auth/logout", requireAuth, async (request: Request, response: Resp
 
 router.get("/auth/me", async (request: Request, response: Response): Promise<void> => {
   const auth = await getAuthContext(request);
-  response.json({ user: auth ? safeUser(auth, auth.projectName, auth.dataGeneration) : null });
+  response.json({ user: auth ? safeUser(auth, auth) : null });
 });
 
-router.get("/auth/password-reset/status", requireAuth, requireOwner, (_request: Request, response: Response): void => {
+router.get("/auth/password-reset/status", requireAuth, requireSubscriptionAccess, requireOwner, (_request: Request, response: Response): void => {
   const sender = process.env.RESEND_FROM_EMAIL?.trim() || null;
   response.json({ emailDeliveryConfigured: Boolean(sender), sender });
 });
 
-router.get("/team/members", requireAuth, requireOwner, async (_request: Request, response: Response): Promise<void> => {
+router.get("/team/members", requireAuth, requireSubscriptionAccess, requireOwner, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const users = await db.select().from(teamUsersTable).where(eq(teamUsersTable.organizationId, auth.organizationId)).orderBy(teamUsersTable.createdAt);
-  response.json({ members: users.filter(user => user.id !== auth.id).map(user => safeUser(user, auth.projectName, auth.dataGeneration)) });
+  response.json({ members: users.filter(user => user.id !== auth.id).map(user => safeUser(user, auth)) });
 });
 
-router.post("/team/members", requireAuth, requireOwner, async (request: Request, response: Response): Promise<void> => {
+router.post("/team/members", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const validation = validateMemberBody(request.body as Record<string, unknown>, true);
   if (!validation.data) {
@@ -403,10 +444,10 @@ router.post("/team/members", requireAuth, requireOwner, async (request: Request,
     passwordHash: await hashPassword(password),
   }).returning();
   await recordAudit(auth, "member_created", user.name, user.roleId);
-  response.status(201).json({ member: safeUser(user, auth.projectName, auth.dataGeneration) });
+  response.status(201).json({ member: safeUser(user, auth) });
 });
 
-router.patch("/team/members/:id", requireAuth, requireOwner, async (request: Request, response: Response): Promise<void> => {
+router.patch("/team/members/:id", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const id = Number(request.params.id);
   const validation = validateMemberBody(request.body as Record<string, unknown>, false);
@@ -430,10 +471,10 @@ router.patch("/team/members/:id", requireAuth, requireOwner, async (request: Req
     await db.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
   }
   await recordAudit(auth, updated.status === "inactive" ? "member_disabled" : "member_updated", updated.name, updated.roleId);
-  response.json({ member: safeUser(updated, auth.projectName, auth.dataGeneration) });
+  response.json({ member: safeUser(updated, auth) });
 });
 
-router.post("/team/members/:id/toggle", requireAuth, requireOwner, async (request: Request, response: Response): Promise<void> => {
+router.post("/team/members/:id/toggle", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const id = Number(request.params.id);
   const [member] = await db.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).limit(1);
@@ -445,10 +486,10 @@ router.post("/team/members/:id/toggle", requireAuth, requireOwner, async (reques
   const [updated] = await db.update(teamUsersTable).set({ status, updatedAt: new Date() }).where(eq(teamUsersTable.id, id)).returning();
   if (status === "inactive") await db.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
   await recordAudit(auth, status === "inactive" ? "member_disabled" : "member_enabled", updated.name, updated.roleId);
-  response.json({ member: safeUser(updated, auth.projectName, auth.dataGeneration) });
+  response.json({ member: safeUser(updated, auth) });
 });
 
-router.get("/audit-logs", requireAuth, requireOwner, async (_request: Request, response: Response): Promise<void> => {
+router.get("/audit-logs", requireAuth, requireSubscriptionAccess, requireOwner, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const logs = await db.select().from(teamAuditLogsTable)
     .where(eq(teamAuditLogsTable.organizationId, auth.organizationId))

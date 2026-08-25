@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const INVENTORY_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales"]);
@@ -133,7 +133,7 @@ async function isClosedDate(auth: AuthContext, date: string): Promise<boolean> {
   });
 }
 
-router.get("/data/:table", requireAuth, async (request: Request, response: Response): Promise<void> => {
+router.get("/data/:table", requireAuth, requireSubscriptionAccess, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   if (!access) return;
   const records = await db.select().from(erpRecordsTable)
@@ -144,7 +144,7 @@ router.get("/data/:table", requireAuth, async (request: Request, response: Respo
   response.json({ records: data });
 });
 
-router.post("/data/:table", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   if (!access) return;
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
@@ -231,7 +231,7 @@ router.post("/data/:table", requireAuth, requireCurrentDataGeneration, async (re
   response.status(created ? 201 : 200).json({ record: { ...record.data, id: record.id, userId: access.auth.organizationId } });
 });
 
-router.patch("/data/:table/:id", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   const id = Number(request.params.id);
   if (!access || !Number.isInteger(id)) {
@@ -433,7 +433,7 @@ router.patch("/data/:table/:id", requireAuth, requireCurrentDataGeneration, asyn
   response.json({ record: { ...updated.data, id: updated.id, userId: access.auth.organizationId } });
 });
 
-router.delete("/data/:table/:id", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   const id = Number(request.params.id);
   if (!access || !Number.isInteger(id)) {

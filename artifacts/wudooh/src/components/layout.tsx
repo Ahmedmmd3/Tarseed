@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, FileText, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useStore } from '@/context/store';
 
@@ -42,11 +42,28 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const { currentUser, signOut, connectionMode, canRetrySharedConnection, syncQueue, retrySharedConnection } = useStore();
   const [isSigningOut, setIsSigningOut] = React.useState(false);
-  const canViewCurrentRoute = !currentUser || canAccessNavigationItem(location, currentUser);
+  const subscriptionRequired = isSubscriptionProtectedRoute(location);
+  const authenticationBlocked = subscriptionRequired && !currentUser;
+  const subscriptionBlocked = Boolean(currentUser && subscriptionRequired && !currentUser.subscription?.accessActive);
+  const canViewCurrentRoute = !subscriptionRequired || Boolean(currentUser && !subscriptionBlocked && canAccessNavigationItem(location, currentUser));
   const closeSidebar = () => setSidebarOpen(false);
   const visibleGroups = navigationGroups
     .map((group) => ({ ...group, items: group.items.filter((item) => !currentUser || (item.ownerOnly ? currentUser.roleId === 'owner' : canAccessNavigationItem(item.href, currentUser))) }))
     .filter((group) => group.items.length > 0);
+
+  if (connectionMode === 'loading') {
+    return <div className="flex min-h-screen items-center justify-center bg-[#061d40] p-4" dir="rtl"><DashboardLoading /></div>;
+  }
+
+  if (authenticationBlocked || subscriptionBlocked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#061d40] p-4" dir="rtl">
+        <div className="w-full max-w-2xl">
+          {authenticationBlocked ? <AuthenticationRequiredRoute /> : <SubscriptionRestrictedRoute />}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#061d40] font-sans text-slate-900" dir="rtl">
@@ -111,7 +128,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               </div>
             )}
             <ConnectionStatus mode={connectionMode} canRetrySharedConnection={canRetrySharedConnection} syncQueue={syncQueue} onRetry={() => void retrySharedConnection()} />
-            {connectionMode === 'loading' ? <DashboardLoading /> : canViewCurrentRoute ? children : <RestrictedRoute />}
+            {canViewCurrentRoute ? children : <RestrictedRoute />}
           </div>
         </main>
       </div>
@@ -136,6 +153,28 @@ function DashboardLoading() {
 
 function RestrictedRoute() {
   return <div className="rounded-3xl border border-white/10 bg-white p-10 text-center shadow-xl" data-testid="restricted-route-message"><CloudOff className="mx-auto h-9 w-9 text-slate-300" aria-hidden="true" /><h2 className="mt-4 text-xl font-bold text-slate-900">هذه الوحدة غير متاحة لحسابك</h2><p className="mx-auto mt-2 max-w-md text-sm text-slate-500">تواصل مع مالك المنشأة إذا كنت تحتاج إلى صلاحية الوصول إليها.</p></div>;
+}
+
+function SubscriptionRestrictedRoute() {
+  return <div className="rounded-3xl border border-white/10 bg-white p-10 text-center shadow-xl" data-testid="subscription-restricted-message">
+    <CreditCard className="mx-auto h-9 w-9 text-amber-500" aria-hidden="true" />
+    <h2 className="mt-4 text-xl font-bold text-slate-900">لوحة التحكم غير متاحة حالياً</h2>
+    <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">يلزم اشتراك فعال أو فترة تجريبية سارية للدخول إلى مساحة العمل. يمكنك مراجعة حالة حسابك من بوابة المدير.</p>
+    <Link href="/manager" className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-[#062344] px-5 text-sm font-bold text-white transition hover:bg-[#0a426f]" data-testid="link-manager-portal">الذهاب إلى بوابة المدير</Link>
+  </div>;
+}
+
+function AuthenticationRequiredRoute() {
+  return <div className="rounded-3xl border border-white/10 bg-white p-10 text-center shadow-xl" data-testid="authentication-required-message">
+    <CloudOff className="mx-auto h-9 w-9 text-slate-400" aria-hidden="true" />
+    <h2 className="mt-4 text-xl font-bold text-slate-900">سجّل الدخول للوصول إلى مساحة العمل</h2>
+    <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">نحتاج إلى التحقق من حسابك وحالة اشتراك المنشأة قبل عرض بيانات لوحة التحكم.</p>
+    <Link href="/" className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-[#062344] px-5 text-sm font-bold text-white transition hover:bg-[#0a426f]" data-testid="link-sign-in">العودة لتسجيل الدخول</Link>
+  </div>;
+}
+
+function isSubscriptionProtectedRoute(href: string): boolean {
+  return new Set(['/dashboard', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/reports', '/hr', '/operations', '/team', '/operations-log']).has(href);
 }
 
 function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {

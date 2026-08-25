@@ -1,7 +1,7 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -171,7 +171,7 @@ async function runAction(response: Response, action: () => Promise<RecordData>):
   }
 }
 
-router.post("/inventory/transfers", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);
@@ -202,7 +202,7 @@ router.post("/inventory/transfers", requireAuth, requireCurrentDataGeneration, r
   });
 });
 
-router.post("/inventory/transfers/:id/approve", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers/:id/approve", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
@@ -231,7 +231,7 @@ router.post("/inventory/transfers/:id/approve", requireAuth, requireCurrentDataG
   });
 });
 
-router.post("/inventory/transfers/:id/cancel", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers/:id/cancel", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
@@ -251,7 +251,7 @@ router.post("/inventory/transfers/:id/cancel", requireAuth, requireCurrentDataGe
   });
 });
 
-router.post("/inventory/transfers/:id/receive", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/transfers/:id/receive", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
@@ -287,7 +287,7 @@ router.post("/inventory/transfers/:id/receive", requireAuth, requireCurrentDataG
   });
 });
 
-router.post("/inventory/sales", requireAuth, requireCurrentDataGeneration, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/sales", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);
@@ -316,7 +316,7 @@ router.post("/inventory/sales", requireAuth, requireCurrentDataGeneration, requi
   });
 });
 
-router.post("/inventory/checkout", requireAuth, requireCurrentDataGeneration, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);
@@ -455,7 +455,7 @@ router.post("/inventory/checkout", requireAuth, requireCurrentDataGeneration, re
   });
 });
 
-router.post("/inventory/adjustments", requireAuth, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+router.post("/inventory/adjustments", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const body = bodyOf(request);

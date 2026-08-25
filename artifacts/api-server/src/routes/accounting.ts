@@ -1,7 +1,7 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -148,7 +148,7 @@ function derivePartyBalances(records: AnyRecord[], type: "receivable" | "payable
     });
 }
 
-router.get("/accounting/summary", requireAuth, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const now = new Date();
   const from = typeof request.query.from === "string" ? request.query.from : `${now.getFullYear()}-01-01`;
@@ -178,7 +178,7 @@ router.get("/accounting/summary", requireAuth, requireAccounting, async (request
   });
 });
 
-router.post("/accounting/sync-source-journals", requireAuth, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
+router.post("/accounting/sync-source-journals", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const [accounts, invoices, purchases, expenses, existingJournals] = await Promise.all([
     recordsFor(auth, "accounts"),
@@ -254,7 +254,7 @@ router.post("/accounting/sync-source-journals", requireAuth, requireCurrentDataG
   response.json({ created, skipped });
 });
 
-router.post("/accounting/close", requireAuth, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+router.post("/accounting/close", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const body = request.body as Record<string, unknown>;
   const from = typeof body.from === "string" ? body.from : "";

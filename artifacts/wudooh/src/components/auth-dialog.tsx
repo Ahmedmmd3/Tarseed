@@ -38,6 +38,7 @@ const fallbackErrors: Record<AuthMode, string> = {
   login: 'تعذر تسجيل الدخول. تحقق من البيانات وحاول مرة أخرى.',
   register: 'تعذر إنشاء المنشأة. تحقق من البيانات وحاول مرة أخرى.',
 };
+const remoteSessionHintCookie = 'wudooh_remote_session';
 
 export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }: AuthDialogProps) {
   const [mode, setMode] = useState<AuthMode>(initialMode);
@@ -118,6 +119,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
       if (!response.ok || !payload.user) {
         throw new Error(payload.error || fallbackErrors[mode]);
       }
+      document.cookie = `${remoteSessionHintCookie}=1; Max-Age=${14 * 24 * 60 * 60}; Path=/; SameSite=Lax`;
       setForm(emptyForm);
       onOpenChange(false);
       onSuccess();

@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
-import { requireAuth, requireOwner, type AuthContext } from "../middleware/team-auth";
+import { requireAuth, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const BACKUP_VERSION = 1;
@@ -418,7 +418,7 @@ function parseBackup(value: unknown): { records?: BackupRecord[]; organizationId
   return semanticError ? { error: semanticError } : { records, organizationId: Number(value.organizationId) };
 }
 
-router.get("/backup/export", requireAuth, requireOwner, async (_request: Request, response: Response): Promise<void> => {
+router.get("/backup/export", requireAuth, requireSubscriptionAccess, requireOwner, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const records = await db.select({
     id: erpRecordsTable.id,
@@ -444,7 +444,7 @@ router.get("/backup/export", requireAuth, requireOwner, async (_request: Request
   });
 });
 
-router.post("/backup/restore", requireAuth, requireOwner, async (request: Request, response: Response): Promise<void> => {
+router.post("/backup/restore", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const parsed = parseBackup(request.body);
   if (parsed.error || !parsed.records) {

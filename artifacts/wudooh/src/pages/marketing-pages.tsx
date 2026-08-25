@@ -109,7 +109,7 @@ function MarketingShell({ children, eyebrow, title, description, actions }: Mark
       </main>
 
       <MarketingFooter onRegister={() => openAuth('register')} />
-      <AuthDialog open={authOpen} mode={authMode} onOpenChange={setAuthOpen} onSuccess={() => window.location.assign(route('/dashboard'))} />
+      <AuthDialog open={authOpen} mode={authMode} onOpenChange={setAuthOpen} onSuccess={() => window.location.assign(route('/manager'))} />
     </div>
   );
 }
