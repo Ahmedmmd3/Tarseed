@@ -12,6 +12,7 @@
     "test:auth-security": "node --test test/auth-security.test.mjs",
     "test:password-reset-delivery": "pnpm run build && node --test test/password-reset-delivery.test.mjs",
     "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs"
+    ,"test:e-invoicing": "esbuild test/e-invoicing-signature.test.mjs --bundle --platform=node --format=esm --outfile=/tmp/e-invoicing-signature.test.mjs && node --test /tmp/e-invoicing-signature.test.mjs"
   },
   "dependencies": {
     "@google-cloud/storage": "^8.0.1",

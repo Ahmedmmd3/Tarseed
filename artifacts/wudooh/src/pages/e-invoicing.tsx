@@ -54,6 +54,7 @@ import {
   useUpdateCredentials,
   useEInvoicingDocuments,
   useSubmitDocument,
+  useComplianceCheck,
   useAddDocumentNote,
   type EInvoiceDocument,
   type EGSUnit,
@@ -156,7 +157,10 @@ export default function EInvoicing() {
 function DocumentsTab() {
   const { data: documents, isLoading, isError, refetch } = useEInvoicingDocuments();
   const submitDoc = useSubmitDocument();
+  const complianceCheck = useComplianceCheck();
+  const { currentUser } = useStore();
   const { toast } = useToast();
+  const isOwner = currentUser?.roleId === 'owner';
 
   const handleSubmit = async (id: number) => {
     try {
@@ -169,6 +173,19 @@ function DocumentsTab() {
 
   const downloadXml = (id: number) => {
     window.open(`/api/e-invoicing/documents/${id}/xml`, '_blank');
+  };
+
+  const downloadAuthorityXml = (id: number) => {
+    window.open(`/api/e-invoicing/documents/${id}/authority-xml`, '_blank');
+  };
+
+  const handleComplianceCheck = async (id: number) => {
+    try {
+      await complianceCheck.mutateAsync(id);
+      toast({ title: 'تم اجتياز فحص الامتثال', description: 'تأكدت بيئة Sandbox من المستند، وأصبحت الوحدة جاهزة لمسار الإرسال.' });
+    } catch (err: any) {
+      toast({ title: 'لم يجتز فحص الامتثال', description: err.message, variant: 'destructive' });
+    }
   };
 
   if (isLoading) {
@@ -237,12 +254,35 @@ function DocumentsTab() {
                       >
                         <Download className="h-4 w-4 text-slate-500" />
                       </Button>
-                      
+                      {doc.authorityXmlAvailable && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="تحميل نسخة الهيئة"
+                          onClick={() => downloadAuthorityXml(doc.id)}
+                        >
+                          <Download className="h-4 w-4 text-emerald-600" />
+                        </Button>
+                      )}
+                      {doc.localValidationError && (
+                        <AlertCircle className="h-4 w-4 text-amber-500" aria-label={doc.localValidationError} />
+                      )}
+                      {isOwner && doc.status === 'pending_compliance' && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          title="فحص الامتثال في Sandbox"
+                          disabled={complianceCheck.isPending}
+                          onClick={() => handleComplianceCheck(doc.id)}
+                        >
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon"
                         title="إرسال إلى ZATCA"
-                        disabled={['cleared', 'reported', 'submitting', 'submission_unknown', 'pending_compliance'].includes(doc.status) || !doc.xmlAvailable || submitDoc.isPending}
+                        disabled={!['pending_submission', 'rejected'].includes(doc.status) || !doc.xmlAvailable || submitDoc.isPending}
                         onClick={() => handleSubmit(doc.id)}
                       >
                         <Send className={`h-4 w-4 ${(doc.status === 'cleared' || doc.status === 'reported') ? 'text-slate-300' : 'text-indigo-600'}`} />
@@ -315,6 +355,13 @@ function StatusCard({ setup }: { setup: EGSUnit }) {
         <div className="flex items-center gap-3">
           {setup.credentialsReady ? <CheckCircle2 className="h-5 w-5 text-indigo-500" /> : <div className="h-5 w-5 rounded-full border-2 border-slate-300" />}
           <span className={`text-sm font-bold ${setup.credentialsReady ? 'text-indigo-700' : 'text-slate-500'}`}>بيانات CSID محفوظة للاختبار</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {setup.complianceStatus === 'passed' ? <CheckCircle2 className="h-5 w-5 text-emerald-500" /> : <div className="h-5 w-5 rounded-full border-2 border-slate-300" />}
+          <div>
+            <span className={`block text-sm font-bold ${setup.complianceStatus === 'passed' ? 'text-emerald-700' : 'text-slate-500'}`}>فحص الامتثال في Sandbox</span>
+            {setup.complianceError && <span className="block mt-1 text-xs text-rose-600">{setup.complianceError}</span>}
+          </div>
         </div>
       </div>
     </div>
@@ -519,7 +566,7 @@ function SetupForm({ initialData }: { initialData: EGSUnit }) {
     }
   };
 
-  const isReadOnly = initialData.credentialsReady;
+  const isReadOnly = initialData.csrReady;
 
   return (
     <Form {...form}>

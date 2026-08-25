@@ -458,7 +458,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
       const invoiceNumber = `POS-${draftInvoice.id}`;
       const isConfigured = configurationIsComplete(seller);
       const generated = isConfigured
-        ? generateInvoiceDocument({
+        ? await generateInvoiceDocument({
           invoiceNumber,
           invoiceCounter: unit.nextInvoiceCounter,
           previousInvoiceHash: unit.previousInvoiceHash,
@@ -485,7 +485,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         unitId: unit.id,
         invoiceRecordId: draftInvoice.id,
         documentType,
-        status: generated ? "pending_compliance" : "pending_configuration",
+        status: generated ? (generated.signatureValid ? "pending_compliance" : "pending_credentials") : "pending_configuration",
         invoiceNumber,
         uuid: generated?.uuid ?? randomUUID(),
         invoiceCounter: generated ? unit.nextInvoiceCounter : null,
@@ -493,6 +493,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         invoiceHash: generated?.invoiceHash ?? unit.previousInvoiceHash,
         qrPayload: generated?.qrPayload ?? "",
         xmlDigest: generated?.invoiceHash ?? unit.previousInvoiceHash,
+        localValidationError: generated?.localValidationError ?? null,
         issuedAt: new Date(),
       }).returning();
       if (generated) {
@@ -512,7 +513,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         total: generated?.taxInclusiveAmount ?? subtotal,
         paid: paymentMethod === "credit" ? 0 : (generated?.taxInclusiveAmount ?? subtotal),
         eInvoiceDocumentId: eInvoice.id,
-        eInvoiceStatus: generated ? "pending_compliance" : "pending_configuration",
+        eInvoiceStatus: generated ? (generated.signatureValid ? "pending_compliance" : "pending_credentials") : "pending_configuration",
         eInvoiceType: documentType,
         eInvoiceUuid: eInvoice.uuid,
         qrPayload: generated?.qrPayload ?? "",

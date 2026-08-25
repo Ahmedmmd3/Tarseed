@@ -37,8 +37,9 @@ export async function savePrivateInvoiceXml(
   organizationId: number,
   documentId: number,
   xml: string,
+  kind: "issued" | "authority" = "issued",
 ): Promise<string> {
-  const key = `e-invoices/${organizationId}/${documentId}-${randomUUID()}.xml`;
+  const key = `e-invoices/${organizationId}/${documentId}-${kind}-${randomUUID()}.xml`;
   const fullPath = `${privateDirectory()}/${key}`.replace(/^\/+/, "");
   const [bucketName, ...objectParts] = fullPath.split("/");
   if (!bucketName || !objectParts.length) throw new Error("لم تُجهّز مساحة التخزين الخاصة بعد.");

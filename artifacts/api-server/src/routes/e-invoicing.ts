@@ -107,6 +107,62 @@ async function unitForOrganization(organizationId: number): Promise<EInvoiceUnit
   return created;
 }
 
+function authorityXmlFromResponse(body: RecordData): string | undefined {
+  const candidates = [body.clearedInvoice, body.invoice, body.xml];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || !candidate.trim()) continue;
+    const decoded = Buffer.from(candidate, "base64").toString("utf8");
+    if (decoded.trimStart().startsWith("<")) return decoded;
+    if (candidate.trimStart().startsWith("<")) return candidate;
+  }
+  return undefined;
+}
+
+function complianceErrorFromResponse(body: RecordData): string | undefined {
+  const validation = value(body.validationResults);
+  const errors = validation.errorMessages;
+  if (Array.isArray(errors) && errors.length) {
+    return errors.map((entry) => {
+      const item = value(entry);
+      return String(item.message ?? item.code ?? "خطأ تحقق غير محدد");
+    }).join(" | ").slice(0, 2_000);
+  }
+  const message = body.message ?? body.error;
+  return typeof message === "string" && message ? message.slice(0, 2_000) : undefined;
+}
+
+async function authorityRequest(
+  baseUrl: string,
+  endpoint: string,
+  csid: string,
+  secret: string,
+  document: { invoiceHash: string; uuid: string; xmlObjectPath: string | null },
+): Promise<{ response: globalThis.Response; body: RecordData }> {
+  if (!document.xmlObjectPath) throw new EInvoiceRouteError("لا يوجد XML مهيأ لإرساله.", 409);
+  const xml = await readPrivateInvoiceXml(document.xmlObjectPath);
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Accept-Version": "V2",
+      "Content-Type": "application/json",
+      Authorization: `Basic ${Buffer.from(`${csid}:${secret}`).toString("base64")}`,
+    },
+    body: JSON.stringify({
+      invoiceHash: document.invoiceHash,
+      uuid: document.uuid,
+      invoice: Buffer.from(xml, "utf8").toString("base64"),
+    }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const text = await response.text();
+  try {
+    return { response, body: JSON.parse(text) as RecordData };
+  } catch {
+    return { response, body: { message: text } };
+  }
+}
+
 function unitResponse(unit: EInvoiceUnit): RecordData {
   const seller = sellerFromUnit(unit);
   return {
@@ -129,6 +185,9 @@ function unitResponse(unit: EInvoiceUnit): RecordData {
     csrReady: Boolean(unit.csrPem && unit.privateKeyCiphertext),
     credentialsReady: Boolean(unit.certificateCiphertext && unit.csidCiphertext && unit.secretCiphertext),
     certificateExpiresAt: unit.certificateExpiresAt?.toISOString() ?? null,
+    complianceStatus: unit.complianceStatus,
+    lastComplianceCheckAt: unit.lastComplianceCheckAt?.toISOString() ?? null,
+    complianceError: unit.complianceError,
   };
 }
 
@@ -168,9 +227,9 @@ router.put("/e-invoicing/setup", requireAuth, requireSubscriptionAccess, require
     const vatRate = Number(body.vatRate ?? 15);
     if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) throw new EInvoiceRouteError("نسبة الضريبة غير صالحة.");
     const current = await unitForOrganization(auth.organizationId);
-    if (current.status === "ready") {
+    if (current.csrPem || current.certificateCiphertext) {
       throw new EInvoiceRouteError(
-        "بيانات جهة الإصدار مقفلة بعد تفعيل الشهادة. أنشئ وحدة إصدار جديدة عند تغيير البيانات القانونية.",
+        "بيانات جهة الإصدار مقفلة بعد إنشاء طلب الشهادة. أنشئ وحدة إصدار جديدة عند تغيير البيانات القانونية.",
         409,
       );
     }
@@ -234,7 +293,9 @@ router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, r
       csidCiphertext: encryptEInvoiceSecret(requiredText(body.csid, "معرّف شهادة الحل", 5_000)),
       secretCiphertext: encryptEInvoiceSecret(requiredText(body.secret, "سر شهادة الحل", 5_000)),
       certificateExpiresAt: parsedExpiry,
-      status: "ready",
+      status: "credentials_saved",
+      complianceStatus: "not_started",
+      complianceError: null,
       updatedAt: new Date(),
     }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
     await audit(auth, "einvoice_credentials_saved", String(updated.id));
@@ -264,6 +325,8 @@ router.get("/e-invoicing/documents", requireAuth, requireSubscriptionAccess, asy
         submissionReference: document.submissionReference,
         submissionError: document.submissionError,
         submissionAttempts: document.submissionAttempts,
+        localValidationError: document.localValidationError,
+        authorityXmlAvailable: Boolean(document.authorityXmlObjectPath),
         issuedAt: document.issuedAt.toISOString(),
         lastSubmissionAt: document.lastSubmissionAt?.toISOString() ?? null,
         xmlAvailable: Boolean(document.xmlObjectPath),
@@ -295,6 +358,97 @@ router.get("/e-invoicing/documents/:id/xml", requireAuth, requireSubscriptionAcc
   }
 });
 
+router.get("/e-invoicing/documents/:id/authority-xml", requireAuth, requireSubscriptionAccess, async (request: Request, response: Response): Promise<void> => {
+  const auth = requireSales(response);
+  if (!auth) return;
+  try {
+    const id = safeId(Array.isArray(request.params.id) ? request.params.id[0] : request.params.id);
+    const [document] = await db.select().from(eInvoiceDocumentsTable).where(and(
+      eq(eInvoiceDocumentsTable.id, id),
+      eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+    )).limit(1);
+    if (!document?.authorityXmlObjectPath) throw new EInvoiceRouteError("لم تُعد الهيئة نسخة XML لهذا المستند.", 404);
+    const xml = await readPrivateInvoiceXml(document.authorityXmlObjectPath);
+    response.setHeader("Content-Type", "application/xml; charset=utf-8");
+    response.setHeader("Content-Disposition", `attachment; filename="zatca-authority-${document.invoiceNumber}.xml"`);
+    response.send(xml);
+  } catch (error) {
+    if (error instanceof EInvoiceRouteError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+});
+
+router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const auth = requireOwner(response);
+  if (!auth) return;
+  await run(response, async () => {
+    const id = safeId(value(request.body).documentId);
+    const [document] = await db.select().from(eInvoiceDocumentsTable).where(and(
+      eq(eInvoiceDocumentsTable.id, id),
+      eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+    )).limit(1);
+    if (!document?.xmlObjectPath || document.localValidationError) {
+      throw new EInvoiceRouteError("اختر مستنداً موقّعاً اجتاز التحقق المحلي قبل فحص الامتثال.", 409);
+    }
+    const unit = await unitForOrganization(auth.organizationId);
+    const csid = decryptEInvoiceSecret(unit.csidCiphertext);
+    const secret = decryptEInvoiceSecret(unit.secretCiphertext);
+    if (!csid || !secret) throw new EInvoiceRouteError("احفظ Compliance CSID وبياناته قبل فحص الامتثال.", 409);
+    if (unit.environment !== "sandbox") {
+      throw new EInvoiceRouteError("فحص الامتثال يجب أن يتم في بيئة Sandbox قبل تهيئة الإنتاج.", 409);
+    }
+    const baseUrl = process.env.ZATCA_SANDBOX_BASE_URL;
+    if (!baseUrl) throw new EInvoiceRouteError("عنوان Sandbox المعتمد غير مهيأ على الخادم.", 409);
+    await db.update(eInvoiceUnitsTable).set({
+      complianceStatus: "checking",
+      complianceError: null,
+      updatedAt: new Date(),
+    }).where(eq(eInvoiceUnitsTable.id, unit.id));
+    let remote: { response: globalThis.Response; body: RecordData };
+    try {
+      remote = await authorityRequest(baseUrl, "/compliance/invoices", csid, secret, document);
+    } catch {
+      await db.update(eInvoiceUnitsTable).set({
+        complianceStatus: "unknown",
+        complianceError: "انقطع الاتصال قبل استلام نتيجة الامتثال. راجع بوابة الهيئة قبل إعادة الفحص.",
+        updatedAt: new Date(),
+      }).where(eq(eInvoiceUnitsTable.id, unit.id));
+      throw new EInvoiceRouteError("نتيجة فحص الامتثال غير مؤكدة؛ لا تعِد المحاولة قبل مراجعة سجل الهيئة.", 503);
+    }
+    const responseError = complianceErrorFromResponse(remote.body);
+    const accepted = remote.response.ok && !responseError;
+    const returnedXml = authorityXmlFromResponse(remote.body);
+    const authorityXmlObjectPath = returnedXml
+      ? await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority")
+      : null;
+    const [updatedUnit] = await db.update(eInvoiceUnitsTable).set({
+      status: accepted ? "compliance_passed" : "credentials_saved",
+      complianceStatus: accepted ? "passed" : "failed",
+      complianceError: accepted ? null : (responseError ?? `لم تؤكد الهيئة اجتياز الامتثال برمز ${remote.response.status}.`),
+      lastComplianceCheckAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(eInvoiceUnitsTable.id, unit.id)).returning();
+    if (authorityXmlObjectPath) {
+      await db.update(eInvoiceDocumentsTable).set({ authorityXmlObjectPath, updatedAt: new Date() })
+        .where(eq(eInvoiceDocumentsTable.id, document.id));
+    }
+    if (accepted) {
+      await db.update(eInvoiceDocumentsTable).set({ status: "pending_submission", updatedAt: new Date() })
+        .where(and(
+          eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+          eq(eInvoiceDocumentsTable.unitId, unit.id),
+          eq(eInvoiceDocumentsTable.status, "pending_compliance"),
+        ));
+    }
+    await audit(auth, accepted ? "einvoice_compliance_passed" : "einvoice_compliance_failed", String(document.id), String(remote.response.status));
+    if (!accepted) throw new EInvoiceRouteError(updatedUnit.complianceError || "لم تجتز الفاتورة فحص الامتثال.", 422);
+    return { unit: unitResponse(updatedUnit), document: { id: document.id, status: "pending_submission" } };
+  });
+});
+
 router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const auth = requireSales(response);
   if (!auth) return;
@@ -308,14 +462,8 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     const unit = await unitForOrganization(auth.organizationId);
     const csid = decryptEInvoiceSecret(unit.csidCiphertext);
     const secret = decryptEInvoiceSecret(unit.secretCiphertext);
-    if (!csid || !secret || unit.status !== "ready") {
-      throw new EInvoiceRouteError("أكمل شهادة الحل وبيانات CSID من إعدادات الفوترة قبل الإرسال.", 409);
-    }
-    if (unit.environment === "production" || unit.environment === "sandbox") {
-      throw new EInvoiceRouteError(
-        "الإرسال إلى الهيئة مقفل حتى تُستبدل طبقة التوقيع باعتماد مرحلة الامتثال الرسمي من الهيئة.",
-        409,
-      );
+    if (!csid || !secret || unit.complianceStatus !== "passed") {
+      throw new EInvoiceRouteError("أكمل فحص الامتثال المقبول في Sandbox قبل الإرسال.", 409);
     }
     if (!["pending_submission", "rejected"].includes(document.status)) {
       throw new EInvoiceRouteError("لا يمكن إرسال هذا المستند في حالته الحالية.", 409);
@@ -324,7 +472,6 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       ? process.env.ZATCA_PRODUCTION_BASE_URL
       : process.env.ZATCA_SANDBOX_BASE_URL;
     if (!baseUrl) throw new EInvoiceRouteError("عنوان بيئة فاتورة غير مهيأ على الخادم. أضف عنوان البيئة المعتمد قبل الإرسال.", 409);
-    const xml = await readPrivateInvoiceXml(document.xmlObjectPath);
     const endpoint = document.documentType === "standard"
       ? "/invoices/clearance/single"
       : "/invoices/reporting/single";
@@ -340,23 +487,9 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       notInArray(eInvoiceDocumentsTable.status, ["submitting", "cleared", "reported", "submission_unknown"]),
     )).returning();
     if (!claimed) throw new EInvoiceRouteError("هناك محاولة إرسال قيد المعالجة أو نتيجة غير مؤكدة لهذا المستند.", 409);
-    let remote: globalThis.Response;
+    let remote: { response: globalThis.Response; body: RecordData };
     try {
-      remote = await fetch(`${baseUrl.replace(/\/$/, "")}${endpoint}`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Accept-Version": "V2",
-          "Content-Type": "application/json",
-          Authorization: `Basic ${Buffer.from(`${csid}:${secret}`).toString("base64")}`,
-        },
-        body: JSON.stringify({
-          invoiceHash: document.invoiceHash,
-          uuid: document.uuid,
-          invoice: Buffer.from(xml, "utf8").toString("base64"),
-        }),
-        signal: AbortSignal.timeout(30_000),
-      });
+      remote = await authorityRequest(baseUrl, endpoint, csid, secret, document);
     } catch {
       await db.update(eInvoiceDocumentsTable).set({
         status: "submission_unknown",
@@ -366,26 +499,28 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       await audit(auth, "einvoice_submission_unknown", String(document.id));
       throw new EInvoiceRouteError("نتيجة الإرسال غير مؤكدة؛ لا تعِد المحاولة قبل مراجعة سجل الهيئة.", 503);
     }
-    const remoteText = await remote.text();
-    let remoteBody: RecordData = {};
-    try { remoteBody = JSON.parse(remoteText) as RecordData; } catch { remoteBody = { message: remoteText }; }
     const authorityStatus = document.documentType === "standard"
-      ? remoteBody.clearanceStatus
-      : remoteBody.reportingStatus;
+      ? remote.body.clearanceStatus
+      : remote.body.reportingStatus;
     const expectedStatus = document.documentType === "standard" ? "CLEARED" : "REPORTED";
-    const accepted = remote.ok && typeof authorityStatus === "string" && authorityStatus.toUpperCase() === expectedStatus;
+    const accepted = remote.response.ok && typeof authorityStatus === "string" && authorityStatus.toUpperCase() === expectedStatus;
     const status = accepted ? (document.documentType === "standard" ? "cleared" : "reported") : "rejected";
+    const returnedXml = authorityXmlFromResponse(remote.body);
+    const authorityXmlObjectPath = returnedXml
+      ? await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority")
+      : null;
     const [updated] = await db.update(eInvoiceDocumentsTable).set({
       status,
-      submissionReference: typeof authorityStatus === "string" ? authorityStatus : remote.headers.get("request-id"),
+      submissionReference: typeof authorityStatus === "string" ? authorityStatus : remote.response.headers.get("request-id"),
+      authorityXmlObjectPath: authorityXmlObjectPath ?? document.authorityXmlObjectPath,
       submissionError: accepted ? null : String(
-        remoteBody.message
-        ?? remoteBody.error
-        ?? `لم تؤكد الهيئة قبول المستند برمز ${remote.status}.`,
+        remote.body.message
+        ?? remote.body.error
+        ?? `لم تؤكد الهيئة قبول المستند برمز ${remote.response.status}.`,
       ).slice(0, 2_000),
       updatedAt: new Date(),
     }).where(eq(eInvoiceDocumentsTable.id, document.id)).returning();
-    await audit(auth, accepted ? "einvoice_submitted" : "einvoice_submission_rejected", String(document.id), String(remote.status));
+    await audit(auth, accepted ? "einvoice_submitted" : "einvoice_submission_rejected", String(document.id), String(remote.response.status));
     if (!accepted) throw new EInvoiceRouteError(updated.submissionError || "لم تؤكد الهيئة قبول الفاتورة.", 422);
     return { document: { id: updated.id, status: updated.status, submissionReference: updated.submissionReference } };
   });
@@ -421,7 +556,7 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
       const seller = sellerFromUnit(unit);
       if (!configurationIsComplete(seller)) throw new EInvoiceRouteError("لا يمكن إصدار إشعار قبل إكمال إعدادات الفوترة.");
       const invoiceNumber = `${noteType === "credit_note" ? "CN" : "DN"}-${original.invoiceNumber}-${unit.nextInvoiceCounter}`;
-      const generated = generateInvoiceDocument({
+      const generated = await generateInvoiceDocument({
         invoiceNumber,
         invoiceCounter: unit.nextInvoiceCounter,
         previousInvoiceHash: unit.previousInvoiceHash,
@@ -442,7 +577,7 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
         invoiceRecordId: original.invoiceRecordId,
         parentDocumentId: original.id,
         documentType: noteType,
-        status: "pending_compliance",
+        status: generated.signatureValid ? "pending_compliance" : "pending_credentials",
         invoiceNumber,
         uuid: generated.uuid,
         invoiceCounter: unit.nextInvoiceCounter,
@@ -450,6 +585,7 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
         invoiceHash: generated.invoiceHash,
         qrPayload: generated.qrPayload,
         xmlDigest: generated.invoiceHash,
+        localValidationError: generated.localValidationError,
         issuedAt: new Date(),
       }).returning();
       const xmlObjectPath = await savePrivateInvoiceXml(auth.organizationId, note.id, generated.xml);

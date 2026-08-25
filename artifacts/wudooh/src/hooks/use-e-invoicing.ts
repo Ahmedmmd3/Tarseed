@@ -21,6 +21,9 @@ export type EGSUnit = {
   csrReady: boolean;
   credentialsReady: boolean;
   certificateExpiresAt?: string;
+  complianceStatus: 'not_started' | 'checking' | 'passed' | 'failed' | 'unknown';
+  lastComplianceCheckAt: string | null;
+  complianceError: string | null;
 };
 
 export type EInvoiceDocument = {
@@ -36,6 +39,8 @@ export type EInvoiceDocument = {
   submissionReference: string | null;
   submissionError: string | null;
   submissionAttempts: number;
+  localValidationError: string | null;
+  authorityXmlAvailable: boolean;
   issuedAt: string;
   lastSubmissionAt: string | null;
   xmlAvailable: boolean;
@@ -189,6 +194,34 @@ export function useSubmitDocument() {
       return data.document as EInvoiceDocument;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['e-invoicing-documents'] });
+    },
+  });
+}
+
+export function useComplianceCheck() {
+  const queryClient = useQueryClient();
+  const { currentUser } = useStore();
+
+  return useMutation({
+    mutationFn: async (documentId: number) => {
+      const res = await fetch('/api/e-invoicing/compliance/check', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ documentId }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to run compliance check');
+      }
+      return await res.json() as { unit: EGSUnit; document: EInvoiceDocument };
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(['e-invoicing-setup'], data.unit);
       queryClient.invalidateQueries({ queryKey: ['e-invoicing-documents'] });
     },
   });
