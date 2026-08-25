@@ -1,4 +1,11 @@
 {
   "branch": "main",
-  "required_status_checks": ["API server clean typecheck", "Frontend typecheck"]
+  "required_status_checks": [
+    "API server clean typecheck",
+    "Frontend typecheck",
+    "Matrix typecheck (api / Node 22)",
+    "Matrix typecheck (frontend / Node 22)",
+    "Matrix typecheck (api / Node 24)",
+    "Matrix typecheck (frontend / Node 24)"
+  ]
 }

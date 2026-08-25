@@ -27,10 +27,9 @@ jobs:
   assert.deepEqual(getWorkflowJobNames(workflow), ["Lint", "Test"]);
 });
 
-test("rejects explicitly named matrix jobs before comparing branch protection", () => {
-  assert.throws(
-    () =>
-      getWorkflowJobNames(`
+test("expands explicitly named matrix jobs using each matrix value", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
 jobs:
   test:
     name: Test (Node \${{ matrix.node }})
@@ -39,7 +38,7 @@ jobs:
       matrix:
         node: [20, 22]
 `),
-    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+    ["Test (Node 20)", "Test (Node 22)"],
   );
 });
 
@@ -55,25 +54,29 @@ jobs:
   assert.deepEqual(getWorkflowJobNames(workflow), ["build", "deploy"]);
 });
 
-test("rejects fallback matrix jobs before comparing branch protection", () => {
-  assert.throws(
-    () =>
-      getWorkflowJobNames(`
+test("expands fallback matrix job names across multiple axes", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         node: [20, 22]
+        target: [api, frontend]
 `),
-    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+    [
+      "test (20, api)",
+      "test (20, frontend)",
+      "test (22, api)",
+      "test (22, frontend)",
+    ],
   );
 });
 
-test("rejects matrix jobs inherited through a job merge alias", () => {
-  assert.throws(
-    () =>
-      getWorkflowJobNames(`
+test("expands matrix jobs inherited through a job merge alias", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
 base-job: &base_job
   runs-on: ubuntu-latest
   strategy:
@@ -83,14 +86,13 @@ jobs:
   test:
     <<: *base_job
 `),
-    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+    ["test (20)", "test (22)"],
   );
 });
 
-test("rejects matrix strategies inherited through a nested merge alias", () => {
-  assert.throws(
-    () =>
-      getWorkflowJobNames(`
+test("expands matrix strategies inherited through a nested merge alias", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
 base-strategy: &base_strategy
   matrix:
     node: [20, 22]
@@ -100,18 +102,69 @@ jobs:
     strategy:
       <<: *base_strategy
 `),
-    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+    ["test (20)", "test (22)"],
   );
 });
 
-test("rejects matrix strategies inherited through flow-map merges", () => {
-  assert.throws(
-    () =>
-      getWorkflowJobNames(`
+test("expands matrix strategies inherited through flow-map merges", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
 base: &base { matrix: { node: [20, 22] } }
 jobs: { test: { runs-on: ubuntu-latest, strategy: { <<: *base } } }
 `),
-    /Unsupported matrix job in the CI workflow.*Job "test" cannot be validated/,
+    ["test (20)", "test (22)"],
+  );
+});
+
+test("uses declared matrix names inherited through job and matrix merges", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
+matrix-axes: &matrix_axes
+  node: [20, 22]
+base-job: &base_job
+  name: Base (Node \${{ matrix.node }})
+  strategy:
+    matrix:
+      <<: *matrix_axes
+jobs:
+  inherited:
+    <<: *base_job
+  overridden:
+    <<: *base_job
+    name: Overridden (Node \${{ matrix.node }})
+`),
+    [
+      "Base (Node 20)",
+      "Base (Node 22)",
+      "Overridden (Node 20)",
+      "Overridden (Node 22)",
+    ],
+  );
+});
+
+test("applies matrix include and exclude entries before naming checks", () => {
+  assert.deepEqual(
+    getWorkflowJobNames(`
+linux-node-24: &linux_node_24 { node: 24, os: linux }
+windows-node-22: &windows_node_22 { node: 22, os: windows }
+jobs:
+  test:
+    name: Test \${{ matrix.os }} \${{ matrix.node }}
+    strategy:
+      matrix:
+        node: [20, 22]
+        os: [linux, windows]
+        exclude:
+          - <<: *windows_node_22
+        include:
+          - <<: *linux_node_24
+`),
+    [
+      "Test linux 20",
+      "Test windows 20",
+      "Test linux 22",
+      "Test linux 24",
+    ],
   );
 });
 
