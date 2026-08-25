@@ -8,6 +8,7 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 app.set("trust proxy", 1);
+app.disable("x-powered-by");
 const trustedOrigins = new Set(
   [process.env.REPLIT_DEV_DOMAIN, process.env.REPLIT_DOMAINS]
     .filter(Boolean)
@@ -15,16 +16,26 @@ const trustedOrigins = new Set(
     .map((domain) => `https://${domain.trim()}`),
 );
 type RateLimitRule = { limit: number; windowMs: number };
+type PublicAuthRateLimitRule = { byIp: RateLimitRule; byEmail: RateLimitRule };
 type RateLimitBucket = { count: number; resetAt: number };
 const rateLimitBuckets = new Map<string, RateLimitBucket>();
-const loginRule: RateLimitRule = { limit: 10, windowMs: 15 * 60 * 1000 };
-const passwordResetRule: RateLimitRule = { limit: 5, windowMs: 15 * 60 * 1000 };
+const loginRule: PublicAuthRateLimitRule = {
+  byIp: { limit: 10, windowMs: 15 * 60 * 1000 },
+  byEmail: { limit: 5, windowMs: 15 * 60 * 1000 },
+};
+const passwordResetRule: PublicAuthRateLimitRule = {
+  byIp: { limit: 5, windowMs: 15 * 60 * 1000 },
+  byEmail: { limit: 3, windowMs: 15 * 60 * 1000 },
+};
 
 function consumeRateLimit(key: string, rule: RateLimitRule): { limited: boolean; retryAfterSeconds: number } {
   const now = Date.now();
   if (rateLimitBuckets.size > 10_000) {
     for (const [bucketKey, bucket] of rateLimitBuckets) {
       if (bucket.resetAt <= now) rateLimitBuckets.delete(bucketKey);
+    }
+    if (rateLimitBuckets.size > 10_000) {
+      rateLimitBuckets.delete(rateLimitBuckets.keys().next().value as string);
     }
   }
   const bucket = rateLimitBuckets.get(key);
@@ -52,9 +63,11 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     return;
   }
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
-  const emailHint = email ? createHash("sha256").update(email).digest("hex").slice(0, 16) : "none";
-  const byIp = consumeRateLimit(`${request.path}:ip:${request.ip}`, rule);
-  const byEmail = consumeRateLimit(`${request.path}:email:${emailHint}`, rule);
+  const byIp = consumeRateLimit(`${request.path}:ip:${request.ip}`, rule.byIp);
+  const emailHint = email ? createHash("sha256").update(email).digest("hex").slice(0, 16) : null;
+  const byEmail = emailHint
+    ? consumeRateLimit(`${request.path}:email:${emailHint}`, rule.byEmail)
+    : { limited: false, retryAfterSeconds: 0 };
   if (!byIp.limited && !byEmail.limited) {
     next();
     return;
@@ -87,6 +100,10 @@ app.use((_request, response, next) => {
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   response.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
+  response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
+  response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  response.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   response.setHeader("Cache-Control", "no-store");
   if (process.env.NODE_ENV === "production") {
     response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
@@ -125,5 +142,14 @@ app.use((request, response, next) => {
 });
 
 app.use("/api", publicAuthRateLimit, router);
+
+app.use((error: unknown, _request: express.Request, response: express.Response, next: express.NextFunction): void => {
+  logger.error({ err: error }, "Unhandled API request error");
+  if (response.headersSent) {
+    next(error);
+    return;
+  }
+  response.status(500).json({ error: "تعذر إتمام الطلب حالياً. حاول لاحقاً." });
+});
 
 export default app;
