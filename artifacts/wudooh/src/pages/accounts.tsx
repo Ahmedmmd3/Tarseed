@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore, Account, AccountType } from '@/context/store';
+import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -35,6 +36,7 @@ const TYPE_COLORS: Record<AccountType, 'default' | 'secondary' | 'destructive' |
 
 export default function Accounts() {
   const { accounts, addAccount, updateAccount } = useStore();
+  const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -50,27 +52,42 @@ export default function Accounts() {
     return matchesSearch && matchesType;
   });
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code || !name) return;
-    
-    addAccount({
-      code,
-      name,
-      type,
-      parent: null,
-      balance: 0,
-      status: 'active'
-    });
-    
-    setCode('');
-    setName('');
-    setType('asset');
-    setIsAddOpen(false);
+
+    try {
+      await addAccount({
+        code,
+        name,
+        type,
+        parent: null,
+        balance: 0,
+        status: 'active'
+      });
+      setCode('');
+      setName('');
+      setType('asset');
+      setIsAddOpen(false);
+    } catch (error) {
+      toast({
+        title: 'تعذر حفظ الحساب',
+        description: error instanceof Error ? error.message : 'تعذر حفظ الحساب. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const toggleStatus = (id: string, currentStatus: 'active' | 'inactive') => {
-    updateAccount(id, { status: currentStatus === 'active' ? 'inactive' : 'active' });
+  const toggleStatus = async (id: string, currentStatus: 'active' | 'inactive') => {
+    try {
+      await updateAccount(id, { status: currentStatus === 'active' ? 'inactive' : 'active' });
+    } catch (error) {
+      toast({
+        title: 'تعذر تحديث حالة الحساب',
+        description: error instanceof Error ? error.message : 'تعذر تحديث حالة الحساب. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -185,7 +202,7 @@ export default function Accounts() {
                     <Button 
                       variant="ghost" 
                       size="sm"
-                      onClick={() => toggleStatus(account.id, account.status)}
+                      onClick={() => { void toggleStatus(account.id, account.status); }}
                       data-testid={`button-toggle-status-${account.id}`}
                     >
                       {account.status === 'active' ? 'إيقاف' : 'تنشيط'}

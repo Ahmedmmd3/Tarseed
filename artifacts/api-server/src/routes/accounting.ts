@@ -1,6 +1,6 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq } from "drizzle-orm";
-import { db, erpRecordsTable } from "@workspace/db";
+import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -241,6 +241,16 @@ router.post("/accounting/sync-source-journals", requireAuth, requireCurrentDataG
     }
     created += 1;
   }
+  if (created > 0) {
+    await db.insert(teamAuditLogsTable).values({
+      organizationId: auth.organizationId,
+      actorId: auth.id,
+      actorName: auth.name || auth.email,
+      action: "source_journals_synced",
+      entity: "journalEntries",
+      details: `تم إنشاء ${created} قيداً من مصادر العمليات.`,
+    });
+  }
   response.json({ created, skipped });
 });
 
@@ -292,6 +302,14 @@ router.post("/accounting/close", requireAuth, requireCurrentDataGeneration, requ
     response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
     return;
   }
+  await db.insert(teamAuditLogsTable).values({
+    organizationId: auth.organizationId,
+    actorId: auth.id,
+    actorName: auth.name || auth.email,
+    action: "financial_period_closed",
+    entity: "financialClosures",
+    details: `إقفال الفترة من ${from} إلى ${to}.`,
+  });
   response.status(201).json({ closure: { ...closure.data, id: closure.id } });
 });
 

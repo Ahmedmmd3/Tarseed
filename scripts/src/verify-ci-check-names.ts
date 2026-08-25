@@ -176,6 +176,14 @@ export function findCheckNameMismatches(
   };
 }
 
+export function findMissingRequiredCheckNames(
+  workflowJobNames: string[],
+  requiredCheckNames: string[],
+): string[] {
+  const workflowNames = new Set(workflowJobNames);
+  return sortedUnique(requiredCheckNames).filter((name) => !workflowNames.has(name));
+}
+
 async function main() {
   const workspaceRoot = resolve(
     dirname(fileURLToPath(import.meta.url)),
@@ -211,32 +219,23 @@ async function main() {
   }
 
   const workflowJobNames = getWorkflowJobNames(workflow);
-  const mismatches = findCheckNameMismatches(
+  const missingRequiredChecks = findMissingRequiredCheckNames(
     workflowJobNames,
     protection.required_status_checks,
   );
 
-  if (mismatches.workflowOnly.length || mismatches.protectionOnly.length) {
-    const details = [
-      mismatches.workflowOnly.length
-        ? `Jobs in .github/workflows/ci.yml but not required on ${protection.branch}: ${mismatches.workflowOnly.join(", ")}`
-        : "",
-      mismatches.protectionOnly.length
-        ? `Checks required on ${protection.branch} but missing from .github/workflows/ci.yml: ${mismatches.protectionOnly.join(", ")}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
-
+  if (missingRequiredChecks.length) {
     throw new Error(
-      `CI job names do not match the protected-branch checks.\n${details}\n` +
+      `Required CI checks are missing from the workflow.\n` +
+        `Checks required on ${protection.branch} but missing from .github/workflows/ci.yml: ${missingRequiredChecks.join(", ")}\n` +
         "Update the job name and GitHub branch protection together, then update " +
         ".github/branch-protection-required-checks.json to match the protected branch.",
     );
   }
 
   console.log(
-    `CI job names match the ${protection.branch} branch protection checks: ${sortedUnique(workflowJobNames).join(", ")}`,
+    `Required CI checks exist for the ${protection.branch} branch: ${sortedUnique(protection.required_status_checks).join(", ")}. ` +
+      `Additional workflow jobs are advisory unless listed in branch protection.`,
   );
 }
 

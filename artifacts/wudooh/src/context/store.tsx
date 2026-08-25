@@ -109,6 +109,7 @@ const remoteSessionHintCookie = 'wudooh_remote_session';
 const sharedSessionKeyStorageKey = 'wudooh_shared_session_key';
 const syncQueueStoragePrefix = 'wudooh-sync-queue-';
 const storedDataVersion = 2;
+const staleDataGenerationEvent = 'wudooh:stale-data-generation';
 
 const initialAccounts: Account[] = [
   { id: '1', code: '1000', name: 'الصندوق', type: 'asset', parent: null, balance: 5000, status: 'active' },
@@ -455,6 +456,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('online', reconnect);
   }, [canRetrySharedConnection, loadSharedData]);
 
+  useEffect(() => {
+    const refreshAfterRestore = () => { void loadSharedData(); };
+    window.addEventListener(staleDataGenerationEvent, refreshAfterRestore);
+    return () => window.removeEventListener(staleDataGenerationEvent, refreshAfterRestore);
+  }, [loadSharedData]);
+
   const currentDataGeneration = (): number => {
     if (!currentUser) throw new Error('تعذر التحقق من إصدار بيانات المنشأة.');
     return currentUser.dataGeneration;
@@ -647,7 +654,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         body: JSON.stringify({ from, to }),
       });
       const payload = await response.json() as { closure?: FinancialClosure; error?: string };
-      if (!response.ok || !payload.closure) throw new Error(payload.error ?? 'تعذر إقفال الفترة.');
+      if (!response.ok || !payload.closure) {
+        notifyStaleDataGeneration(response, payload.error);
+        throw new Error(payload.error ?? 'تعذر إقفال الفترة.');
+      }
       const closure = normalizeClosure(payload.closure);
       setClosures((current) => [closure, ...current]);
       return closure;
@@ -716,7 +726,10 @@ async function createRecord<T>(table: string, data: unknown, dataGeneration: num
     body: JSON.stringify(data),
   });
   const payload = await response.json() as { record?: T; error?: string };
-  if (!response.ok || !payload.record) throw new Error(payload.error ?? 'تعذر حفظ السجل.');
+  if (!response.ok || !payload.record) {
+    notifyStaleDataGeneration(response, payload.error);
+    throw new Error(payload.error ?? 'تعذر حفظ السجل.');
+  }
   return payload.record;
 }
 
@@ -732,8 +745,16 @@ async function updateRecord<T>(table: string, id: string, data: unknown, dataGen
     body: JSON.stringify(data),
   });
   const payload = await response.json() as { record?: T; error?: string };
-  if (!response.ok || !payload.record) throw new Error(payload.error ?? 'تعذر تحديث السجل.');
+  if (!response.ok || !payload.record) {
+    notifyStaleDataGeneration(response, payload.error);
+    throw new Error(payload.error ?? 'تعذر تحديث السجل.');
+  }
   return payload.record;
+}
+
+function notifyStaleDataGeneration(response: Response, error?: string): void {
+  if (response.status !== 409 || !error?.includes('تغيّرت بيانات المنشأة')) return;
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(staleDataGenerationEvent));
 }
 
 function normalizeAccount(account: Account): Account {

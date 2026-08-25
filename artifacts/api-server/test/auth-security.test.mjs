@@ -69,6 +69,19 @@ test("يعيد طلب الاستعادة رسالة عامة ويحظره بعد
   assert.ok(Number(attempts[3].response.headers.get("retry-after")) > 0);
 });
 
+test("يعيد طلب الاستعادة رسالة عامة عند فشل التسليم دون كشف بيانات حساسة", async () => {
+  const email = `${unique("delivery-failure")}@example.test`;
+  const { response, payload } = await request("/auth/password-reset/request", {
+    method: "POST",
+    body: { email },
+    forwardedFor: "203.0.113.77",
+  });
+
+  assert.equal(response.status, 202, JSON.stringify(payload));
+  assert.equal(payload.error, undefined);
+  assert.equal(JSON.stringify(payload).includes(email), false);
+});
+
 test("يضيف الخادم ترويسات الحماية وعدم التخزين", async () => {
   const { response } = await request("/auth/me", { forwardedFor: "198.51.100.50" });
 

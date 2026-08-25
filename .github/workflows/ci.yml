@@ -65,3 +65,38 @@ jobs:
 
       - name: Typecheck frontend artifacts
         run: pnpm run typecheck:frontend
+
+  advisory-matrix-typecheck:
+    name: Matrix typecheck (${{ matrix.target }} / Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+        target: [api, frontend]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck selected target
+        run: |
+          if [ "${{ matrix.target }}" = "api" ]; then
+            pnpm run typecheck:api-server:clean
+          else
+            pnpm run typecheck:frontend
+          fi

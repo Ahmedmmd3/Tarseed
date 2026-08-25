@@ -32,23 +32,25 @@ function cookieFrom(response) {
 }
 
 async function registerOwner() {
+  const email = `${unique("backup-owner")}@example.test`;
+  const password = "Safe-test-password-123";
   const { response, payload } = await request("/auth/register", {
     method: "POST",
     body: {
       projectName: unique("منشأة النسخ"),
       name: "مالك النسخ",
-      email: `${unique("backup-owner")}@example.test`,
-      password: "Safe-test-password-123",
+      email,
+      password,
     },
   });
   assert.equal(response.status, 201, JSON.stringify(payload));
   const cookie = cookieFrom(response);
   generationByCookie.set(cookie, payload.user.dataGeneration);
-  return cookie;
+  return { cookie, email, password };
 }
 
 test("يستعيد المالك نسخة بيانات منشأته دون إبقاء التغييرات اللاحقة", async () => {
-  const cookie = await registerOwner();
+  const { cookie, email, password } = await registerOwner();
   const originalAccount = await request("/data/accounts", {
     method: "POST",
     cookie,
@@ -69,6 +71,21 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
     },
   });
   assert.equal(originalJournal.response.status, 201, JSON.stringify(originalJournal.payload));
+  const postedJournal = await request(`/data/journalEntries/${originalJournal.payload.record.id}`, {
+    method: "PATCH",
+    cookie,
+    body: { status: "posted" },
+  });
+  assert.equal(postedJournal.response.status, 200, JSON.stringify(postedJournal.payload));
+
+  const originalClosure = await request("/accounting/close", {
+    method: "POST",
+    cookie,
+    body: { from: "2026-01-01", to: "2026-01-31" },
+  });
+  assert.equal(originalClosure.response.status, 201, JSON.stringify(originalClosure.payload));
+  const summaryBeforeRestore = await request("/accounting/summary?from=2026-01-01&to=2026-01-31", { cookie });
+  assert.equal(summaryBeforeRestore.response.status, 200, JSON.stringify(summaryBeforeRestore.payload));
 
   const exported = await request("/backup/export", { cookie });
   assert.equal(exported.response.status, 200, JSON.stringify(exported.payload));
@@ -224,6 +241,17 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   assert.equal(staleMutation.response.status, 409, JSON.stringify(staleMutation.payload));
   generationByCookie.set(cookie, restored.payload.dataGeneration);
 
+  const renewedLogin = await request("/auth/login", {
+    method: "POST",
+    body: { email, password },
+  });
+  assert.equal(renewedLogin.response.status, 200, JSON.stringify(renewedLogin.payload));
+  assert.equal(renewedLogin.payload.user?.dataGeneration, restored.payload.dataGeneration);
+  const renewedCookie = cookieFrom(renewedLogin.response);
+  const renewedSession = await request("/auth/me", { cookie: renewedCookie });
+  assert.equal(renewedSession.response.status, 200, JSON.stringify(renewedSession.payload));
+  assert.equal(renewedSession.payload.user?.dataGeneration, restored.payload.dataGeneration);
+
   const accounts = await request("/data/accounts", { cookie });
   assert.equal(accounts.response.status, 200, JSON.stringify(accounts.payload));
   assert.ok(accounts.payload.records.some((account) => account.name === "حساب قبل النسخة"));
@@ -231,4 +259,18 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   assert.ok(!accounts.payload.records.some((account) => account.name === "تغيير قديم"));
   const journals = await request("/data/journalEntries", { cookie });
   assert.ok(journals.payload.records.some((journal) => journal.description === "قيد محفوظ في النسخة"));
+  const closures = await request("/data/financialClosures", { cookie });
+  assert.equal(closures.response.status, 200, JSON.stringify(closures.payload));
+  assert.ok(closures.payload.records.some((closure) => closure.id === originalClosure.payload.closure.id));
+  const summaryAfterRestore = await request("/accounting/summary?from=2026-01-01&to=2026-01-31", { cookie });
+  assert.equal(summaryAfterRestore.response.status, 200, JSON.stringify(summaryAfterRestore.payload));
+  assert.deepEqual(summaryAfterRestore.payload, summaryBeforeRestore.payload);
+
+  const createdAfterRestore = await request("/data/accounts", {
+    method: "POST",
+    cookie,
+    body: { code: unique("3000"), name: "حساب جديد بعد الاستعادة", type: "asset", balance: 0, status: "active" },
+  });
+  assert.equal(createdAfterRestore.response.status, 201, JSON.stringify(createdAfterRestore.payload));
+  assert.ok(createdAfterRestore.payload.record.id > Math.max(...exported.payload.records.map((record) => record.id)));
 });

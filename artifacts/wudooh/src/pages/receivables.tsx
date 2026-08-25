@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore, ReceivableType } from '@/context/store';
+import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,7 @@ import { Plus } from 'lucide-react';
 
 export default function Receivables() {
   const { receivables, addReceivable, payReceivable } = useStore();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<ReceivableType>('receivable');
   
   // Add form state
@@ -34,34 +36,49 @@ export default function Receivables() {
 
   const filtered = receivables.filter(r => r.type === activeTab);
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!party || !amount || !dueDate) return;
-    
-    addReceivable({
-      party,
-      type: activeTab,
-      reference,
-      amount: Number(amount),
-      dueDate,
-      paid: 0,
-      status: 'unpaid'
-    });
-    
-    setParty('');
-    setReference('');
-    setAmount('');
-    setDueDate('');
-    setIsAddOpen(false);
+
+    try {
+      await addReceivable({
+        party,
+        type: activeTab,
+        reference,
+        amount: Number(amount),
+        dueDate,
+        paid: 0,
+        status: 'unpaid'
+      });
+      setParty('');
+      setReference('');
+      setAmount('');
+      setDueDate('');
+      setIsAddOpen(false);
+    } catch (error) {
+      toast({
+        title: 'تعذر حفظ المستحق',
+        description: error instanceof Error ? error.message : 'تعذر حفظ المستحق. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    }
   };
 
-  const handlePaySubmit = (e: React.FormEvent) => {
+  const handlePaySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!payId || !payAmount) return;
-    
-    payReceivable(payId, Number(payAmount));
-    setPayId(null);
-    setPayAmount('');
+
+    try {
+      await payReceivable(payId, Number(payAmount));
+      setPayId(null);
+      setPayAmount('');
+    } catch (error) {
+      toast({
+        title: 'تعذر تسجيل السداد',
+        description: error instanceof Error ? error.message : 'تعذر تسجيل السداد. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    }
   };
 
   const getStatusBadge = (status: string) => {

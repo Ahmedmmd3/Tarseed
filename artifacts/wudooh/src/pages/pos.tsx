@@ -179,7 +179,12 @@ export default function POS() {
       });
 
       const data = await res.json() as CheckoutPayload;
-      if (!res.ok || !data.invoice) throw new Error(data.error ?? 'تعذر إتمام عملية البيع.');
+      if (!res.ok || !data.invoice) {
+        if (res.status === 409 && data.error?.includes('تغيّرت بيانات المنشأة')) {
+          window.dispatchEvent(new Event('wudooh:stale-data-generation'));
+        }
+        throw new Error(data.error ?? 'تعذر إتمام عملية البيع.');
+      }
       setInvoice({ ...data.invoice, total: Number(data.invoice.total) || subtotal });
       setCart([]);
       setCustomerName('');

@@ -457,6 +457,10 @@ router.post("/backup/restore", requireAuth, requireOwner, async (request: Reques
   }
 
   const result = await db.transaction(async (tx) => {
+    // Restores preserve record IDs from the backup and reset the shared serial
+    // sequence afterwards. Block concurrent record writers until both steps
+    // complete so a restore cannot move the sequence behind a newly inserted ID.
+    await tx.execute(sql`LOCK TABLE erp_records IN SHARE ROW EXCLUSIVE MODE`);
     const ids = parsed.records!.map((record) => record.id);
     if (ids.length > 0) {
       const [foreignRecord] = await tx.select({ id: erpRecordsTable.id })

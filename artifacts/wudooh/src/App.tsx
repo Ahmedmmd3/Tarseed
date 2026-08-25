@@ -21,6 +21,7 @@ import Journals from '@/pages/journals';
 import Receivables from '@/pages/receivables';
 import Reports from '@/pages/reports';
 import Team from '@/pages/team';
+import ActivityLog from '@/pages/activity-log';
 import ResetPassword from '@/pages/reset-password';
 import WorkspacePrep from '@/pages/workspace-prep';
 import POS from '@/pages/pos';
@@ -75,6 +76,7 @@ function Router() {
         <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />
         <Route path="/reports" component={() => <DashboardLayout><Reports /></DashboardLayout>} />
         <Route path="/team" component={() => <DashboardLayout><Team /></DashboardLayout>} />
+        <Route path="/operations-log" component={() => <DashboardLayout><ActivityLog /></DashboardLayout>} />
         <Route component={NotFound} />
       </Switch>
     </RoutedErrorBoundary>

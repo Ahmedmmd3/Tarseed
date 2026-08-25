@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  findMissingRequiredCheckNames,
   findCheckNameMismatches,
   getWorkflowJobNames,
 } from "./verify-ci-check-names";
@@ -132,6 +133,26 @@ jobs:
     workflowOnly: ["Continuous Integration"],
     protectionOnly: ["CI"],
   });
+});
+
+test("allows advisory workflow jobs outside protected-branch checks", () => {
+  assert.deepEqual(
+    findMissingRequiredCheckNames(
+      ["API server clean typecheck", "Frontend typecheck", "Matrix typecheck (Node 24)"],
+      ["API server clean typecheck", "Frontend typecheck"],
+    ),
+    [],
+  );
+});
+
+test("reports protected checks missing from the workflow", () => {
+  assert.deepEqual(
+    findMissingRequiredCheckNames(
+      ["Frontend typecheck"],
+      ["API server clean typecheck", "Frontend typecheck"],
+    ),
+    ["API server clean typecheck"],
+  );
 });
 
 test("rejects workflows without a top-level jobs section", () => {

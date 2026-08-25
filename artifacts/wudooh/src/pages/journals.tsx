@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useStore, JournalLine } from '@/context/store';
+import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,7 @@ import { Plus, Trash2 } from 'lucide-react';
 
 export default function Journals() {
   const { journals, accounts, addJournal, postJournal } = useStore();
+  const { toast } = useToast();
   const [isAddOpen, setIsAddOpen] = useState(false);
 
   // Form state
@@ -50,24 +52,43 @@ export default function Journals() {
   const isBalanced = totalDebit === totalCredit && totalDebit > 0;
   const canSubmit = isBalanced && description && date && lines.every(l => l.accountId !== '');
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
-    
-    addJournal({
-      date,
-      description,
-      status: 'draft',
-      lines: lines.map((l, i) => ({ ...l, id: `temp-${i}` }))
-    });
-    
-    setDate(new Date().toISOString().split('T')[0]);
-    setDescription('');
-    setLines([
-      { accountId: '', debit: 0, credit: 0 },
-      { accountId: '', debit: 0, credit: 0 }
-    ]);
-    setIsAddOpen(false);
+
+    try {
+      await addJournal({
+        date,
+        description,
+        status: 'draft',
+        lines: lines.map((l, i) => ({ ...l, id: `temp-${i}` }))
+      });
+      setDate(new Date().toISOString().split('T')[0]);
+      setDescription('');
+      setLines([
+        { accountId: '', debit: 0, credit: 0 },
+        { accountId: '', debit: 0, credit: 0 }
+      ]);
+      setIsAddOpen(false);
+    } catch (error) {
+      toast({
+        title: 'تعذر حفظ القيد',
+        description: error instanceof Error ? error.message : 'تعذر حفظ القيد. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handlePostJournal = async (id: string) => {
+    try {
+      await postJournal(id);
+    } catch (error) {
+      toast({
+        title: 'تعذر ترحيل القيد',
+        description: error instanceof Error ? error.message : 'تعذر ترحيل القيد. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -207,7 +228,7 @@ export default function Journals() {
                   {journal.status === 'posted' ? 'مرحّل' : 'مسودة'}
                 </Badge>
                 {journal.status === 'draft' && (
-                  <Button size="sm" onClick={() => postJournal(journal.id)} data-testid={`button-post-${journal.id}`}>
+                  <Button size="sm" onClick={() => { void handlePostJournal(journal.id); }} data-testid={`button-post-${journal.id}`}>
                     ترحيل القيد
                   </Button>
                 )}

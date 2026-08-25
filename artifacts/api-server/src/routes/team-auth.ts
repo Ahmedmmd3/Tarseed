@@ -95,7 +95,7 @@ function passwordResetUrl(request: Request, token: string): string {
   return `${origin}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
-async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string; name: string; resetUrl: string }): Promise<void> {
+async function sendResendEmail({ to, subject, html }: { to: string; subject: string; html: string }): Promise<void> {
   const configuredSender = process.env.RESEND_FROM_EMAIL?.trim();
   if (!configuredSender && process.env.NODE_ENV === "production") {
     throw new Error("Password reset email delivery is not configured.");
@@ -105,9 +105,21 @@ async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       from: configuredSender || "Tarseed <onboarding@resend.dev>",
-      to: [email],
-      subject: "استعادة كلمة مرور ترصيد",
-      html: `
+      to: [to],
+      subject,
+      html,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Resend request failed with status ${response.status}`);
+  }
+}
+
+async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string; name: string; resetUrl: string }): Promise<void> {
+  await sendResendEmail({
+    to: email,
+    subject: "استعادة كلمة مرور ترصيد",
+    html: `
         <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.7;color:#0f172a">
           <h1 style="font-size:22px">استعادة كلمة المرور</h1>
           <p>مرحباً ${escapeHtml(name)}،</p>
@@ -116,11 +128,55 @@ async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string
           <p>ينتهي هذا الرابط خلال ${PASSWORD_RESET_MINUTES} دقيقة ويمكن استخدامه مرة واحدة فقط.</p>
           <p>إذا لم تطلب تغيير كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان.</p>
         </div>`,
-    }),
   });
-  if (!response.ok) {
-    throw new Error(`Resend request failed with status ${response.status}`);
-  }
+}
+
+async function notifyOwnersAboutResetDeliveryFailure({
+  organizationId,
+  targetEmail,
+}: {
+  organizationId: number;
+  targetEmail: string;
+}): Promise<void> {
+  const owners = await db.select({
+    id: teamUsersTable.id,
+    email: teamUsersTable.email,
+    name: teamUsersTable.name,
+  }).from(teamUsersTable).where(and(
+    eq(teamUsersTable.organizationId, organizationId),
+    eq(teamUsersTable.roleId, "owner"),
+    eq(teamUsersTable.status, "active"),
+  ));
+
+  await db.insert(teamAuditLogsTable).values({
+    organizationId,
+    actorId: null,
+    actorName: "النظام",
+    action: "password_reset_delivery_failed",
+    entity: targetEmail,
+    details: "تعذر تسليم رابط استعادة كلمة المرور. راجع إعدادات البريد وسجل الخدمة.",
+  });
+
+  await Promise.all(owners.map(async (owner) => {
+    try {
+      await sendResendEmail({
+        to: owner.email,
+        subject: "تنبيه: تعذر إرسال رابط استعادة كلمة المرور",
+        html: `
+          <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.7;color:#0f172a">
+            <h1 style="font-size:22px">تعذر إرسال رابط استعادة كلمة المرور</h1>
+            <p>مرحباً ${escapeHtml(owner.name)}،</p>
+            <p>تعذر على ترصيد تسليم رابط استعادة كلمة المرور لأحد أعضاء الفريق.</p>
+            <p>راجع إعدادات البريد وسجل التدقيق في إدارة الفريق. لم يتم تضمين أي رمز أو رابط حساس في هذا التنبيه.</p>
+          </div>`,
+      });
+    } catch (notificationError) {
+      logger.warn(
+        { err: notificationError, organizationId, ownerId: owner.id },
+        "Unable to deliver password reset failure notification to owner",
+      );
+    }
+  }));
 }
 
 function validateMemberBody(body: Record<string, unknown>, requiresPassword: boolean) {
@@ -244,6 +300,17 @@ router.post("/auth/password-reset/request", async (request: Request, response: R
   } catch (error) {
     await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, record.id));
     logger.error({ err: error, userId: user.id }, "Unable to deliver password reset email");
+    try {
+      await notifyOwnersAboutResetDeliveryFailure({
+        organizationId: user.organizationId,
+        targetEmail: user.email,
+      });
+    } catch (notificationError) {
+      logger.error(
+        { err: notificationError, userId: user.id },
+        "Unable to record password reset delivery failure notification",
+      );
+    }
   }
 
   response.status(202).json({ message });

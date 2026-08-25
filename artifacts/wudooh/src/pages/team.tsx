@@ -24,6 +24,13 @@ type MemberStatus = 'active' | 'inactive';
 
 type TeamMember = SharedUser;
 type Warehouse = { id: number; name: string; type?: string; status?: string };
+type AuditLog = {
+  id: number;
+  action: string;
+  entity: string;
+  details: string;
+  createdAt: string;
+};
 
 type MemberForm = {
   name: string;
@@ -93,6 +100,7 @@ export default function Team() {
   const [isExportingBackup, setIsExportingBackup] = useState(false);
   const [isRestoringBackup, setIsRestoringBackup] = useState(false);
   const [passwordResetConfigured, setPasswordResetConfigured] = useState<boolean | null>(null);
+  const [resetDeliveryFailures, setResetDeliveryFailures] = useState<AuditLog[]>([]);
   const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const isOwner = currentUser?.roleId === 'owner';
@@ -101,10 +109,11 @@ export default function Team() {
     setIsLoading(true);
     setPageError('');
     try {
-      const [membersResponse, warehousesResponse, resetStatusResponse] = await Promise.all([
+      const [membersResponse, warehousesResponse, resetStatusResponse, auditLogsResponse] = await Promise.all([
         fetch('/api/team/members', { credentials: 'include' }),
         fetch('/api/data/warehouses', { credentials: 'include' }),
         fetch('/api/auth/password-reset/status', { credentials: 'include' }),
+        fetch('/api/audit-logs', { credentials: 'include' }),
       ]);
       const membersPayload = await readPayload<{ members?: TeamMember[]; error?: string }>(membersResponse);
       if (!membersResponse.ok || !Array.isArray(membersPayload.members)) {
@@ -118,6 +127,12 @@ export default function Team() {
       if (resetStatusResponse.ok) {
         const resetStatusPayload = await readPayload<{ emailDeliveryConfigured?: boolean }>(resetStatusResponse);
         setPasswordResetConfigured(resetStatusPayload.emailDeliveryConfigured === true);
+      }
+      if (auditLogsResponse.ok) {
+        const auditLogsPayload = await readPayload<{ logs?: AuditLog[] }>(auditLogsResponse);
+        setResetDeliveryFailures((auditLogsPayload.logs ?? [])
+          .filter((log) => log.action === 'password_reset_delivery_failed')
+          .slice(0, 3));
       }
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'تعذر تحميل أعضاء الفريق.');
@@ -405,6 +420,27 @@ export default function Team() {
           </div>
         </CardContent>
       </Card>
+
+      {resetDeliveryFailures.length > 0 && (
+        <Card className="border-amber-200 bg-amber-50/60">
+          <CardHeader className="border-b border-amber-200">
+            <CardTitle className="text-lg text-amber-900">تنبيه في إرسال روابط الاستعادة</CardTitle>
+            <CardDescription className="text-amber-800">
+              تعذر إرسال رابط استعادة مؤخراً. راجع إعدادات البريد ثم أعد المحاولة عند الحاجة.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2 p-5">
+            {resetDeliveryFailures.map((failure) => (
+              <div key={failure.id} className="flex flex-col gap-1 rounded-lg border border-amber-200 bg-white/70 p-3 text-sm text-amber-950 sm:flex-row sm:items-center sm:justify-between">
+                <span>{failure.details}</span>
+                <span className="text-xs text-amber-700" dir="ltr">
+                  {new Date(failure.createdAt).toLocaleString('ar-SA')}
+                </span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="border-b border-slate-100">
