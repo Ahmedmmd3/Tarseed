@@ -80,6 +80,15 @@ function subscriptionPlanId(subscription: Stripe.Subscription): string {
   return priceMetadata?.trim() || "standard";
 }
 
+export function isExpiredStripeSignatureError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { name?: unknown; type?: unknown; message?: unknown };
+  const isSignatureVerificationError =
+    candidate.name === "StripeSignatureVerificationError"
+    || candidate.type === "StripeSignatureVerificationError";
+  return isSignatureVerificationError && candidate.message === "Timestamp outside the tolerance zone";
+}
+
 async function updateFromEvent(event: Stripe.Event): Promise<SubscriptionUpdate | null> {
   const subscription = await resolveSubscription(event);
   const organizationId = eventOrganizationId(event, subscription);

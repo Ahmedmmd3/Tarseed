@@ -4,8 +4,8 @@ import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import { createHash } from "node:crypto";
 import router from "./routes";
-import { logger } from "./lib/logger";
-import { processStripeWebhook } from "./lib/stripe-webhooks";
+import { logger, recordExpiredStripeWebhookSignature } from "./lib/logger";
+import { isExpiredStripeSignatureError, processStripeWebhook } from "./lib/stripe-webhooks";
 
 const app: Express = express();
 app.set("trust proxy", 1);
@@ -21,7 +21,12 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
     await processStripeWebhook(request.body, signature);
     response.json({ received: true });
   } catch (error) {
-    logger.warn({ errorType: error instanceof Error ? error.name : "UnknownError" }, "Stripe webhook processing failed");
+    const expiredSignature = isExpiredStripeSignatureError(error);
+    if (expiredSignature) recordExpiredStripeWebhookSignature();
+    logger.warn(
+      { errorType: expiredSignature ? "ExpiredSignature" : "WebhookProcessingError" },
+      "Stripe webhook processing failed",
+    );
     response.status(400).json({ error: "تعذر التحقق من حدث الدفع." });
   }
 });
