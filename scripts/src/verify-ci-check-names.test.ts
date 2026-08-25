@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   findMissingRequiredCheckNames,
   findCheckNameMismatches,
+  formatMissingRequiredChecksError,
+  getWorkflowCheckNames,
   getWorkflowJobNames,
 } from "./verify-ci-check-names";
 
@@ -39,6 +41,103 @@ jobs:
         node: [20, 22]
 `),
     ["Test (Node 20)", "Test (Node 22)"],
+  );
+});
+
+test("skips matrix checks whose values come from a previous job", () => {
+  const workflow = `
+jobs:
+  prepare:
+    name: Prepare matrix
+    runs-on: ubuntu-latest
+  dynamic-test:
+    name: Dynamic test (\${{ matrix.target }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: \${{ fromJSON(needs.prepare.outputs.matrix) }}
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+`;
+
+  assert.deepEqual(getWorkflowJobNames(workflow), ["Prepare matrix", "Lint"]);
+  assert.deepEqual(getWorkflowCheckNames(workflow), {
+    names: ["Prepare matrix", "Lint"],
+    dynamicMatrixJobs: ["dynamic-test"],
+  });
+});
+
+test("does not guess names when a matrix include entry is dynamic", () => {
+  assert.deepEqual(
+    getWorkflowCheckNames(`
+jobs:
+  test:
+    name: Test (\${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include: \${{ fromJSON(needs.prepare.outputs.include) }}
+`),
+    {
+      names: [],
+      dynamicMatrixJobs: ["test"],
+    },
+  );
+});
+
+test("detects runtime expressions in aliased matrix include entries", () => {
+  assert.deepEqual(
+    getWorkflowCheckNames(`
+dynamic-include: &dynamic_include
+  target: \${{ fromJSON(needs.prepare.outputs.target) }}
+jobs:
+  test:
+    name: Test (\${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - *dynamic_include
+`),
+    {
+      names: [],
+      dynamicMatrixJobs: ["test"],
+    },
+  );
+});
+
+test("detects runtime expressions in aliased matrix exclude entries", () => {
+  assert.deepEqual(
+    getWorkflowCheckNames(`
+dynamic-exclude: &dynamic_exclude
+  target: \${{ fromJSON(needs.prepare.outputs.target) }}
+jobs:
+  test:
+    name: Test (\${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [api]
+        exclude:
+          - *dynamic_exclude
+`),
+    {
+      names: [],
+      dynamicMatrixJobs: ["test"],
+    },
+  );
+});
+
+test("explains how to protect a workflow with runtime-generated matrix checks", () => {
+  assert.match(
+    formatMissingRequiredChecksError(
+      "main",
+      ["Dynamic test (api)"],
+      ["dynamic-test"],
+    ),
+    /runtime-generated matrix checks from job\(s\) dynamic-test.*not guessed.*Keep those checks out of branch protection, or add a stable non-matrix aggregate job instead/s,
   );
 });
 

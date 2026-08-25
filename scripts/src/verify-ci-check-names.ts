@@ -188,6 +188,28 @@ function unsupportedMatrix(details: string): Error {
   );
 }
 
+const githubExpressionPattern = /\$\{\{[\s\S]*?\}\}/;
+
+function containsGithubExpression(value: unknown, document: Document): boolean {
+  const resolved = resolveYamlAliases(value, document);
+  if (isScalar(resolved)) {
+    return githubExpressionPattern.test(String(resolved.value ?? ""));
+  }
+  if (isSeq(resolved)) {
+    return resolved.items.some((item) =>
+      containsGithubExpression(item, document),
+    );
+  }
+  if (isMap(resolved)) {
+    return resolved.items.some(
+      (item) =>
+        containsGithubExpression(item.key, document) ||
+        containsGithubExpression(item.value, document),
+    );
+  }
+  return false;
+}
+
 function yamlNodeToValue(value: unknown, document: Document): unknown {
   const resolved = resolveYamlAliases(value, document);
   if (isScalar(resolved)) {
@@ -267,9 +289,15 @@ function combinationCanInclude(
 function expandMatrix(
   strategy: unknown,
   document: Document,
-): { combinations: MatrixCombination[]; keys: string[] } | undefined {
+):
+  | { combinations: MatrixCombination[]; keys: string[] }
+  | { dynamic: true }
+  | undefined {
   const resolvedStrategy = resolveYamlAliases(strategy, document);
   if (!isMap(resolvedStrategy)) {
+    if (containsGithubExpression(resolvedStrategy, document)) {
+      return { dynamic: true };
+    }
     return undefined;
   }
 
@@ -279,6 +307,9 @@ function expandMatrix(
   }
   const resolvedMatrix = resolveYamlAliases(matrix, document);
   if (!isMap(resolvedMatrix)) {
+    if (containsGithubExpression(resolvedMatrix, document)) {
+      return { dynamic: true };
+    }
     throw unsupportedMatrix(
       "The matrix definition must be a mapping with explicit values.",
     );
@@ -289,6 +320,9 @@ function expandMatrix(
   let exclude: MatrixCombination[] = [];
   for (const entry of getMapEntries(resolvedMatrix, document)) {
     const value = resolveYamlAliases(entry.value, document);
+    if (containsGithubExpression(value, document)) {
+      return { dynamic: true };
+    }
     if (entry.key === "include" || entry.key === "exclude") {
       if (!isSeq(value)) {
         throw unsupportedMatrix(
@@ -471,7 +505,12 @@ function hasMalformedSiblingJobDefinition(workflow: string): boolean {
   return false;
 }
 
-export function getWorkflowJobNames(workflow: string): string[] {
+export type WorkflowCheckNames = {
+  names: string[];
+  dynamicMatrixJobs: string[];
+};
+
+export function getWorkflowCheckNames(workflow: string): WorkflowCheckNames {
   const document = parseDocument(workflow, {
     prettyErrors: false,
     strict: true,
@@ -518,7 +557,10 @@ export function getWorkflowJobNames(workflow: string): string[] {
     throw new Error("Could not find any jobs in the CI workflow.");
   }
 
-  return jobs.items.map((job) => {
+  const names: string[] = [];
+  const dynamicMatrixJobs: string[] = [];
+
+  for (const job of jobs.items) {
     const jobKey = resolveYamlAliases(job.key, document);
     const jobDefinition = resolveYamlAliases(job.value, document);
     if (
@@ -531,18 +573,26 @@ export function getWorkflowJobNames(workflow: string): string[] {
     const jobKeyValue = jobKey.value;
 
     const strategy = findMapValue(jobDefinition, "strategy", document);
-    const matrix = strategy === undefined ? undefined : expandMatrix(strategy, document);
+    const matrix =
+      strategy === undefined ? undefined : expandMatrix(strategy, document);
 
     const jobName = findMapValue(jobDefinition, "name", document);
     if (matrix === undefined) {
       if (jobName === undefined) {
-        return jobKey.value;
+        names.push(jobKey.value);
+        continue;
       }
       const resolvedJobName = resolveYamlAliases(jobName, document);
       if (!isScalar(resolvedJobName)) {
         throw new Error(unsupportedNestedJobDefinitionMessage);
       }
-      return String(resolvedJobName.value ?? "");
+      names.push(String(resolvedJobName.value ?? ""));
+      continue;
+    }
+
+    if ("dynamic" in matrix) {
+      dynamicMatrixJobs.push(jobKeyValue);
+      continue;
     }
 
     if (jobName !== undefined) {
@@ -551,18 +601,29 @@ export function getWorkflowJobNames(workflow: string): string[] {
         throw new Error(unsupportedNestedJobDefinitionMessage);
       }
       const name = String(resolvedJobName.value ?? "");
-      return matrix.combinations.map((combination) =>
-        renderMatrixJobName(name, combination, jobKeyValue),
+      names.push(
+        ...matrix.combinations.map((combination) =>
+          renderMatrixJobName(name, combination, jobKeyValue),
+        ),
       );
+      continue;
     }
 
-    return matrix.combinations.map(
-      (combination) =>
-        `${jobKeyValue} (${matrix.keys
-          .map((key) => formatMatrixValue(combination[key]))
-          .join(", ")})`,
+    names.push(
+      ...matrix.combinations.map(
+        (combination) =>
+          `${jobKeyValue} (${matrix.keys
+            .map((key) => formatMatrixValue(combination[key]))
+            .join(", ")})`,
+      ),
     );
-  }).flat();
+  }
+
+  return { names, dynamicMatrixJobs };
+}
+
+export function getWorkflowJobNames(workflow: string): string[] {
+  return getWorkflowCheckNames(workflow).names;
 }
 
 function sortedUnique(values: string[]): string[] {
@@ -592,6 +653,28 @@ export function findMissingRequiredCheckNames(
 ): string[] {
   const workflowNames = new Set(workflowJobNames);
   return sortedUnique(requiredCheckNames).filter((name) => !workflowNames.has(name));
+}
+
+export function formatMissingRequiredChecksError(
+  branch: string,
+  missingRequiredChecks: string[],
+  dynamicMatrixJobs: string[],
+): string {
+  const dynamicMatrixGuidance =
+    dynamicMatrixJobs.length > 0
+      ? ` The workflow also contains runtime-generated matrix checks from ` +
+        `job(s) ${dynamicMatrixJobs.join(", ")}; their names are intentionally ` +
+        "not guessed. Keep those checks out of branch protection, or add a " +
+        "stable non-matrix aggregate job instead."
+      : "";
+
+  return (
+    `Required CI checks are missing from the workflow.\n` +
+    `Checks required on ${branch} but missing from .github/workflows/ci.yml: ${missingRequiredChecks.join(", ")}\n` +
+    "Update the job name and GitHub branch protection together, then update " +
+    ".github/branch-protection-required-checks.json to match the protected branch." +
+    dynamicMatrixGuidance
+  );
 }
 
 async function main() {
@@ -628,7 +711,8 @@ async function main() {
     );
   }
 
-  const workflowJobNames = getWorkflowJobNames(workflow);
+  const workflowCheckNames = getWorkflowCheckNames(workflow);
+  const workflowJobNames = workflowCheckNames.names;
   const missingRequiredChecks = findMissingRequiredCheckNames(
     workflowJobNames,
     protection.required_status_checks,
@@ -636,10 +720,20 @@ async function main() {
 
   if (missingRequiredChecks.length) {
     throw new Error(
-      `Required CI checks are missing from the workflow.\n` +
-        `Checks required on ${protection.branch} but missing from .github/workflows/ci.yml: ${missingRequiredChecks.join(", ")}\n` +
-        "Update the job name and GitHub branch protection together, then update " +
-        ".github/branch-protection-required-checks.json to match the protected branch.",
+      formatMissingRequiredChecksError(
+        protection.branch,
+        missingRequiredChecks,
+        workflowCheckNames.dynamicMatrixJobs,
+      ),
+    );
+  }
+
+  if (workflowCheckNames.dynamicMatrixJobs.length > 0) {
+    console.warn(
+      `Skipped runtime-generated matrix check names for job(s) ` +
+        `${workflowCheckNames.dynamicMatrixJobs.join(", ")}. ` +
+        "Their names cannot be verified before GitHub expands the matrix; " +
+        "use a stable aggregate job for branch protection.",
     );
   }
 
