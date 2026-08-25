@@ -33,6 +33,8 @@ export default function POS() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit'>('card');
   const [customerName, setCustomerName] = useState('');
+  const [customerVatNumber, setCustomerVatNumber] = useState('');
+  const [customerAddress, setCustomerAddress] = useState('');
 
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [invoice, setInvoice] = useState<{ id: string | number; number: string; total: number } | null>(null);
@@ -159,6 +161,8 @@ export default function POS() {
         issueDate: new Date().toISOString().slice(0, 10),
         paymentMethod,
         customerName: customerName.trim() || undefined,
+        customerVatNumber: customerVatNumber.trim() || undefined,
+        customerAddress: customerAddress.trim() || undefined,
         clientOperationId: clientOpId,
         items: cart.map(item => ({
           productId: Number(item.product.id),
@@ -188,6 +192,8 @@ export default function POS() {
       setInvoice({ ...data.invoice, total: Number(data.invoice.total) || subtotal });
       setCart([]);
       setCustomerName('');
+      setCustomerVatNumber('');
+      setCustomerAddress('');
       setPendingOperationId(null);
       await loadData();
     } catch (checkoutError) {
@@ -255,6 +261,26 @@ export default function POS() {
               onChange={e => setSearchQuery(e.target.value)}
               data-testid="input-search-products"
             />
+               <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={15}
+                  placeholder="الرقم الضريبي للعميل (لفاتورة ضريبية)"
+                  value={customerVatNumber}
+                  onChange={e => setCustomerVatNumber(e.target.value.replace(/\D/g, ''))}
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium shadow-sm focus:border-teal-500 focus:outline-none"
+                  data-testid="input-customer-vat"
+               />
+               {customerVatNumber && (
+                 <input
+                    type="text"
+                    placeholder="عنوان العميل (مطلوب للفاتورة الضريبية)"
+                    value={customerAddress}
+                    onChange={e => setCustomerAddress(e.target.value)}
+                    className="h-11 w-full rounded-xl border border-slate-200 bg-white px-4 text-sm font-medium shadow-sm focus:border-teal-500 focus:outline-none"
+                    data-testid="input-customer-address"
+                 />
+               )}
           </div>
           
           {loading ? (

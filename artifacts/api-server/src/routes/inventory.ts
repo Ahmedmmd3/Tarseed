@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
-import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
+import { db, eInvoiceDocumentsTable, eInvoiceUnitsTable, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
+import { configurationIsComplete, decryptEInvoiceSecret, generateInvoiceDocument, type SellerProfile } from "../lib/e-invoicing";
+import { savePrivateInvoiceXml } from "../lib/private-object-store";
 import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -132,6 +135,21 @@ function saleDate(value: unknown): string {
     throw new InventoryRouteError("تاريخ البيع غير صالح.", 400);
   }
   return normalized;
+}
+
+function sellerProfile(unit: typeof eInvoiceUnitsTable.$inferSelect): SellerProfile {
+  return {
+    sellerName: unit.sellerName,
+    vatNumber: unit.vatNumber,
+    commercialRegistrationNumber: unit.commercialRegistrationNumber,
+    street: unit.street,
+    buildingNumber: unit.buildingNumber,
+    city: unit.city,
+    postalCode: unit.postalCode,
+    countryCode: unit.countryCode,
+    vatRate: Number(unit.vatRate),
+    pricesIncludeVat: unit.pricesIncludeVat,
+  };
 }
 
 async function updateData(tx: Transaction, record: ErpRecord, data: RecordData): Promise<ErpRecord> {
@@ -327,6 +345,14 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
       ? String(body.paymentMethod)
       : "cash";
     const customerName = requiredText(body.customerName, "اسم العميل", 160);
+    const customerVatNumber = requiredText(body.customerVatNumber, "الرقم الضريبي للعميل", 15);
+    if (customerVatNumber && !/^\d{15}$/.test(customerVatNumber)) {
+      throw new InventoryRouteError("الرقم الضريبي للعميل يجب أن يتكون من 15 رقماً.", 400);
+    }
+    const customerAddress = requiredText(body.customerAddress, "عنوان العميل", 400);
+    if (customerVatNumber && (!customerName || !customerAddress)) {
+      throw new InventoryRouteError("الفاتورة الضريبية تتطلب اسم العميل وعنوانه مع رقمه الضريبي.", 400);
+    }
     const clientOperationId = requiredText(body.clientOperationId, "معرّف العملية", 200);
     const rawItems = Array.isArray(body.items) ? body.items : [];
     if (!rawItems.length || rawItems.length > 100) {
@@ -397,6 +423,8 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           issueDate,
           warehouseId,
           customerName: customerName || "عميل نقدي",
+          customerVatNumber: customerVatNumber || undefined,
+          customerAddress: customerAddress || undefined,
           paymentMethod,
           status: "paid",
           items: lines.map(({ product, balance, ...line }) => line),
@@ -420,9 +448,74 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         return { invoice: existing, created: false };
       }
 
+      await tx.insert(eInvoiceUnitsTable).values({ organizationId: auth.organizationId }).onConflictDoNothing();
+      const [unit] = await tx.select().from(eInvoiceUnitsTable).where(
+        eq(eInvoiceUnitsTable.organizationId, auth.organizationId),
+      ).for("update");
+      if (!unit) throw new InventoryRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
+      const seller = sellerProfile(unit);
+      const documentType = customerVatNumber ? "standard" : "simplified";
+      const invoiceNumber = `POS-${draftInvoice.id}`;
+      const isConfigured = configurationIsComplete(seller);
+      const generated = isConfigured
+        ? generateInvoiceDocument({
+          invoiceNumber,
+          invoiceCounter: unit.nextInvoiceCounter,
+          previousInvoiceHash: unit.previousInvoiceHash,
+          documentType,
+          issueAt: new Date(),
+          customerName: customerName || "عميل نقدي",
+          customerVatNumber: customerVatNumber || undefined,
+          customerAddress: customerAddress || undefined,
+          paymentMethod,
+          lines: lines.map((line) => ({
+            name: String(line.name),
+            sku: String(line.sku),
+            quantity: Number(line.quantity),
+            unitPrice: Number(line.unitPrice),
+            total: Number(line.total),
+          })),
+          seller,
+          privateKeyPem: decryptEInvoiceSecret(unit.privateKeyCiphertext),
+          certificatePem: decryptEInvoiceSecret(unit.certificateCiphertext),
+        })
+        : null;
+      const [eInvoice] = await tx.insert(eInvoiceDocumentsTable).values({
+        organizationId: auth.organizationId,
+        unitId: unit.id,
+        invoiceRecordId: draftInvoice.id,
+        documentType,
+        status: generated ? "pending_compliance" : "pending_configuration",
+        invoiceNumber,
+        uuid: generated?.uuid ?? randomUUID(),
+        invoiceCounter: generated ? unit.nextInvoiceCounter : null,
+        previousInvoiceHash: unit.previousInvoiceHash,
+        invoiceHash: generated?.invoiceHash ?? unit.previousInvoiceHash,
+        qrPayload: generated?.qrPayload ?? "",
+        xmlDigest: generated?.invoiceHash ?? unit.previousInvoiceHash,
+        issuedAt: new Date(),
+      }).returning();
+      if (generated) {
+        const xmlObjectPath = await savePrivateInvoiceXml(auth.organizationId, eInvoice.id, generated.xml);
+        await tx.update(eInvoiceDocumentsTable).set({ xmlObjectPath, updatedAt: new Date() })
+          .where(eq(eInvoiceDocumentsTable.id, eInvoice.id));
+        await tx.update(eInvoiceUnitsTable).set({
+          nextInvoiceCounter: unit.nextInvoiceCounter + 1,
+          previousInvoiceHash: generated.invoiceHash,
+          updatedAt: new Date(),
+        }).where(eq(eInvoiceUnitsTable.id, unit.id));
+      }
       const invoice = await updateData(tx, draftInvoice, {
         ...draftInvoice.data,
-        number: `POS-${draftInvoice.id}`,
+        number: invoiceNumber,
+        tax: generated?.taxAmount ?? 0,
+        total: generated?.taxInclusiveAmount ?? subtotal,
+        paid: paymentMethod === "credit" ? 0 : (generated?.taxInclusiveAmount ?? subtotal),
+        eInvoiceDocumentId: eInvoice.id,
+        eInvoiceStatus: generated ? "pending_compliance" : "pending_configuration",
+        eInvoiceType: documentType,
+        eInvoiceUuid: eInvoice.uuid,
+        qrPayload: generated?.qrPayload ?? "",
       });
       for (const line of lines) {
         const product = line.product as ErpRecord;
@@ -445,6 +538,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         await reconcileProductTotal(tx, auth.organizationId, product);
       }
       await audit(tx, auth, "pos_checkout_completed", String(invoice.id));
+      await audit(tx, auth, "einvoice_issued", String(eInvoice.id));
       return { invoice, created: true };
     });
 

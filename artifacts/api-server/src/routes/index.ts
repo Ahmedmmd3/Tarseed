@@ -5,6 +5,7 @@ import erpDataRouter from "./erp-data";
 import accountingRouter from "./accounting";
 import inventoryRouter from "./inventory";
 import backupRouter from "./backup";
+import eInvoicingRouter from "./e-invoicing";
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(erpDataRouter);
 router.use(inventoryRouter);
 router.use(accountingRouter);
 router.use(backupRouter);
+router.use(eInvoicingRouter);
 
 export default router;

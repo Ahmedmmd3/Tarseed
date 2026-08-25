@@ -14,6 +14,7 @@
     "test:inventory": "node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs"
   },
   "dependencies": {
+    "@google-cloud/storage": "^8.0.1",
     "@replit/connectors-sdk": "^0.4.1",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",

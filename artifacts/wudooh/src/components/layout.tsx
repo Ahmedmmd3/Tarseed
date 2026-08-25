@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useStore } from '@/context/store';
 
@@ -24,6 +24,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { name: 'القيود اليومية', href: '/journals', icon: FileText, permission: 'accounting' },
       { name: 'الذمم والمستحقات', href: '/receivables', icon: Wallet, permission: 'accounting' },
       { name: 'التقارير المالية', href: '/reports', icon: BarChart3, permission: 'reports' },
+      { name: 'الفوترة الإلكترونية', href: '/e-invoicing', icon: FileBadge, permission: 'accounting' },
     ],
   },
   {
@@ -174,11 +175,12 @@ function AuthenticationRequiredRoute() {
 }
 
 function isSubscriptionProtectedRoute(href: string): boolean {
-  return new Set(['/dashboard', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/reports', '/hr', '/operations', '/team', '/operations-log']).has(href);
+  return new Set(['/dashboard', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
 }
 
 function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {
   if (user.roleId === 'owner') return true;
+  if (href === '/e-invoicing') return user.permissions['accounting'] === true || user.permissions['sales'] === true;
   const permissionByRoute: Record<string, string> = { '/dashboard': 'dashboard', '/pos': 'sales', '/sales': 'sales', '/inventory': 'inventory', '/purchases': 'inventory', '/accounts': 'accounting', '/journals': 'accounting', '/receivables': 'accounting', '/reports': 'reports', '/hr': 'hr', '/operations': 'operations', '/team': '__owner__', '/operations-log': '__owner__' };
   const permission = permissionByRoute[href];
   return permission ? user.permissions[permission] === true : false;
