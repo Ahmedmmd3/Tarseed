@@ -8,11 +8,12 @@ function unique(value) {
   return `${value}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-async function request(path, { method = "GET", body, forwardedFor } = {}) {
+async function request(path, { method = "GET", body, cookie, forwardedFor } = {}) {
   const response = await fetch(`${apiBase}${path}`, {
     method,
     headers: {
       Origin: origin,
+      ...(cookie ? { Cookie: cookie } : {}),
       ...(forwardedFor ? { "X-Forwarded-For": forwardedFor } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
@@ -21,6 +22,67 @@ async function request(path, { method = "GET", body, forwardedFor } = {}) {
   const payload = await response.json().catch(() => ({}));
   return { response, payload };
 }
+
+function sessionCookie(response) {
+  const setCookie = response.headers.get("set-cookie") ?? "";
+  const match = setCookie.match(/(?:^|,\s*)wudooh_session=([^;]+)/);
+  return match ? `wudooh_session=${match[1]}` : null;
+}
+
+test("يسمح بالدخول الصحيح ويحافظ على الجلسات القائمة مع رسالة عامة للاعتماد الخاطئ", async () => {
+  const email = `${unique("working-login")}@example.test`;
+  const password = "Correct-test-password-123";
+  const registration = await request("/auth/register", {
+    method: "POST",
+    body: {
+      projectName: unique("منشأة تسجيل الدخول"),
+      name: "مالك تسجيل الدخول",
+      email,
+      password,
+    },
+    forwardedFor: "192.0.2.101",
+  });
+
+  assert.equal(registration.response.status, 201, JSON.stringify(registration.payload));
+  assert.equal(registration.payload.user.email, email);
+  assert.equal(registration.payload.user.dataGeneration, 1);
+  const originalCookie = sessionCookie(registration.response);
+  assert.ok(originalCookie);
+
+  const originalSession = await request("/auth/me", { cookie: originalCookie });
+  assert.equal(originalSession.response.status, 200, JSON.stringify(originalSession.payload));
+  assert.equal(originalSession.payload.user.id, registration.payload.user.id);
+  assert.equal(originalSession.payload.user.organizationId, registration.payload.user.organizationId);
+
+  const invalidLogin = await request("/auth/login", {
+    method: "POST",
+    body: { email, password: "wrong-password" },
+    forwardedFor: "192.0.2.102",
+  });
+  assert.equal(invalidLogin.response.status, 401, JSON.stringify(invalidLogin.payload));
+  assert.equal(invalidLogin.payload.error, "البريد الإلكتروني أو كلمة المرور غير صحيحة.");
+
+  const validLogin = await request("/auth/login", {
+    method: "POST",
+    body: { email, password },
+    forwardedFor: "192.0.2.103",
+  });
+  assert.equal(validLogin.response.status, 200, JSON.stringify(validLogin.payload));
+  assert.equal(validLogin.payload.user.id, registration.payload.user.id);
+  assert.equal(validLogin.payload.user.organizationId, registration.payload.user.organizationId);
+  assert.equal(validLogin.payload.user.dataGeneration, registration.payload.user.dataGeneration);
+  const renewedCookie = sessionCookie(validLogin.response);
+  assert.ok(renewedCookie);
+
+  const renewedSession = await request("/auth/me", { cookie: renewedCookie });
+  assert.equal(renewedSession.response.status, 200, JSON.stringify(renewedSession.payload));
+  assert.equal(renewedSession.payload.user.organizationId, registration.payload.user.organizationId);
+
+  const originalSessionAfterLogin = await request("/auth/me", { cookie: originalCookie });
+  assert.equal(originalSessionAfterLogin.response.status, 200, JSON.stringify(originalSessionAfterLogin.payload));
+  assert.equal(originalSessionAfterLogin.payload.user.id, registration.payload.user.id);
+  assert.equal(originalSessionAfterLogin.payload.user.dataGeneration, registration.payload.user.dataGeneration);
+});
 
 test("يعيد الدخول رسالة عامة ويحظره بعد تجاوز حد العنوان", async () => {
   const forwardedFor = "198.51.100.20";
