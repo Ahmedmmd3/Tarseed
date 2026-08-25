@@ -6,7 +6,7 @@ import { useStore } from '@/context/store';
 type Module = { title: string; description: string; href: string; icon: LucideIcon; tone: string; permission: string; ready: boolean; id: string };
 
 const modules: Module[] = [
-  { title: 'نقطة البيع', description: 'سجّل مبيعاتك وفواتيرك بسرعة من شاشة واحدة.', href: '/pos', icon: Store, tone: 'bg-teal-50 text-teal-700', permission: 'sales', ready: false, id: 'pos' },
+  { title: 'نقطة البيع', description: 'سجّل مبيعاتك وفواتيرك بسرعة من شاشة واحدة.', href: '/pos', icon: Store, tone: 'bg-teal-50 text-teal-700', permission: 'sales', ready: true, id: 'pos' },
   { title: 'المبيعات والعملاء', description: 'تابع العملاء والفواتير وحركة البيع اليومية.', href: '/sales', icon: ShoppingCart, tone: 'bg-blue-50 text-blue-700', permission: 'sales', ready: false, id: 'sales' },
   { title: 'المخزون والمنتجات', description: 'راقب الأرصدة والمنتجات وحركات المستودعات.', href: '/inventory', icon: Boxes, tone: 'bg-violet-50 text-violet-700', permission: 'inventory', ready: false, id: 'inventory' },
   { title: 'المشتريات والموردون', description: 'نظّم أوامر الشراء والتزامات الموردين.', href: '/purchases', icon: Truck, tone: 'bg-amber-50 text-amber-700', permission: 'inventory', ready: false, id: 'purchases' },

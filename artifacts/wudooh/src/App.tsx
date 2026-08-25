@@ -23,6 +23,7 @@ import Reports from '@/pages/reports';
 import Team from '@/pages/team';
 import ResetPassword from '@/pages/reset-password';
 import WorkspacePrep from '@/pages/workspace-prep';
+import POS from '@/pages/pos';
 import {
   Features,
   Pricing,
@@ -63,7 +64,7 @@ function Router() {
         <Route path="/resources/e-invoicing" component={() => <ResourcePage kind="e-invoicing" />} />
         <Route path="/reset-password" component={ResetPassword} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
-        <Route path="/pos" component={() => <DashboardLayout><WorkspacePrep title="نقاط البيع" /></DashboardLayout>} />
+        <Route path="/pos" component={() => <DashboardLayout><POS /></DashboardLayout>} />
         <Route path="/sales" component={() => <DashboardLayout><WorkspacePrep title="إدارة المبيعات" /></DashboardLayout>} />
         <Route path="/purchases" component={() => <DashboardLayout><WorkspacePrep title="إدارة المشتريات" /></DashboardLayout>} />
         <Route path="/inventory" component={() => <DashboardLayout><WorkspacePrep title="إدارة المخزون" /></DashboardLayout>} />

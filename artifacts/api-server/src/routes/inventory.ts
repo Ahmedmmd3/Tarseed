@@ -109,6 +109,31 @@ function quantityOf(record: ErpRecord | undefined): number {
   return record ? Number(record.data.quantity) || 0 : 0;
 }
 
+function priceOf(product: ErpRecord): number {
+  const raw = product.data.sellPrice ?? product.data.salePrice ?? product.data.price ?? 0;
+  const price = Number(raw);
+  if (!Number.isFinite(price) || price < 0) {
+    throw new InventoryRouteError(`سعر بيع المنتج «${String(product.data.name ?? product.id)}» غير صالح.`, 409);
+  }
+  return price;
+}
+
+function requiredText(value: unknown, label: string, maxLength: number): string {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  if (normalized.length > maxLength) throw new InventoryRouteError(`${label} طويل جداً.`, 400);
+  return normalized;
+}
+
+function saleDate(value: unknown): string {
+  const date = requiredText(value, "تاريخ البيع", 32) || new Date().toISOString().slice(0, 10);
+  const normalized = date.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new InventoryRouteError("تاريخ البيع غير صالح.", 400);
+  }
+  return normalized;
+}
+
 async function updateData(tx: Transaction, record: ErpRecord, data: RecordData): Promise<ErpRecord> {
   const [updated] = await tx.update(erpRecordsTable)
     .set({ data, updatedAt: new Date() })
@@ -288,6 +313,145 @@ router.post("/inventory/sales", requireAuth, requireCurrentDataGeneration, requi
       return created;
     });
     return { sale: output(sale, auth.organizationId) };
+  });
+});
+
+router.post("/inventory/checkout", requireAuth, requireCurrentDataGeneration, requireSalesOrInventory, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  await runAction(response, async () => {
+    const body = bodyOf(request);
+    const warehouseId = integer(body.warehouseId, "موقع البيع");
+    requireLocations(auth, [warehouseId]);
+    const issueDate = saleDate(body.issueDate);
+    const paymentMethod = ["cash", "card", "credit"].includes(String(body.paymentMethod))
+      ? String(body.paymentMethod)
+      : "cash";
+    const customerName = requiredText(body.customerName, "اسم العميل", 160);
+    const clientOperationId = requiredText(body.clientOperationId, "معرّف العملية", 200);
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!rawItems.length || rawItems.length > 100) {
+      throw new InventoryRouteError("أضف صنفاً واحداً على الأقل إلى السلة.", 400);
+    }
+
+    const quantities = new Map<number, number>();
+    for (const rawItem of rawItems) {
+      if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+        throw new InventoryRouteError("أحد أصناف السلة غير صحيح.", 400);
+      }
+      const item = rawItem as RecordData;
+      const productId = integer(item.productId, "المنتج");
+      const quantity = integer(item.quantity, "كمية البيع");
+      quantities.set(productId, (quantities.get(productId) ?? 0) + quantity);
+    }
+
+    const result = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
+      if (clientOperationId) {
+        const [existing] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, auth.organizationId),
+          eq(erpRecordsTable.tableName, "invoices"),
+          eq(erpRecordsTable.clientOperationId, clientOperationId),
+        )).limit(1);
+        if (existing) return { invoice: existing, created: false };
+      }
+
+      const closures = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "financialClosures"),
+      ));
+      if (closures.some((closure) => closure.data.status === "closed"
+        && issueDate >= String(closure.data.from ?? "")
+        && issueDate <= String(closure.data.to ?? ""))) {
+        throw new InventoryRouteError("الفترة المالية مقفلة ولا يمكن تسجيل بيع فيها.");
+      }
+
+      await lockWarehouses(tx, auth.organizationId, [warehouseId]);
+      const lines: Array<RecordData> = [];
+      for (const [productId, quantity] of [...quantities.entries()].sort(([left], [right]) => left - right)) {
+        const product = await lockRecord(tx, auth.organizationId, "products", productId);
+        const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
+        const balance = balanceFor(balances, warehouseId);
+        if (!balance || quantityOf(balance) < quantity) {
+          throw new InventoryRouteError(`الرصيد المتاح للصنف «${String(product.data.name ?? product.id)}» لم يعد كافياً.`);
+        }
+        const unitPrice = priceOf(product);
+        lines.push({
+          productId,
+          name: String(product.data.name ?? `صنف #${productId}`),
+          sku: String(product.data.sku ?? product.data.code ?? ""),
+          quantity,
+          unitPrice,
+          total: unitPrice * quantity,
+          product,
+          balance,
+        });
+      }
+
+      const subtotal = lines.reduce((sum, line) => sum + Number(line.total), 0);
+      const [draftInvoice] = await tx.insert(erpRecordsTable).values({
+        organizationId: auth.organizationId,
+        tableName: "invoices",
+        clientOperationId: clientOperationId || null,
+        data: {
+          number: "",
+          issueDate,
+          warehouseId,
+          customerName: customerName || "عميل نقدي",
+          paymentMethod,
+          status: "paid",
+          items: lines.map(({ product, balance, ...line }) => line),
+          subtotal,
+          tax: 0,
+          total: subtotal,
+          paid: paymentMethod === "credit" ? 0 : subtotal,
+          createdAt: new Date().toISOString(),
+        },
+      }).onConflictDoNothing({
+        target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+      }).returning();
+
+      if (!draftInvoice) {
+        const [existing] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, auth.organizationId),
+          eq(erpRecordsTable.tableName, "invoices"),
+          eq(erpRecordsTable.clientOperationId, clientOperationId),
+        )).limit(1);
+        if (!existing) throw new InventoryRouteError("تعذر حفظ الفاتورة.", 500);
+        return { invoice: existing, created: false };
+      }
+
+      const invoice = await updateData(tx, draftInvoice, {
+        ...draftInvoice.data,
+        number: `POS-${draftInvoice.id}`,
+      });
+      for (const line of lines) {
+        const product = line.product as ErpRecord;
+        const balance = line.balance as ErpRecord;
+        await updateData(tx, balance, { ...balance.data, quantity: quantityOf(balance) - Number(line.quantity) });
+        await tx.insert(erpRecordsTable).values({
+          organizationId: auth.organizationId,
+          tableName: "sales",
+          data: {
+            invoiceId: invoice.id,
+            productId: line.productId,
+            warehouseId,
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            total: line.total,
+            issueDate,
+            createdAt: new Date().toISOString(),
+          },
+        });
+        await reconcileProductTotal(tx, auth.organizationId, product);
+      }
+      await audit(tx, auth, "pos_checkout_completed", String(invoice.id));
+      return { invoice, created: true };
+    });
+
+    return {
+      invoice: output(result.invoice, auth.organizationId),
+      created: result.created,
+    };
   });
 });
 

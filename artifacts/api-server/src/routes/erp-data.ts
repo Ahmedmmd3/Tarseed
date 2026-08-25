@@ -5,10 +5,10 @@ import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneratio
 
 const router: IRouter = Router();
 const INVENTORY_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales"]);
-const TABLE_MODULES: Record<string, string> = {
-  products: "inventory", invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
-  returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: "inventory",
-  employees: "hr", projects: "operations", inventoryBalances: "inventory", stockTransfers: "inventory",
+const TABLE_MODULES: Record<string, string | string[]> = {
+  products: ["inventory", "sales"], invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
+  returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
+  employees: "hr", projects: "operations", inventoryBalances: ["inventory", "sales"], stockTransfers: "inventory",
   stockAdjustments: "inventory",
   accounts: "accounting", journalEntries: "accounting", receivables: "accounting",
   financialClosures: "accounting",
@@ -18,16 +18,33 @@ function requireTableAccess(request: Request, response: Response): { auth: AuthC
   const auth = response.locals.auth as AuthContext;
   const raw = Array.isArray(request.params.table) ? request.params.table[0] : request.params.table;
   const tableName = String(raw || "");
-  const module = TABLE_MODULES[tableName];
-  if (!module) {
+  const modules = TABLE_MODULES[tableName];
+  if (!modules) {
     response.status(404).json({ error: "نوع البيانات غير متاح." });
     return null;
   }
-  if (auth.roleId !== "owner" && auth.permissions[module] !== true) {
+  const allowedModules = Array.isArray(modules) ? modules : [modules];
+  if (auth.roleId !== "owner" && !allowedModules.some((module) => auth.permissions[module] === true)) {
     response.status(403).json({ error: "ليس لديك صلاحية لهذه الوحدة." });
     return null;
   }
   return { auth, tableName };
+}
+
+function canManageInventoryCatalog(auth: AuthContext): boolean {
+  return auth.roleId === "owner" || auth.permissions.inventory === true;
+}
+
+function rejectUnauthorizedInventoryCatalogMutation(access: { auth: AuthContext; tableName: string }, response: Response): boolean {
+  if (access.tableName === "warehouses" && access.auth.roleId !== "owner") {
+    response.status(403).json({ error: "إدارة مواقع التشغيل متاحة لمالك المنشأة فقط." });
+    return true;
+  }
+  if (access.tableName === "products" && !canManageInventoryCatalog(access.auth)) {
+    response.status(403).json({ error: "ليس لديك صلاحية لتعديل كتالوج المنتجات." });
+    return true;
+  }
+  return false;
 }
 
 function locationIds(tableName: string, data: Record<string, unknown>, recordId?: number): number[] {
@@ -130,12 +147,9 @@ router.get("/data/:table", requireAuth, async (request: Request, response: Respo
 router.post("/data/:table", requireAuth, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   if (!access) return;
+  if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
   if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
     response.status(405).json({ error: "تُسجّل حركات المخزون من المسار المعتمد فقط." });
-    return;
-  }
-  if (access.tableName === "warehouses" && access.auth.roleId !== "owner") {
-    response.status(403).json({ error: "إنشاء مواقع التشغيل متاح لمالك المنشأة فقط." });
     return;
   }
   if (access.tableName === "financialClosures") {
@@ -224,6 +238,7 @@ router.patch("/data/:table/:id", requireAuth, requireCurrentDataGeneration, asyn
     if (access) response.status(400).json({ error: "معرّف السجل غير صالح." });
     return;
   }
+  if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
   if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
     response.status(405).json({ error: "تُعدّل حركات المخزون من المسار المعتمد فقط." });
     return;
@@ -425,6 +440,7 @@ router.delete("/data/:table/:id", requireAuth, requireCurrentDataGeneration, asy
     if (access) response.status(400).json({ error: "معرّف السجل غير صالح." });
     return;
   }
+  if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
   if (INVENTORY_MUTATION_TABLES.has(access.tableName)) {
     response.status(405).json({ error: "لا يمكن حذف حركة مخزون معتمدة." });
     return;
