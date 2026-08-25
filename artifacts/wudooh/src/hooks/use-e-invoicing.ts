@@ -22,8 +22,33 @@ export type EGSUnit = {
   credentialsReady: boolean;
   certificateExpiresAt?: string;
   complianceStatus: 'not_started' | 'checking' | 'passed' | 'failed' | 'unknown';
+  complianceSuiteStatus: 'not_started' | 'checking' | 'passed' | 'failed' | 'unknown';
+  complianceSuiteResults: ComplianceFixtureResult[];
+  complianceSuite: {
+    status: EGSUnit['complianceSuiteStatus'];
+    checkedAt: string | null;
+    fixtures: Array<{
+      id: ComplianceFixtureResult['fixtureId'];
+      label: string;
+      documentType: EInvoiceDocument['documentType'];
+      scenario: string;
+      result: ComplianceFixtureResult | null;
+    }>;
+  };
   lastComplianceCheckAt: string | null;
   complianceError: string | null;
+};
+
+export type ComplianceFixtureResult = {
+  fixtureId: 'simplified' | 'standard' | 'credit_note' | 'debit_note';
+  label: string;
+  documentType: EInvoiceDocument['documentType'];
+  documentId: number | null;
+  invoiceNumber: string | null;
+  status: 'passed' | 'failed' | 'unknown' | 'missing';
+  httpStatus: number | null;
+  authorityMessage: string | null;
+  checkedAt: string;
 };
 
 export type EInvoiceDocument = {
@@ -222,6 +247,10 @@ export function useComplianceCheck() {
     },
     onSuccess: (data) => {
       queryClient.setQueryData(['e-invoicing-setup'], data.unit);
+      queryClient.invalidateQueries({ queryKey: ['e-invoicing-documents'] });
+    },
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: ['e-invoicing-setup'] });
       queryClient.invalidateQueries({ queryKey: ['e-invoicing-documents'] });
     },
   });

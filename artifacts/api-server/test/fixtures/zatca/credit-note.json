@@ -1,0 +1,16 @@
+{
+  "id": "credit_note",
+  "source": "ZATCA Fatoora Compliance API V2 Sandbox",
+  "documentType": "credit_note",
+  "scenario": "Credit note with a reference to the original invoice UUID",
+  "endpoint": "/compliance/invoices",
+  "expectedValidationStatus": "PASS",
+  "input": {
+    "invoiceNumber": "ZATCA-CREDIT-001",
+    "customerName": "عميل أعمال",
+    "customerVatNumber": "310122393500003",
+    "paymentMethod": "cash",
+    "parentInvoiceUuid": "b1b1b1b1-1111-4111-8111-111111111111",
+    "lines": [{ "name": "إرجاع خدمة اختبار", "sku": "CN-001", "quantity": 1, "unitPrice": 115, "total": 115 }]
+  }
+}

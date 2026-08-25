@@ -73,6 +73,86 @@ export type GeneratedInvoice = {
   localValidationError: string | null;
 };
 
+export const ZATCA_COMPLIANCE_FIXTURES = [
+  {
+    id: "simplified",
+    documentType: "simplified",
+    label: "فاتورة مبسطة",
+    scenario: "بيع نقدي لعميل غير مسجل في ضريبة القيمة المضافة",
+  },
+  {
+    id: "standard",
+    documentType: "standard",
+    label: "فاتورة ضريبية منظمة",
+    scenario: "بيع لعميل مسجل في ضريبة القيمة المضافة",
+  },
+  {
+    id: "credit_note",
+    documentType: "credit_note",
+    label: "إشعار دائن",
+    scenario: "إشعار دائن مرتبط بفاتورة أصلية",
+  },
+  {
+    id: "debit_note",
+    documentType: "debit_note",
+    label: "إشعار مدين",
+    scenario: "إشعار مدين مرتبط بفاتورة أصلية",
+  },
+] as const;
+
+export type ZatcaComplianceFixtureId = typeof ZATCA_COMPLIANCE_FIXTURES[number]["id"];
+export type ZatcaComplianceStatus = "passed" | "failed" | "unknown" | "missing";
+export type ZatcaComplianceFixtureResult = {
+  fixtureId: ZatcaComplianceFixtureId;
+  label: string;
+  documentType: InvoiceInput["documentType"];
+  documentId: number | null;
+  invoiceNumber: string | null;
+  status: ZatcaComplianceStatus;
+  httpStatus: number | null;
+  authorityMessage: string | null;
+  checkedAt: string;
+};
+
+export type ZatcaComplianceResponse = Record<string, unknown> & {
+  validationResults?: Record<string, unknown>;
+};
+
+export function officialValidationStatus(body: ZatcaComplianceResponse): "PASS" | "FAIL" | "UNKNOWN" {
+  const validation = body.validationResults;
+  const rawStatus = validation?.status ?? body.status;
+  if (typeof rawStatus !== "string") return "UNKNOWN";
+  const status = rawStatus.trim().toUpperCase();
+  if (status === "PASS" || status === "PASSED") return "PASS";
+  if (status === "FAIL" || status === "FAILED") return "FAIL";
+  return "UNKNOWN";
+}
+
+export function complianceSuiteIsPassed(results: ZatcaComplianceFixtureResult[]): boolean {
+  if (results.length !== ZATCA_COMPLIANCE_FIXTURES.length) return false;
+  return ZATCA_COMPLIANCE_FIXTURES.every((fixture) => {
+    const result = results.find((candidate) => candidate.fixtureId === fixture.id);
+    return Boolean(result && result.status === "passed");
+  });
+}
+
+export function parseComplianceSuiteResults(value: string | null): ZatcaComplianceFixtureResult[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is ZatcaComplianceFixtureResult => {
+      if (!entry || typeof entry !== "object") return false;
+      const candidate = entry as Partial<ZatcaComplianceFixtureResult>;
+      return typeof candidate.fixtureId === "string"
+        && typeof candidate.status === "string"
+        && typeof candidate.checkedAt === "string";
+    });
+  } catch {
+    return [];
+  }
+}
+
 function encryptionKey(): Buffer {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("تعذر حماية بيانات الفوترة لأن مفتاح الجلسة غير مهيأ.");

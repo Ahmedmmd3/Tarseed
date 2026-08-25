@@ -39,6 +39,8 @@ export const eInvoiceUnitsTable = pgTable(
     secretCiphertext: text("secret_ciphertext"),
     certificateExpiresAt: timestamp("certificate_expires_at", { withTimezone: true }),
     complianceStatus: text("compliance_status").notNull().default("not_started"),
+    complianceSuiteStatus: text("compliance_suite_status").notNull().default("not_started"),
+    complianceSuiteResults: text("compliance_suite_results"),
     lastComplianceCheckAt: timestamp("last_compliance_check_at", { withTimezone: true }),
     complianceError: text("compliance_error"),
     nextInvoiceCounter: integer("next_invoice_counter").notNull().default(1),

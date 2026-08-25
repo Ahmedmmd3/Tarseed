@@ -1,0 +1,14 @@
+{
+  "id": "simplified",
+  "source": "ZATCA Fatoora Compliance API V2 Sandbox",
+  "documentType": "simplified",
+  "scenario": "Cash sale to a consumer without a VAT registration number",
+  "endpoint": "/compliance/invoices",
+  "expectedValidationStatus": "PASS",
+  "input": {
+    "invoiceNumber": "ZATCA-SIMPLIFIED-001",
+    "customerName": "عميل نقدي",
+    "paymentMethod": "cash",
+    "lines": [{ "name": "خدمة اختبار", "sku": "SIM-001", "quantity": 1, "unitPrice": 115, "total": 115 }]
+  }
+}

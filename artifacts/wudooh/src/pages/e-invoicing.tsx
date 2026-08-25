@@ -182,7 +182,7 @@ function DocumentsTab() {
   const handleComplianceCheck = async (id: number) => {
     try {
       await complianceCheck.mutateAsync(id);
-      toast({ title: 'تم اجتياز فحص الامتثال', description: 'تأكدت بيئة Sandbox من المستند، وأصبحت الوحدة جاهزة لمسار الإرسال.' });
+      toast({ title: 'اجتازت الحزمة الرسمية', description: 'أقرت أدوات Sandbox الرسمية جميع الحالات المطلوبة، وأصبحت مستندات الحزمة جاهزة للإرسال.' });
     } catch (err: any) {
       toast({ title: 'لم يجتز فحص الامتثال', description: err.message, variant: 'destructive' });
     }
@@ -271,7 +271,7 @@ function DocumentsTab() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="فحص الامتثال في Sandbox"
+                          title="تشغيل حزمة الامتثال الرسمية في Sandbox"
                           disabled={complianceCheck.isPending}
                           onClick={() => handleComplianceCheck(doc.id)}
                         >
@@ -340,6 +340,7 @@ function SetupTab() {
 }
 
 function StatusCard({ setup }: { setup: EGSUnit }) {
+  const suitePassed = setup.complianceSuiteStatus === 'passed';
   return (
     <div className="rounded-[24px] border border-slate-200 bg-slate-50 p-6">
       <h3 className="font-black text-slate-900 mb-4">حالة الربط</h3>
@@ -357,10 +358,35 @@ function StatusCard({ setup }: { setup: EGSUnit }) {
           <span className={`text-sm font-bold ${setup.credentialsReady ? 'text-indigo-700' : 'text-slate-500'}`}>بيانات CSID محفوظة للاختبار</span>
         </div>
         <div className="flex items-center gap-3">
-          {setup.complianceStatus === 'passed' ? <CheckCircle2 className="h-5 w-5 text-emerald-500" /> : <div className="h-5 w-5 rounded-full border-2 border-slate-300" />}
-          <div>
-            <span className={`block text-sm font-bold ${setup.complianceStatus === 'passed' ? 'text-emerald-700' : 'text-slate-500'}`}>فحص الامتثال في Sandbox</span>
+          {suitePassed ? <CheckCircle2 className="h-5 w-5 text-emerald-500" /> : <div className="h-5 w-5 rounded-full border-2 border-slate-300" />}
+          <div className="flex-1">
+            <span className={`block text-sm font-bold ${suitePassed ? 'text-emerald-700' : 'text-slate-500'}`}>حزمة تحقق الهيئة الرسمية في Sandbox</span>
+            <span className="mt-1 block text-xs text-slate-500">لا يُفتح الإرسال حتى تجتاز الفاتورة المبسطة والمنظمة والإشعارات نتائج أدوات الهيئة الرسمية.</span>
             {setup.complianceError && <span className="block mt-1 text-xs text-rose-600">{setup.complianceError}</span>}
+            {setup.complianceSuite.fixtures.map((fixture) => {
+              const result = fixture.result;
+              const passed = result?.status === 'passed';
+              const label = !result
+                ? 'بانتظار مستند'
+                : result.status === 'missing'
+                  ? 'غير متاح'
+                  : result.status === 'unknown'
+                    ? 'غير مؤكد'
+                    : passed
+                      ? 'مقبول'
+                      : 'مرفوض';
+              return (
+                <div key={fixture.id} className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+                  <div>
+                    <span className="font-bold text-slate-700">{fixture.label}</span>
+                    {result?.authorityMessage && <span className="mt-0.5 block text-rose-600">{result.authorityMessage}</span>}
+                  </div>
+                  <Badge variant="outline" className={passed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-800'}>
+                    {label}
+                  </Badge>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

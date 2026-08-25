@@ -503,6 +503,11 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         await tx.update(eInvoiceUnitsTable).set({
           nextInvoiceCounter: unit.nextInvoiceCounter + 1,
           previousInvoiceHash: generated.invoiceHash,
+          complianceStatus: "not_started",
+          complianceSuiteStatus: "not_started",
+          complianceSuiteResults: null,
+          complianceError: null,
+          lastComplianceCheckAt: null,
           updatedAt: new Date(),
         }).where(eq(eInvoiceUnitsTable.id, unit.id));
       }

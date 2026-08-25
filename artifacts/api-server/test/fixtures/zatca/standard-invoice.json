@@ -1,0 +1,16 @@
+{
+  "id": "standard",
+  "source": "ZATCA Fatoora Compliance API V2 Sandbox",
+  "documentType": "standard",
+  "scenario": "Business sale to a customer with a VAT registration number",
+  "endpoint": "/compliance/invoices",
+  "expectedValidationStatus": "PASS",
+  "input": {
+    "invoiceNumber": "ZATCA-STANDARD-001",
+    "customerName": "عميل أعمال",
+    "customerVatNumber": "310122393500003",
+    "customerAddress": "الرياض، المملكة العربية السعودية",
+    "paymentMethod": "bank_transfer",
+    "lines": [{ "name": "خدمة اختبار", "sku": "STD-001", "quantity": 1, "unitPrice": 115, "total": 115 }]
+  }
+}

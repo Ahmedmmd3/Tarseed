@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, desc, eq, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
 import {
   db,
   eInvoiceDocumentsTable,
@@ -9,10 +9,15 @@ import {
 } from "@workspace/db";
 import {
   configurationIsComplete,
+  complianceSuiteIsPassed,
   decryptEInvoiceSecret,
   encryptEInvoiceSecret,
   generateCsr,
   generateInvoiceDocument,
+  officialValidationStatus,
+  parseComplianceSuiteResults,
+  ZATCA_COMPLIANCE_FIXTURES,
+  type ZatcaComplianceFixtureResult,
   type SellerProfile,
 } from "../lib/e-invoicing";
 import { readPrivateInvoiceXml, savePrivateInvoiceXml } from "../lib/private-object-store";
@@ -131,6 +136,21 @@ function complianceErrorFromResponse(body: RecordData): string | undefined {
   return typeof message === "string" && message ? message.slice(0, 2_000) : undefined;
 }
 
+function complianceSuiteResponse(unit: EInvoiceUnit): RecordData {
+  const results = parseComplianceSuiteResults(unit.complianceSuiteResults);
+  return {
+    status: unit.complianceSuiteStatus,
+    checkedAt: unit.lastComplianceCheckAt?.toISOString() ?? null,
+    fixtures: ZATCA_COMPLIANCE_FIXTURES.map((fixture) => ({
+      id: fixture.id,
+      label: fixture.label,
+      documentType: fixture.documentType,
+      scenario: fixture.scenario,
+      result: results.find((result) => result.fixtureId === fixture.id) ?? null,
+    })),
+  };
+}
+
 async function authorityRequest(
   baseUrl: string,
   endpoint: string,
@@ -186,13 +206,16 @@ function unitResponse(unit: EInvoiceUnit): RecordData {
     credentialsReady: Boolean(unit.certificateCiphertext && unit.csidCiphertext && unit.secretCiphertext),
     certificateExpiresAt: unit.certificateExpiresAt?.toISOString() ?? null,
     complianceStatus: unit.complianceStatus,
+    complianceSuiteStatus: unit.complianceSuiteStatus,
+    complianceSuiteResults: parseComplianceSuiteResults(unit.complianceSuiteResults),
+    complianceSuite: complianceSuiteResponse(unit),
     lastComplianceCheckAt: unit.lastComplianceCheckAt?.toISOString() ?? null,
     complianceError: unit.complianceError,
   };
 }
 
 class EInvoiceRouteError extends Error {
-  constructor(message: string, readonly status = 400) {
+  constructor(message: string, readonly status = 400, readonly details: RecordData = {}) {
     super(message);
   }
 }
@@ -202,7 +225,7 @@ async function run(response: Response, handler: () => Promise<RecordData>): Prom
     response.json(await handler());
   } catch (error) {
     if (error instanceof EInvoiceRouteError) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, ...error.details });
       return;
     }
     throw error;
@@ -295,7 +318,10 @@ router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, r
       certificateExpiresAt: parsedExpiry,
       status: "credentials_saved",
       complianceStatus: "not_started",
+      complianceSuiteStatus: "not_started",
+      complianceSuiteResults: null,
       complianceError: null,
+      lastComplianceCheckAt: null,
       updatedAt: new Date(),
     }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
     await audit(auth, "einvoice_credentials_saved", String(updated.id));
@@ -385,14 +411,8 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
   const auth = requireOwner(response);
   if (!auth) return;
   await run(response, async () => {
-    const id = safeId(value(request.body).documentId);
-    const [document] = await db.select().from(eInvoiceDocumentsTable).where(and(
-      eq(eInvoiceDocumentsTable.id, id),
-      eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
-    )).limit(1);
-    if (!document?.xmlObjectPath || document.localValidationError) {
-      throw new EInvoiceRouteError("اختر مستنداً موقّعاً اجتاز التحقق المحلي قبل فحص الامتثال.", 409);
-    }
+    const body = value(request.body);
+    const preferredDocumentId = body.documentId == null ? null : safeId(body.documentId);
     const unit = await unitForOrganization(auth.organizationId);
     const csid = decryptEInvoiceSecret(unit.csidCiphertext);
     const secret = decryptEInvoiceSecret(unit.secretCiphertext);
@@ -402,50 +422,126 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
     }
     const baseUrl = process.env.ZATCA_SANDBOX_BASE_URL;
     if (!baseUrl) throw new EInvoiceRouteError("عنوان Sandbox المعتمد غير مهيأ على الخادم.", 409);
+    const documents = await db.select().from(eInvoiceDocumentsTable).where(and(
+      eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+      eq(eInvoiceDocumentsTable.unitId, unit.id),
+    )).orderBy(desc(eInvoiceDocumentsTable.issuedAt));
+    const preferredDocument = preferredDocumentId == null
+      ? null
+      : documents.find((document) => document.id === preferredDocumentId) ?? null;
+    if (preferredDocumentId != null && !preferredDocument) {
+      throw new EInvoiceRouteError("المستند المحدد لا يتبع لوحدة الإصدار الحالية.", 404);
+    }
     await db.update(eInvoiceUnitsTable).set({
       complianceStatus: "checking",
+      complianceSuiteStatus: "checking",
       complianceError: null,
       updatedAt: new Date(),
     }).where(eq(eInvoiceUnitsTable.id, unit.id));
-    let remote: { response: globalThis.Response; body: RecordData };
-    try {
-      remote = await authorityRequest(baseUrl, "/compliance/invoices", csid, secret, document);
-    } catch {
-      await db.update(eInvoiceUnitsTable).set({
-        complianceStatus: "unknown",
-        complianceError: "انقطع الاتصال قبل استلام نتيجة الامتثال. راجع بوابة الهيئة قبل إعادة الفحص.",
-        updatedAt: new Date(),
-      }).where(eq(eInvoiceUnitsTable.id, unit.id));
-      throw new EInvoiceRouteError("نتيجة فحص الامتثال غير مؤكدة؛ لا تعِد المحاولة قبل مراجعة سجل الهيئة.", 503);
+    const checkedAt = new Date().toISOString();
+    const results: ZatcaComplianceFixtureResult[] = [];
+    for (const fixture of ZATCA_COMPLIANCE_FIXTURES) {
+      const document = preferredDocument?.documentType === fixture.documentType
+        ? preferredDocument
+        : documents.find((candidate) => candidate.documentType === fixture.documentType);
+      if (!document || !document.xmlObjectPath || document.localValidationError) {
+        results.push({
+          fixtureId: fixture.id,
+          label: fixture.label,
+          documentType: fixture.documentType,
+          documentId: document?.id ?? null,
+          invoiceNumber: document?.invoiceNumber ?? null,
+          status: "missing",
+          httpStatus: null,
+          authorityMessage: `لا يوجد مستند ${fixture.label} موقّع وجاهز لاختبار Sandbox.`,
+          checkedAt,
+        });
+        continue;
+      }
+      try {
+        const remote = await authorityRequest(baseUrl, "/compliance/invoices", csid, secret, document);
+        const responseError = complianceErrorFromResponse(remote.body);
+        const validationStatus = officialValidationStatus(remote.body);
+        const passed = remote.response.ok && validationStatus === "PASS" && !responseError;
+        const returnedXml = authorityXmlFromResponse(remote.body);
+        if (returnedXml) {
+          const authorityXmlObjectPath = await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority");
+          await db.update(eInvoiceDocumentsTable).set({ authorityXmlObjectPath, updatedAt: new Date() })
+            .where(eq(eInvoiceDocumentsTable.id, document.id));
+        }
+        results.push({
+          fixtureId: fixture.id,
+          label: fixture.label,
+          documentType: fixture.documentType,
+          documentId: document.id,
+          invoiceNumber: document.invoiceNumber,
+          status: passed ? "passed" : "failed",
+          httpStatus: remote.response.status,
+          authorityMessage: passed
+            ? null
+            : (responseError ?? `لم تؤكد أداة الهيئة الرسمية اجتياز الحالة (النتيجة: ${validationStatus}).`),
+          checkedAt,
+        });
+      } catch {
+        results.push({
+          fixtureId: fixture.id,
+          label: fixture.label,
+          documentType: fixture.documentType,
+          documentId: document.id,
+          invoiceNumber: document.invoiceNumber,
+          status: "unknown",
+          httpStatus: null,
+          authorityMessage: "انقطع الاتصال قبل استلام نتيجة هذه الحالة. راجع بوابة الهيئة قبل إعادة الفحص.",
+          checkedAt,
+        });
+      }
     }
-    const responseError = complianceErrorFromResponse(remote.body);
-    const accepted = remote.response.ok && !responseError;
-    const returnedXml = authorityXmlFromResponse(remote.body);
-    const authorityXmlObjectPath = returnedXml
-      ? await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority")
-      : null;
+    const accepted = complianceSuiteIsPassed(results);
+    const hasUnknownResult = results.some((result) => result.status === "unknown");
+    const error = accepted
+      ? null
+      : results.filter((result) => result.status !== "passed")
+        .map((result) => `${result.label}: ${result.authorityMessage ?? "لم تجتز الحالة."}`)
+        .join(" | ")
+        .slice(0, 2_000);
     const [updatedUnit] = await db.update(eInvoiceUnitsTable).set({
       status: accepted ? "compliance_passed" : "credentials_saved",
-      complianceStatus: accepted ? "passed" : "failed",
-      complianceError: accepted ? null : (responseError ?? `لم تؤكد الهيئة اجتياز الامتثال برمز ${remote.response.status}.`),
+      complianceStatus: accepted ? "passed" : (hasUnknownResult ? "unknown" : "failed"),
+      complianceSuiteStatus: accepted ? "passed" : (hasUnknownResult ? "unknown" : "failed"),
+      complianceSuiteResults: JSON.stringify(results),
+      complianceError: error,
       lastComplianceCheckAt: new Date(),
       updatedAt: new Date(),
     }).where(eq(eInvoiceUnitsTable.id, unit.id)).returning();
-    if (authorityXmlObjectPath) {
-      await db.update(eInvoiceDocumentsTable).set({ authorityXmlObjectPath, updatedAt: new Date() })
-        .where(eq(eInvoiceDocumentsTable.id, document.id));
-    }
     if (accepted) {
+      const passedDocumentIds = results.flatMap((result) => result.status === "passed" && result.documentId ? [result.documentId] : []);
       await db.update(eInvoiceDocumentsTable).set({ status: "pending_submission", updatedAt: new Date() })
         .where(and(
           eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
           eq(eInvoiceDocumentsTable.unitId, unit.id),
           eq(eInvoiceDocumentsTable.status, "pending_compliance"),
+          inArray(eInvoiceDocumentsTable.id, passedDocumentIds),
         ));
     }
-    await audit(auth, accepted ? "einvoice_compliance_passed" : "einvoice_compliance_failed", String(document.id), String(remote.response.status));
-    if (!accepted) throw new EInvoiceRouteError(updatedUnit.complianceError || "لم تجتز الفاتورة فحص الامتثال.", 422);
-    return { unit: unitResponse(updatedUnit), document: { id: document.id, status: "pending_submission" } };
+    await audit(auth, accepted ? "einvoice_compliance_passed" : "einvoice_compliance_failed", String(unit.id), JSON.stringify(results.map((result) => ({
+      fixture: result.fixtureId,
+      status: result.status,
+      httpStatus: result.httpStatus,
+    }))));
+    const resultPayload = {
+      unit: unitResponse(updatedUnit),
+      suite: complianceSuiteResponse(updatedUnit),
+    };
+    if (!accepted) {
+      throw new EInvoiceRouteError(
+        hasUnknownResult
+          ? "نتيجة حزمة الامتثال غير مؤكدة؛ راجع سجل الهيئة قبل إعادة الفحص."
+          : "لم تجتز جميع حالات حزمة الامتثال الرسمية.",
+        hasUnknownResult ? 503 : 422,
+        resultPayload,
+      );
+    }
+    return resultPayload;
   });
 });
 
@@ -462,8 +558,10 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     const unit = await unitForOrganization(auth.organizationId);
     const csid = decryptEInvoiceSecret(unit.csidCiphertext);
     const secret = decryptEInvoiceSecret(unit.secretCiphertext);
-    if (!csid || !secret || unit.complianceStatus !== "passed") {
-      throw new EInvoiceRouteError("أكمل فحص الامتثال المقبول في Sandbox قبل الإرسال.", 409);
+    const documentCompliancePassed = parseComplianceSuiteResults(unit.complianceSuiteResults)
+      .some((result) => result.status === "passed" && result.documentId === document.id);
+    if (!csid || !secret || unit.complianceSuiteStatus !== "passed" || !documentCompliancePassed) {
+      throw new EInvoiceRouteError("لا يمكن الإرسال قبل اجتياز حزمة حالات الامتثال الرسمية في Sandbox، بما فيها هذا المستند.", 409);
     }
     if (!["pending_submission", "rejected"].includes(document.status)) {
       throw new EInvoiceRouteError("لا يمكن إرسال هذا المستند في حالته الحالية.", 409);
@@ -594,6 +692,11 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
       await tx.update(eInvoiceUnitsTable).set({
         nextInvoiceCounter: unit.nextInvoiceCounter + 1,
         previousInvoiceHash: generated.invoiceHash,
+        complianceStatus: "not_started",
+        complianceSuiteStatus: "not_started",
+        complianceSuiteResults: null,
+        complianceError: null,
+        lastComplianceCheckAt: null,
         updatedAt: new Date(),
       }).where(eq(eInvoiceUnitsTable.id, unit.id));
       return updated;
