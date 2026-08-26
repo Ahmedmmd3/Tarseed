@@ -260,7 +260,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                       value={form.projectName}
                       onChange={(event) => updateField('projectName', event.target.value)}
                       className="pr-9"
-                      placeholder="مثال: مؤسسة وضوح التجارية"
+                       placeholder="مثال: مؤسسة ترصيد التجارية"
                       autoComplete="organization"
                       data-testid="input-project-name"
                     />

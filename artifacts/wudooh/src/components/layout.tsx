@@ -1,7 +1,8 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, RefreshCw, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useStore } from '@/context/store';
 
 type NavigationItem = { name: string; href: string; icon: LucideIcon; permission?: string; ownerOnly?: boolean };
@@ -122,13 +123,15 @@ export function AppLayout({ children }: { children: ReactNode }) {
           <div className="mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
             {currentUser && (
               <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-white shadow-xl shadow-slate-950/10 backdrop-blur sm:flex-row sm:items-center sm:justify-between" data-testid="shared-account-bar">
-                <div className="min-w-0"><p className="truncate text-sm font-bold">{currentUser.projectName}</p><p className="truncate text-xs text-slate-300">{currentUser.name} · {currentUser.email}</p></div>
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="min-w-0"><p className="truncate text-sm font-bold">{currentUser.projectName}</p><p className="truncate text-xs text-slate-300">{currentUser.name} · {currentUser.email}</p></div>
+                  <ConnectionStatus mode={connectionMode} canRetrySharedConnection={canRetrySharedConnection} syncQueue={syncQueue} onRetry={() => void retrySharedConnection()} />
+                </div>
                 <Button type="button" variant="outline" size="sm" className="shrink-0 border-white/20 bg-white/5 text-white hover:bg-white/15 hover:text-white" disabled={isSigningOut} onClick={async () => { setIsSigningOut(true); try { await signOut(); } finally { setIsSigningOut(false); } }} data-testid="button-sign-out">
                   {isSigningOut ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <LogOut aria-hidden="true" />}{isSigningOut ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}
                 </Button>
               </div>
             )}
-            <ConnectionStatus mode={connectionMode} canRetrySharedConnection={canRetrySharedConnection} syncQueue={syncQueue} onRetry={() => void retrySharedConnection()} />
             {canViewCurrentRoute ? children : <RestrictedRoute />}
           </div>
         </main>
@@ -143,7 +146,7 @@ function BrandLockup({ dark = false }: { dark?: boolean }) {
       <div className="relative h-11 w-11 shrink-0 overflow-hidden">
         <img src={`${import.meta.env.BASE_URL}logo-transparent.png`} alt="شعار ترصيد" className={`absolute max-w-none ${dark ? 'brightness-0 invert' : ''}`} style={{ width: '115px', right: '-34px', top: '-22px' }} />
       </div>
-      <div><p className="text-lg font-black leading-none">ترصيد</p><p className={`mt-1 text-[10px] font-semibold ${dark ? 'text-slate-400' : 'text-slate-500'}`}>وضوح أكبر لنمو أسرع</p></div>
+      <div><p className="text-lg font-black leading-none">ترصيد</p><p className={`mt-1 text-[10px] font-semibold ${dark ? 'text-slate-400' : 'text-slate-500'}`}>إدارة أسهل لنمو أسرع</p></div>
     </div>
   );
 }
@@ -189,7 +192,49 @@ function canAccessNavigationItem(href: string, user: { roleId: string; permissio
 function ConnectionStatus({ mode, canRetrySharedConnection, syncQueue, onRetry }: { mode: 'loading' | 'remote' | 'local'; canRetrySharedConnection: boolean; syncQueue: Array<{ status: 'pending' | 'failed'; error?: string }>; onRetry: () => void }) {
   const failedOperations = syncQueue.filter((operation) => operation.status === 'failed').length;
   const queueMessage = failedOperations ? `تعذرت مزامنة ${failedOperations} من ${syncQueue.length} عملية محفوظة محلياً.` : `هناك ${syncQueue.length} عملية محفوظة محلياً بانتظار المزامنة.`;
-  if (mode === 'loading') return <div className="mb-6 flex items-start gap-3 rounded-2xl border border-white/10 bg-white px-4 py-3 text-slate-600 shadow-xl" role="status" aria-live="polite" data-testid="connection-status-loading"><LoaderCircle className="mt-0.5 h-5 w-5 shrink-0 animate-spin text-slate-500" aria-hidden="true" /><div><p className="font-semibold">جارٍ التحقق من مصدر البيانات</p><p className="mt-1 text-sm">نحاول الاتصال بسجل المنشأة المشترك قبل عرض البيانات.</p></div></div>;
-  if (mode === 'remote') return <div className="mb-6 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-900 shadow-xl" role="status" aria-live="polite" data-testid="connection-status-remote"><Cloud className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" aria-hidden="true" /><div><p className="font-semibold">متصل بسجل المنشأة المشترك</p><p className="mt-1 text-sm text-emerald-800">التغييرات محفوظة وتظهر للأجهزة وأعضاء الفريق المصرح لهم.</p>{syncQueue.length > 0 && <div className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950" data-testid="sync-queue-status"><p>{queueMessage} ستبقى التغييرات ظاهرة هنا إلى أن تنجح المزامنة.</p>{failedOperations > 0 && <p className="w-full text-xs text-amber-900">{syncQueue.find((operation) => operation.status === 'failed')?.error}</p>}<Button type="button" variant="outline" size="sm" className="border-amber-300 bg-white text-amber-950 hover:bg-amber-100" onClick={onRetry} data-testid="button-retry-sync-queue">إعادة محاولة المزامنة</Button></div>}</div></div>;
-  return <div className="mb-6 flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 shadow-xl" role="alert" aria-live="polite" data-testid="connection-status-local"><CloudOff className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" aria-hidden="true" /><div className="flex-1"><p className="font-semibold">{canRetrySharedConnection ? 'تعذر الوصول إلى السجل المشترك' : 'وضع البيانات المحلي'}</p><p className="mt-1 text-sm text-amber-900">{canRetrySharedConnection ? 'نعرض الآن البيانات المحفوظة في هذا المتصفح فقط. لن تتم مزامنة التغييرات حتى إعادة الاتصال بالسجل المشترك.' : 'التغييرات محفوظة في هذا المتصفح فقط، ولن تظهر على الأجهزة أو لأعضاء الفريق. سجّل الدخول للاتصال بسجل المنشأة المشترك.'}</p>{syncQueue.length > 0 && <p className="mt-2 text-sm font-medium text-amber-950" data-testid="sync-queue-status">{queueMessage} ستتم محاولة الإرسال بالترتيب عند إعادة الاتصال.</p>}</div>{canRetrySharedConnection && <Button type="button" variant="outline" size="sm" className="border-amber-300 bg-white text-amber-950 hover:bg-amber-100" onClick={onRetry} data-testid="button-retry-shared-connection">إعادة الاتصال</Button>}</div>;
+  const statusLabel = mode === 'loading' ? 'جارٍ التحقق من الاتصال' : mode === 'remote' ? 'متصل بسجل المنشأة المشترك' : canRetrySharedConnection ? 'غير متصل بالسجل المشترك' : 'وضع البيانات المحلي';
+  const statusDescription = mode === 'loading'
+    ? 'نحاول الاتصال بسجل المنشأة المشترك.'
+    : mode === 'remote'
+      ? 'التغييرات محفوظة وتظهر للأجهزة وأعضاء الفريق المصرح لهم.'
+      : canRetrySharedConnection
+        ? 'نعرض البيانات المحفوظة محلياً. اضغط على السحابة لإعادة الاتصال.'
+        : 'التغييرات محفوظة في هذا المتصفح فقط. سجّل الدخول للاتصال بسجل المنشأة المشترك.';
+  const StatusIcon = mode === 'loading' ? LoaderCircle : mode === 'remote' ? Cloud : CloudOff;
+  const statusColor = mode === 'loading' ? 'text-slate-300' : mode === 'remote' ? 'text-emerald-300' : 'text-rose-300';
+  const statusTestId = `connection-status-${mode}`;
+  const indicator = (
+    <span className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full border bg-white/5 ${mode === 'remote' ? 'border-emerald-300/30' : mode === 'local' ? 'border-rose-300/30' : 'border-white/20'}`} role={mode === 'local' ? 'alert' : 'status'} aria-live="polite" data-testid={statusTestId} aria-label={statusLabel}>
+      <StatusIcon className={`h-[18px] w-[18px] ${statusColor} ${mode === 'loading' ? 'animate-spin' : ''}`} aria-hidden="true" />
+      {mode !== 'loading' && <span className={`absolute bottom-1 right-1 h-2 w-2 rounded-full border-2 border-[#102e54] ${mode === 'remote' ? 'bg-emerald-400' : 'bg-rose-400'}`} aria-hidden="true" />}
+      <span className="sr-only">{statusLabel}: {statusDescription}</span>
+    </span>
+  );
+
+  return (
+    <div className="flex shrink-0 items-center gap-2">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          {mode === 'local' && canRetrySharedConnection
+            ? <Button type="button" variant="ghost" size="icon" className="h-9 w-9 rounded-full p-0 hover:bg-rose-400/10" onClick={onRetry} data-testid="button-retry-shared-connection" aria-label="إعادة الاتصال بالسجل المشترك">{indicator}</Button>
+            : indicator}
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-xs text-right">
+          <p className="font-semibold">{statusLabel}</p>
+          <p className="mt-1 text-xs opacity-90">{statusDescription}</p>
+        </TooltipContent>
+      </Tooltip>
+      {syncQueue.length > 0 && (
+        <div className="flex items-center gap-1 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-1 text-[11px] font-semibold text-amber-100" role={failedOperations > 0 ? 'alert' : 'status'} aria-live="polite" data-testid="sync-queue-status">
+          <span aria-hidden="true">{syncQueue.length}</span>
+          <span className="sr-only">{queueMessage} ستتم محاولة الإرسال بالترتيب عند إعادة الاتصال.</span>
+          {syncQueue.length > 0 && (
+            <Button type="button" variant="ghost" size="icon" className="h-5 w-5 rounded-full p-0 text-amber-100 hover:bg-amber-200/20 hover:text-white" onClick={onRetry} data-testid={mode === 'remote' ? 'button-retry-sync-queue' : undefined} aria-label="إعادة محاولة المزامنة">
+              <RefreshCw className="h-3 w-3" aria-hidden="true" />
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

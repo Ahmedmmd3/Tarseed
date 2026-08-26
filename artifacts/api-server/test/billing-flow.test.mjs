@@ -24,7 +24,7 @@ const testProduct = {
   id: "prod_wudoohprotest",
   object: "product",
   active: true,
-  name: "وضوح الاحترافية",
+  name: "ترصيد الاحترافية",
   description: "باقة اختبارية شهرية",
   metadata: { wudoohPlan: "true", planId: "pro" },
 };

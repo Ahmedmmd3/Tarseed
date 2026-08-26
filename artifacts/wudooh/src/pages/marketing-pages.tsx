@@ -139,7 +139,7 @@ function MarketingFooter({ onRegister }: { onRegister: () => void }) {
         <div className="grid gap-12 border-b border-white/10 pb-12 md:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
           <div>
             <div className="flex items-center gap-3"><BrandMark light /><span className="text-lg font-black text-white">ترصيد</span></div>
-            <p className="mt-5 max-w-sm text-sm leading-7 text-slate-400">ترصيد منصة عربية لإدارة أعمالك من المبيعات والمخزون إلى المحاسبة والموارد البشرية، بوضوح يساعدك على النمو.</p>
+            <p className="mt-5 max-w-sm text-sm leading-7 text-slate-400">ترصيد منصة عربية لإدارة أعمالك من المبيعات والمخزون إلى المحاسبة والموارد البشرية، بسهولة تساعدك على النمو.</p>
             <button type="button" onClick={onRegister} className="mt-6 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-bold text-white transition hover:bg-teal-600">ابدأ الآن <ArrowLeft className="h-4 w-4" /></button>
           </div>
           <FooterColumn title="المنتج" links={productLinks} />
@@ -190,12 +190,12 @@ export function WhyTarseed() {
     { icon: Network, title: 'صورة واحدة لأعمالك', text: 'اربط المبيعات والمخزون والمحاسبة في تدفق واحد، لتصل إلى المعلومة الصحيحة قبل اتخاذ القرار.' },
     { icon: Scale, title: 'مصمم لبيئتك المحلية', text: 'تجربة عربية واضحة تدعم احتياجات المنشآت في المنطقة والعمليات اليومية لفريقك.' },
     { icon: Headphones, title: 'ينمو مع فريقك', text: 'ابدأ بما تحتاجه اليوم، ثم وسّع الوحدات والمواقع والصلاحيات مع نمو أعمالك.' },
-    { icon: Sparkles, title: 'وضوح بلا تعقيد', text: 'واجهات عملية وتقارير مفهومة تقلل الوقت الضائع بين الجداول والأنظمة المتفرقة.' },
+    { icon: Sparkles, title: 'سهولة بلا تعقيد', text: 'واجهات عملية وتقارير مفهومة تقلل الوقت الضائع بين الجداول والأنظمة المتفرقة.' },
   ];
   return (
     <MarketingShell eyebrow="قرار أوضح يبدأ من منصة واحدة" title="لماذا تختار ترصيد؟" description="لأن إدارة العمل لا تحتاج نظاماً أكثر تعقيداً، بل تحتاج صورة أوضح، تدفقاً أسرع، وفريقاً يعمل على نفس البيانات." actions={<ActionButtons secondary="/security-performance" />}>
       <section className="px-4 py-20 sm:px-6 lg:py-28">
-        <SectionHeading eyebrow="قيمة عملية كل يوم" title="ترصيد يحول البيانات إلى قرارات" description="صممنا التجربة حول ما يحتاجه صاحب المنشأة والفريق: سرعة الوصول، وضوح المسؤوليات، وثقة في الأرقام." />
+        <SectionHeading eyebrow="قيمة عملية كل يوم" title="ترصيد يحول البيانات إلى قرارات" description="صممنا التجربة حول ما يحتاجه صاحب المنشأة والفريق: سرعة الوصول، سهولة متابعة المسؤوليات، وثقة في الأرقام." />
         <div className="mx-auto mt-14 grid max-w-6xl gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {reasons.map(({ icon: Icon, title, text }) => <InfoCard key={title} icon={<Icon className="h-6 w-6" />} title={title} text={text} />)}
         </div>
@@ -306,7 +306,7 @@ export function Features() {
 
 export function Pricing() {
   return (
-    <MarketingShell eyebrow="اختر ما يناسب مرحلتك" title="خطط مرنة لنمو أكثر وضوحاً" description="ابدأ بالوحدات التي تحتاجها الآن، وتوسع مع ترصيد كلما كبر فريقك وعملياتك. نساعدك على اختيار المسار المناسب دون تعقيد." actions={<ActionButtons secondary="/solutions" />}>
+    <MarketingShell eyebrow="اختر ما يناسب مرحلتك" title="خطط مرنة لنمو أسرع" description="ابدأ بالوحدات التي تحتاجها الآن، وتوسع مع ترصيد كلما كبر فريقك وعملياتك. نساعدك على اختيار المسار المناسب دون تعقيد." actions={<ActionButtons secondary="/solutions" />}>
       <PlansPreview />
       <section className="px-4 py-20 sm:px-6 lg:py-24"><div className="mx-auto max-w-4xl rounded-3xl bg-[#061d40] px-6 py-12 text-center text-white sm:px-12"><Building2 className="mx-auto h-8 w-8 text-teal-300" /><h2 className="mt-5 text-3xl font-black">احتياجك مختلف؟ نبني المسار معك</h2><p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-slate-300">للمنشآت متعددة الفروع أو العمليات الخاصة، تواصل معنا لنحدد الوحدات والصلاحيات والتجهيز الذي يناسبك.</p><a href={route('/')} className="mt-7 inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-white hover:bg-teal-600">ابدأ محادثة حول احتياجك <ArrowLeft className="h-4 w-4" /></a></div></section>
     </MarketingShell>
