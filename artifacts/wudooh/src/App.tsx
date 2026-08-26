@@ -31,6 +31,7 @@ import Inventory from '@/pages/inventory';
 import HR from '@/pages/hr';
 import Operations from '@/pages/operations';
 import ManagerPortal from '@/pages/manager-portal';
+import SuperAdminPortal from '@/pages/super-admin-portal';
 import {
   Features,
   Pricing,
@@ -75,6 +76,7 @@ function Router() {
         <Route path="/resources/e-invoicing" component={() => <ResourcePage kind="e-invoicing" />} />
         <Route path="/reset-password" component={ResetPassword} />
         <Route path="/manager" component={() => <SessionLayout><ManagerPortal /></SessionLayout>} />
+        <Route path="/super-admin" component={SuperAdminPortal} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
         <Route path="/pos" component={() => <DashboardLayout><POS /></DashboardLayout>} />
         <Route path="/sales" component={() => <DashboardLayout><Sales /></DashboardLayout>} />

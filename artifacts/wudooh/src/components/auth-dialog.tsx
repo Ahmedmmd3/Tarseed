@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from 'react';
-import { ArrowLeft, Building2, Eye, EyeOff, LoaderCircle, LockKeyhole, Mail } from 'lucide-react';
+import { ArrowLeft, Building2, Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, UserRoundCog } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -11,19 +11,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 
-type AuthMode = 'login' | 'register';
+type AuthMode = 'login' | 'register' | 'admin';
 
 type AuthDialogProps = {
   open: boolean;
   mode: AuthMode;
   onOpenChange: (open: boolean) => void;
-  onSuccess: () => void;
+  onSuccess: (destination?: string) => void;
 };
 
 type AuthForm = {
   projectName: string;
   name: string;
   email: string;
+  username: string;
   password: string;
 };
 
@@ -31,12 +32,14 @@ const emptyForm: AuthForm = {
   projectName: '',
   name: '',
   email: '',
+  username: '',
   password: '',
 };
 
 const fallbackErrors: Record<AuthMode, string> = {
   login: 'تعذر تسجيل الدخول. تحقق من البيانات وحاول مرة أخرى.',
   register: 'تعذر إنشاء المنشأة. تحقق من البيانات وحاول مرة أخرى.',
+  admin: 'تعذر دخول الإدارة العليا. تحقق من البيانات وحاول مرة أخرى.',
 };
 const remoteSessionHintCookie = 'wudooh_remote_session';
 
@@ -77,7 +80,10 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
     if (mode === 'register' && !form.name.trim()) {
       return 'أدخل اسمك لنتعرف عليك كمالك المنشأة.';
     }
-    if (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+    if (mode === 'admin' && !/^[a-zA-Z0-9._-]{3,64}$/.test(form.username.trim())) {
+      return 'أدخل اسم مستخدم الإدارة العليا الصحيح.';
+    }
+    if (mode !== 'admin' && (!form.email.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim()))) {
       return 'أدخل بريداً إلكترونياً صحيحاً.';
     }
     if (form.password.length < 8) {
@@ -97,7 +103,11 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
     setError('');
     setIsSubmitting(true);
     try {
-      const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login';
+      const endpoint = mode === 'register'
+        ? '/api/auth/register'
+        : mode === 'admin'
+          ? '/api/platform-auth/login'
+          : '/api/auth/login';
       const body = mode === 'register'
         ? {
             projectName: form.projectName.trim(),
@@ -105,7 +115,12 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
             email: form.email.trim(),
             password: form.password,
           }
-        : {
+        : mode === 'admin'
+          ? {
+              username: form.username.trim().toLowerCase(),
+              password: form.password,
+            }
+          : {
             email: form.email.trim(),
             password: form.password,
           };
@@ -115,14 +130,17 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const payload = await response.json().catch(() => ({})) as { user?: unknown; error?: string };
-      if (!response.ok || !payload.user) {
+      const payload = await response.json().catch(() => ({})) as { user?: unknown; admin?: unknown; error?: string };
+      const authenticated = mode === 'admin' ? payload.admin : payload.user;
+      if (!response.ok || !authenticated) {
         throw new Error(payload.error || fallbackErrors[mode]);
       }
-      document.cookie = `${remoteSessionHintCookie}=1; Max-Age=${14 * 24 * 60 * 60}; Path=/; SameSite=Lax`;
+      if (mode !== 'admin') {
+        document.cookie = `${remoteSessionHintCookie}=1; Max-Age=${14 * 24 * 60 * 60}; Path=/; SameSite=Lax`;
+      }
       setForm(emptyForm);
       onOpenChange(false);
-      onSuccess();
+      onSuccess(mode === 'admin' ? '/super-admin' : '/manager');
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : fallbackErrors[mode]);
     } finally {
@@ -165,14 +183,22 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               <Building2 className="h-5 w-5" aria-hidden="true" />
             </div>
             <DialogTitle className="text-2xl text-white">
-              {screen === 'recovery' ? 'استعادة كلمة المرور' : mode === 'register' ? 'أنشئ سجل منشأتك' : 'مرحباً بعودتك'}
+               {screen === 'recovery'
+                 ? 'استعادة كلمة المرور'
+                 : mode === 'register'
+                   ? 'أنشئ سجل منشأتك'
+                   : mode === 'admin'
+                     ? 'دخول الإدارة العليا'
+                     : 'مرحباً بعودتك'}
             </DialogTitle>
             <DialogDescription className="mt-2 text-slate-300">
               {screen === 'recovery'
                 ? 'أدخل بريد حسابك وسنرسل لك رابطاً آمناً لاختيار كلمة مرور جديدة.'
-                : mode === 'register'
-                ? 'ابدأ بسجل محاسبي مشترك لفريقك، ويمكنك دعوة الأعضاء لاحقاً.'
-                : 'سجّل الدخول للوصول إلى بيانات منشأتك من أي جهاز.'}
+                 : mode === 'register'
+                   ? 'ابدأ بسجل محاسبي مشترك لفريقك، ويمكنك دعوة الأعضاء لاحقاً.'
+                   : mode === 'admin'
+                     ? 'بوابة خاصة بمالك المنصة لمتابعة المنشآت والاشتراكات.'
+                     : 'سجّل الدخول للوصول إلى بيانات منشأتك من أي جهاز.'}
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -225,7 +251,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
             </form>
           ) : (
             <>
-          <div className="mb-6 grid grid-cols-2 rounded-lg bg-slate-100 p-1" role="tablist" aria-label="نوع العملية">
+           <div className="mb-6 grid grid-cols-3 rounded-lg bg-slate-100 p-1" role="tablist" aria-label="نوع العملية">
             <button
               type="button"
               role="tab"
@@ -245,6 +271,16 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               data-testid="tab-register"
             >
               إنشاء منشأة
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === 'admin'}
+              onClick={() => selectMode('admin')}
+              className={`rounded-md px-2 py-2 text-xs font-semibold transition-colors sm:text-sm ${mode === 'admin' ? 'bg-white text-[#001738] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              data-testid="tab-super-admin"
+            >
+              الإدارة العليا
             </button>
           </div>
 
@@ -280,24 +316,44 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               </>
             )}
 
-            <div className="space-y-2">
-              <Label htmlFor="auth-email">البريد الإلكتروني</Label>
-              <div className="relative">
-                <Mail className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
-                <Input
-                  id="auth-email"
-                  type="email"
-                  dir="ltr"
-                  value={form.email}
-                  onChange={(event) => updateField('email', event.target.value)}
-                  className="pr-9 text-left"
-                  placeholder="name@company.com"
-                  autoComplete="email"
-                  aria-invalid={Boolean(error)}
-                  data-testid="input-auth-email"
-                />
+            {mode === 'admin' ? (
+              <div className="space-y-2">
+                <Label htmlFor="auth-admin-username">اسم المستخدم</Label>
+                <div className="relative">
+                  <UserRoundCog className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
+                  <Input
+                    id="auth-admin-username"
+                    dir="ltr"
+                    value={form.username}
+                    onChange={(event) => updateField('username', event.target.value)}
+                    className="pr-9 text-left"
+                    placeholder="admin.username"
+                    autoComplete="username"
+                    aria-invalid={Boolean(error)}
+                    data-testid="input-super-admin-username"
+                  />
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="auth-email">البريد الإلكتروني</Label>
+                <div className="relative">
+                  <Mail className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
+                  <Input
+                    id="auth-email"
+                    type="email"
+                    dir="ltr"
+                    value={form.email}
+                    onChange={(event) => updateField('email', event.target.value)}
+                    className="pr-9 text-left"
+                    placeholder="name@company.com"
+                    autoComplete="email"
+                    aria-invalid={Boolean(error)}
+                    data-testid="input-auth-email"
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="auth-password">كلمة المرور</Label>
@@ -311,7 +367,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                   onChange={(event) => updateField('password', event.target.value)}
                   className="px-10 text-left"
                   placeholder="٨ أحرف على الأقل"
-                  autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                   autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
                   aria-invalid={Boolean(error)}
                   data-testid="input-auth-password"
                 />
@@ -326,7 +382,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               </div>
               {mode === 'register' && <p className="text-xs text-slate-500">استخدم ٨ أحرف أو أكثر لحماية سجل منشأتك.</p>}
             </div>
-            {mode === 'login' && (
+             {mode === 'login' && (
               <div className="-mt-1 text-left">
                 <button
                   type="button"
@@ -351,7 +407,13 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
 
             <Button type="submit" className="h-11 w-full bg-primary text-base hover:bg-teal-500" disabled={isSubmitting} data-testid="button-auth-submit">
               {isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ArrowLeft className="h-4 w-4" aria-hidden="true" />}
-              {isSubmitting ? 'جارٍ التحقق...' : mode === 'register' ? 'إنشاء المنشأة والبدء' : 'دخول إلى لوحة التحكم'}
+               {isSubmitting
+                 ? 'جارٍ التحقق...'
+                 : mode === 'register'
+                   ? 'إنشاء المنشأة والبدء'
+                   : mode === 'admin'
+                     ? 'دخول بوابة الإدارة العليا'
+                     : 'دخول إلى لوحة التحكم'}
             </Button>
           </form>
             </>

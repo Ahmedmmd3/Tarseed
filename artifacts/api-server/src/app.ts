@@ -91,7 +91,7 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     next();
     return;
   }
-  const rule = request.path === "/auth/login"
+  const rule = request.path === "/auth/login" || request.path === "/platform-auth/login"
     ? loginRule
     : request.path === "/auth/password-reset/request"
       ? passwordResetRule
@@ -100,11 +100,15 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     next();
     return;
   }
-  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const identity = typeof request.body?.email === "string"
+    ? request.body.email.trim().toLowerCase()
+    : typeof request.body?.username === "string"
+      ? request.body.username.trim().toLowerCase()
+      : "";
   const byIp = consumeRateLimit(`${request.path}:ip:${request.ip}`, rule.byIp);
-  const emailHint = email ? createHash("sha256").update(email).digest("hex").slice(0, 16) : null;
-  const byEmail = emailHint
-    ? consumeRateLimit(`${request.path}:email:${emailHint}`, rule.byEmail)
+  const identityHint = identity ? createHash("sha256").update(identity).digest("hex").slice(0, 16) : null;
+  const byEmail = identityHint
+    ? consumeRateLimit(`${request.path}:identity:${identityHint}`, rule.byEmail)
     : { limited: false, retryAfterSeconds: 0 };
   if (!byIp.limited && !byEmail.limited) {
     next();
@@ -162,7 +166,8 @@ app.use(cookieParser());
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use((request, response, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(request.method) || !request.cookies?.wudooh_session) {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)
+    || (!request.cookies?.wudooh_session && !request.cookies?.wudooh_super_admin_session)) {
     next();
     return;
   }

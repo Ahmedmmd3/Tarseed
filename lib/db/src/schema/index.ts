@@ -21,3 +21,4 @@ export * from "./team-auth";
 export * from "./e-invoice-units";
 export * from "./e-invoice-documents";
 export * from "./security-metrics";
+export * from "./platform-admin";

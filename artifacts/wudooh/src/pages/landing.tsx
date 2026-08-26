@@ -73,7 +73,7 @@ export default function Landing() {
       </main>
 
        <footer className="bg-[#04142d] px-4 pb-8 pt-14 text-slate-300 sm:px-6"><div className="mx-auto max-w-7xl"><div className="grid gap-10 border-b border-white/10 pb-12 md:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr]"><div><div className="flex items-center gap-3"><BrandMark light /><span className="text-lg font-black text-white">ترصيد</span></div><p className="mt-5 max-w-sm text-sm leading-7 text-slate-400">منصة عربية متكاملة تساعدك على إدارة أعمالك بسهولة وثقة.</p></div><FooterColumn title="المنتج" links={[['المميزات', '/features'], ['المحاسبة والمالية', '/products/accounting'], ['المبيعات والمخزون', '/products/sales'], ['نقاط البيع', '/products/pos']]} /><FooterColumn title="الشركة" links={[['لماذا ترصيد', '/why-tarseed'], ['الحلول المتكاملة', '/solutions'], ['الخطط', '/pricing'], ['الأمان والأداء', '/security-performance']]} /><FooterColumn title="المصادر" links={[['مركز المساعدة', '/resources/help'], ['دليل المنصة', '/resources/guide'], ['العمليات والمشاريع', '/resources/operations'], ['الفاتورة الإلكترونية', '/resources/e-invoicing']]} /></div><p className="pt-6 text-xs text-slate-500">© {new Date().getFullYear()} ترصيد. جميع الحقوق محفوظة.</p></div></footer>
-      <AuthDialog open={authOpen} mode={authMode} onOpenChange={setAuthOpen} onSuccess={() => window.location.assign(route('/manager'))} />
+      <AuthDialog open={authOpen} mode={authMode} onOpenChange={setAuthOpen} onSuccess={(destination) => window.location.assign(route(destination ?? '/manager'))} />
     </div>
   );
 }
