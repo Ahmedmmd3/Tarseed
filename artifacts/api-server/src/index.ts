@@ -22,11 +22,13 @@ async function initializeStripe(): Promise<void> {
   if (!databaseUrl) throw new Error("DATABASE_URL is required for Stripe.");
   await runMigrations({ databaseUrl });
   const stripeSync = await getStripeSync();
-  const domain = process.env.REPLIT_DOMAINS?.split(",")[0]?.trim();
-  if (domain) {
-    await stripeSync.findOrCreateManagedWebhook(`https://${domain}/api/stripe/webhook`);
+  const publicAppUrl = process.env.PUBLIC_APP_URL?.trim().replace(/\/+$/, "");
+  if (process.env.NODE_ENV !== "production") {
+    logger.info("Managed Stripe webhook configuration is skipped outside production.");
+  } else if (publicAppUrl) {
+    await stripeSync.findOrCreateManagedWebhook(`${publicAppUrl}/api/stripe/webhook`);
   } else {
-    logger.warn("REPLIT_DOMAINS is unavailable; managed Stripe webhook was not configured.");
+    logger.warn("PUBLIC_APP_URL is unavailable; managed Stripe webhook was not configured.");
   }
   await stripeSync.syncBackfill();
 }
