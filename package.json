@@ -8,6 +8,8 @@
     "typecheck:libs": "tsc --build",
     "typecheck:api-server:clean": "rm -rf lib/db/dist lib/db/tsconfig.tsbuildinfo lib/api-zod/dist lib/api-zod/tsconfig.tsbuildinfo artifacts/api-server/.tsbuildinfo && pnpm --filter @workspace/api-server run typecheck",
     "typecheck:frontend": "pnpm --filter @workspace/wudooh --filter @workspace/mockup-sandbox run typecheck",
+    "test:auth-security": "pnpm --filter @workspace/api-server run test:auth-security",
+    "test:password-reset-delivery": "pnpm --filter @workspace/api-server run test:password-reset-delivery",
     "test:billing": "pnpm --filter @workspace/api-server run test:billing",
     "test:stripe-webhook-security": "pnpm --filter @workspace/api-server run test:stripe-webhook-security",
     "test:inventory": "pnpm --filter @workspace/api-server run test:inventory",
