@@ -3,8 +3,6 @@ name: Verify branch protection
 on:
   branch_protection_rule:
     types: [created, edited, deleted]
-  repository_ruleset:
-    types: [created, edited, deleted]
   workflow_dispatch:
   schedule:
     - cron: "17 6 * * 1"

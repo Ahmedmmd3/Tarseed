@@ -12,3 +12,4 @@
 - [مزامنة Stripe والتجميع](stripe-sync-bundling.md) — استثنِ مكتبة Stripe Sync من تجميع خادم API كي تجد ملفات ترحيلها وقت التشغيل.
 - [مقياس رفض Stripe Webhook المشترك](stripe-webhook-rejection-metrics.md) — اجمع رفض التوقيع ذرياً خارج ذاكرة الخادم واحجز تنبيهاً واحداً لكل نافذة.
 - [وضوح مزامنة تنبيه حماية الفروع](branch-protection-alert-sync.md) — اجعل فشل دورة حياة التنبيه فشلاً نهائياً واضحاً ومميزاً عن فشل الفحص.
+- [توافق أحداث GitHub Actions](github-actions-event-compatibility.md) — تحقق من دعم اسم الحدث في صيغة Actions قبل إضافته إلى workflow.
