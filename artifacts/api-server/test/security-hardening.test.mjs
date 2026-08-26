@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import test, { after, before } from "node:test";
 import { and, eq, inArray } from "drizzle-orm";
 import {
@@ -56,6 +56,42 @@ async function request(path, {
   });
   const payload = await response.json().catch(() => ({}));
   return { response, payload };
+}
+
+async function requestFromDirectPeer(path, {
+  method = "GET",
+  body,
+  forwardedFor = "198.51.100.210",
+} = {}) {
+  const url = new URL(`${origin}/api${path}`);
+  const response = await new Promise((resolve, reject) => {
+    const clientRequest = httpRequest({
+      hostname: url.hostname,
+      port: url.port,
+      path: `${url.pathname}${url.search}`,
+      method,
+      localAddress: "127.0.0.2",
+      headers: {
+        Origin: origin,
+        "X-Forwarded-For": forwardedFor,
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+    }, (clientResponse) => {
+      const chunks = [];
+      clientResponse.on("data", (chunk) => chunks.push(chunk));
+      clientResponse.on("end", () => resolve({
+        response: new Response(Buffer.concat(chunks), {
+          status: clientResponse.statusCode,
+          headers: clientResponse.headers,
+        }),
+      }));
+    });
+    clientRequest.on("error", reject);
+    if (body !== undefined) clientRequest.write(JSON.stringify(body));
+    clientRequest.end();
+  });
+  const payload = await response.response.json().catch(() => ({}));
+  return { response: response.response, payload };
 }
 
 function cookieFrom(response, name = "wudooh_session") {
@@ -417,4 +453,61 @@ test("يحد محاولات الدخول حسب الهوية حتى عند تغ�
   }
   assert.equal(attempts[5].response.status, 429, JSON.stringify(attempts[5].payload));
   assert.ok(Number(attempts[5].response.headers.get("retry-after")) > 0);
+});
+
+test("يعتمد عنوان العميل الذي يمرره نظير الـproxy الموثوق", async () => {
+  const distinctClients = [];
+  for (let index = 0; index < 11; index += 1) {
+    distinctClients.push(await request("/auth/login", {
+      method: "POST",
+      forwardedFor: `2001:db8:${index + 20}:${randomUUID().slice(0, 4)}::1`,
+      body: {
+        email: `trusted-proxy-distinct-${suffix}-${index}@example.test`,
+        password: "wrong-password",
+      },
+    }));
+  }
+  assert.deepEqual(
+    distinctClients.map(({ response }) => response.status),
+    Array(11).fill(401),
+  );
+
+  const sharedForwardedFor = `2001:db8:${randomUUID().slice(0, 4)}:${randomUUID().slice(0, 4)}::1`;
+  const sharedClientAttempts = [];
+  for (let index = 0; index < 11; index += 1) {
+    sharedClientAttempts.push(await request("/auth/login", {
+      method: "POST",
+      forwardedFor: sharedForwardedFor,
+      body: {
+        email: `trusted-proxy-shared-${suffix}-${index}@example.test`,
+        password: "wrong-password",
+      },
+    }));
+  }
+  assert.deepEqual(
+    sharedClientAttempts.slice(0, 10).map(({ response }) => response.status),
+    Array(10).fill(401),
+  );
+  assert.equal(sharedClientAttempts[10].response.status, 429, JSON.stringify(sharedClientAttempts[10].payload));
+});
+
+test("يتجاهل عنوان X-Forwarded-For عند الاتصال المباشر من نظير غير موثوق", async () => {
+  const attempts = [];
+  for (let index = 0; index < 11; index += 1) {
+    attempts.push(await requestFromDirectPeer("/auth/login", {
+      method: "POST",
+      forwardedFor: `2001:db8:${index + 1}:${randomUUID().slice(0, 4)}::1`,
+      body: {
+        email: `direct-peer-${suffix}-${index}@example.test`,
+        password: "wrong-password",
+      },
+    }));
+  }
+
+  for (const attempt of attempts.slice(0, 10)) {
+    assert.equal(attempt.response.status, 401, JSON.stringify(attempt.payload));
+    assert.equal(attempt.payload.error, "البريد الإلكتروني أو كلمة المرور غير صحيحة.");
+  }
+  assert.equal(attempts[10].response.status, 429, JSON.stringify(attempts[10].payload));
+  assert.ok(Number(attempts[10].response.headers.get("retry-after")) > 0);
 });

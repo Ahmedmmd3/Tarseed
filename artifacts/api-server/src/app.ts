@@ -8,7 +8,17 @@ import { dispatchStripeWebhookSecurityAlert, logger, recordExpiredStripeWebhookS
 import { isExpiredStripeSignatureError, processStripeWebhook } from "./lib/stripe-webhooks";
 
 const app: Express = express();
-app.set("trust proxy", 1);
+// The API service is reached by Replit's shared proxy over the local loopback
+// connection configured by artifact.toml. Trust only that exact peer; a hop
+// count would also trust a client that connects directly and supplies its own
+// X-Forwarded-For header. Requests from any other peer use the socket address,
+// so forged forwarding headers cannot evade the auth rate limit.
+const trustedProxyAddresses = new Set([
+  "127.0.0.1",
+  "::1",
+  "::ffff:127.0.0.1",
+]);
+app.set("trust proxy", (address: string) => trustedProxyAddresses.has(address));
 app.disable("x-powered-by");
 
 app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async (request, response) => {
