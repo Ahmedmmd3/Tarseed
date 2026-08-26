@@ -85,7 +85,7 @@ test("يسمح بالدخول الصحيح ويحافظ على الجلسات ا
 });
 
 test("يعيد الدخول رسالة عامة ويحظره بعد تجاوز حد العنوان", async () => {
-  const forwardedFor = "198.51.100.20";
+  const forwardedFor = `2001:db8:${crypto.randomUUID().slice(0, 4)}:${crypto.randomUUID().slice(0, 4)}::1`;
   const attempts = [];
   for (let index = 0; index < 11; index += 1) {
     attempts.push(await request("/auth/login", {

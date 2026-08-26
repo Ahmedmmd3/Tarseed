@@ -14,3 +14,4 @@
 - [وضوح مزامنة تنبيه حماية الفروع](branch-protection-alert-sync.md) — اجعل فشل دورة حياة التنبيه فشلاً نهائياً واضحاً ومميزاً عن فشل الفحص.
 - [توافق أحداث GitHub Actions](github-actions-event-compatibility.md) — تحقق من دعم اسم الحدث في صيغة Actions قبل إضافته إلى workflow.
 - [فصل تعليق الوصول عن Stripe](platform-access-suspension.md) — علّق وصول المنشأة بعلم مستقل، ولا تكتب فوق حالة الاشتراك التي يملكها Stripe.
+- [دقة اختبارات حراس الصلاحيات](authorization-guard-test-precision.md) — لا تعتبر 403 دليلاً كافياً؛ أثبت أن الحارس المقصود نُفّذ وأن البيانات بقيت بلا تغيير.

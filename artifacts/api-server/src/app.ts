@@ -176,7 +176,13 @@ app.use((request, response, next) => {
     response.status(403).json({ error: "يلزم إرسال الطلب من واجهة التطبيق الموثوقة." });
     return;
   }
-  const originHost = new URL(origin).host;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    response.status(403).json({ error: "مصدر الطلب غير موثوق." });
+    return;
+  }
   if (originHost !== request.get("host")) {
     response.status(403).json({ error: "مصدر الطلب غير موثوق." });
     return;
