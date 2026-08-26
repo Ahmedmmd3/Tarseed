@@ -14,6 +14,7 @@
     "test:stripe-webhook-security": "pnpm --filter @workspace/api-server run test:stripe-webhook-security",
     "test:inventory": "pnpm --filter @workspace/api-server run test:inventory",
     "test:platform-admin": "pnpm --filter @workspace/api-server run test:platform-admin",
+    "verify:api-test-schema-init": "pnpm --filter @workspace/scripts run verify:api-test-schema-init",
     "verify:ci-check-names": "pnpm --filter @workspace/scripts run verify:ci-check-names",
     "verify:branch-protection": "pnpm --filter @workspace/scripts run verify:branch-protection",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"

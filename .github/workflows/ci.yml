@@ -34,6 +34,9 @@ jobs:
       - name: Verify protected branch check names
         run: pnpm run verify:ci-check-names
 
+      - name: Verify API test schema initialization
+        run: pnpm run verify:api-test-schema-init
+
       - name: Test CI check-name parser
         run: pnpm --filter @workspace/scripts test
 
