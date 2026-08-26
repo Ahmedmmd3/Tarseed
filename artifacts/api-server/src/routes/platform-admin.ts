@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import {
   db,
   organizationsTable,
@@ -26,6 +26,8 @@ const PLAN_NAMES: Record<string, string> = {
   pro: "ترصيد الاحترافي",
   business: "ترصيد للأعمال",
 };
+const SUBSCRIPTION_ACTIONS = new Set(["extend_trial", "extend_access", "suspend_access", "restore_access"]);
+const MAX_EXTENSION_DAYS = 365;
 
 function setPlatformAdminSession(response: Response, token: string): void {
   response.cookie(PLATFORM_ADMIN_COOKIE, token, {
@@ -55,6 +57,25 @@ function effectiveEndDate(subscription: SubscriptionFields): Date | null {
 function daysRemaining(endDate: Date | null, now: Date): number | null {
   if (!endDate) return null;
   return Math.max(0, Math.ceil((endDate.getTime() - now.getTime()) / DAY_MS));
+}
+
+function organizationIdFromRequest(request: Request): number | null {
+  const rawId = Array.isArray(request.params.organizationId) ? request.params.organizationId[0] : request.params.organizationId;
+  const id = Number.parseInt(rawId ?? "", 10);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+function subscriptionSnapshot(subscription: SubscriptionFields, now: Date) {
+  const endDate = effectiveEndDate(subscription);
+  return {
+    planId: subscription.planId,
+    subscriptionStatus: subscription.subscriptionStatus,
+    accessStatus: subscriptionState(subscription, now),
+    trialEndsAt: subscription.trialEndsAt?.toISOString() ?? null,
+    subscriptionEndsAt: subscription.subscriptionEndsAt?.toISOString() ?? null,
+    effectiveEndsAt: endDate?.toISOString() ?? null,
+    accessSuspendedAt: subscription.platformAccessSuspendedAt?.toISOString() ?? null,
+  };
 }
 
 router.post("/platform-auth/login", async (request: Request, response: Response): Promise<void> => {
@@ -164,6 +185,9 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
       subscriptionEndsAt: organization.subscriptionEndsAt?.toISOString() ?? null,
       effectiveEndsAt: endDate?.toISOString() ?? null,
       daysRemaining: daysRemaining(endDate, now),
+      accessSuspended: Boolean(organization.platformAccessSuspendedAt),
+      hasBillingPortal: Boolean(organization.stripeCustomerId),
+      managedByStripe: Boolean(organization.stripeSubscriptionId),
       createdAt: organization.createdAt.toISOString(),
     };
   });
@@ -212,6 +236,195 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
     },
     generatedAt: now.toISOString(),
   });
+});
+
+router.post("/super-admin/organizations/:organizationId/subscription-action", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
+  const admin = response.locals.platformAdmin as PlatformAdminContext;
+  const organizationId = organizationIdFromRequest(request);
+  const body = request.body as Record<string, unknown> | undefined;
+  const action = typeof body?.action === "string" ? body.action.trim() : "";
+  const confirmed = body?.confirmed === true || body?.confirmation === true;
+  const reason = typeof body?.reason === "string" ? body.reason.trim().slice(0, 500) : "";
+
+  if (!organizationId || !SUBSCRIPTION_ACTIONS.has(action)) {
+    response.status(400).json({ error: "اختر إجراء اشتراك صحيحاً." });
+    return;
+  }
+  if (!confirmed) {
+    response.status(400).json({ error: "يلزم تأكيد الإجراء قبل تنفيذه.", code: "confirmation_required" });
+    return;
+  }
+
+  const rawDays = body?.durationDays;
+  const durationDays = rawDays === undefined || rawDays === null || rawDays === ""
+    ? null
+    : Number(rawDays);
+  if (action === "extend_trial" || action === "extend_access") {
+    if (typeof durationDays !== "number" || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > MAX_EXTENSION_DAYS) {
+      response.status(400).json({ error: `اختر مدة بين يوم واحد و${MAX_EXTENSION_DAYS} يوماً.` });
+      return;
+    }
+  } else if (durationDays !== null) {
+    response.status(400).json({ error: "لا تحتاج إجراءات الإيقاف أو الاستعادة إلى مدة." });
+    return;
+  }
+
+  const now = new Date();
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [organization] = await tx.select().from(organizationsTable)
+        .where(eq(organizationsTable.id, organizationId))
+        .for("update");
+      if (!organization) return { kind: "not_found" as const };
+
+      const current: SubscriptionFields = organization;
+      if (action === "extend_trial" && (organization.stripeSubscriptionId || organization.planId !== "trial")) {
+        return { kind: "conflict" as const, error: "لا يمكن تمديد تجربة منشأة مرتبطة باشتراك مدفوع. افتح إدارة الاشتراك من Stripe بدلاً من ذلك." };
+      }
+      if (action === "extend_access" && organization.stripeSubscriptionId) {
+        return { kind: "conflict" as const, error: "لا يمكن تعديل مدة اشتراك Stripe محلياً. افتح إدارة الاشتراك من Stripe بدلاً من ذلك." };
+      }
+      if (action === "restore_access" && !organization.platformAccessSuspendedAt) {
+        return { kind: "conflict" as const, error: "الوصول لهذه المنشأة غير معلّق حالياً." };
+      }
+
+      const previous = subscriptionSnapshot(current, now);
+      const currentEnd = effectiveEndDate(current);
+      const baseTime = Math.max(now.getTime(), currentEnd?.getTime() ?? now.getTime());
+      const extensionEnd = typeof durationDays === "number" ? new Date(baseTime + durationDays * DAY_MS) : null;
+      let update: Partial<typeof organizationsTable.$inferInsert>;
+
+      if (action === "extend_trial") {
+        update = {
+          planId: "trial",
+          subscriptionStatus: "trialing",
+          trialEndsAt: extensionEnd!,
+          platformAccessSuspendedAt: null,
+        };
+      } else if (action === "extend_access") {
+        update = {
+          subscriptionStatus: "active",
+          subscriptionStartedAt: organization.subscriptionStartedAt ?? now,
+          subscriptionEndsAt: extensionEnd!,
+          platformAccessSuspendedAt: null,
+        };
+      } else if (action === "suspend_access") {
+        update = { platformAccessSuspendedAt: now };
+      } else {
+        update = { platformAccessSuspendedAt: null };
+      }
+
+      const [updated] = await tx.update(organizationsTable)
+        .set(update)
+        .where(eq(organizationsTable.id, organizationId))
+        .returning();
+      if (!updated) throw new Error("Subscription action did not update an organization.");
+
+      const next = subscriptionSnapshot(updated, now);
+      const [audit] = await tx.insert(platformAuditLogsTable).values({
+        adminId: admin.id,
+        organizationId,
+        actorName: admin.displayName,
+        action,
+        entity: `organization:${organizationId}`,
+        details: JSON.stringify({
+          reason: reason || "إجراء من بوابة الإدارة العليا",
+          confirmed: true,
+          confirmedAt: now.toISOString(),
+          previous,
+          next,
+        }),
+      }).returning({ id: platformAuditLogsTable.id, createdAt: platformAuditLogsTable.createdAt });
+
+      return { kind: "success" as const, action, organization: updated, audit };
+    });
+
+    if (result.kind === "not_found") {
+      response.status(404).json({ error: "المنشأة غير موجودة." });
+      return;
+    }
+    if (result.kind === "conflict") {
+      response.status(409).json({ error: result.error });
+      return;
+    }
+    response.json({
+      organizationId,
+      action: result.action,
+      auditLog: {
+        id: result.audit.id,
+        createdAt: result.audit.createdAt.toISOString(),
+      },
+      subscription: subscriptionSnapshot(result.organization, now),
+    });
+  } catch (error) {
+    request.log.error({ error, organizationId, action }, "Platform subscription action failed");
+    response.status(500).json({ error: "تعذر تنفيذ إجراء الاشتراك. لم يتم حفظ التغيير." });
+  }
+});
+
+router.get("/super-admin/organizations/:organizationId/audit-logs", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
+  const organizationId = organizationIdFromRequest(request);
+  if (!organizationId) {
+    response.status(400).json({ error: "معرّف المنشأة غير صحيح." });
+    return;
+  }
+  const logs = await db.select({
+    id: platformAuditLogsTable.id,
+    actorName: platformAuditLogsTable.actorName,
+    action: platformAuditLogsTable.action,
+    entity: platformAuditLogsTable.entity,
+    details: platformAuditLogsTable.details,
+    createdAt: platformAuditLogsTable.createdAt,
+  }).from(platformAuditLogsTable)
+    .where(and(
+      eq(platformAuditLogsTable.organizationId, organizationId),
+      eq(platformAuditLogsTable.entity, `organization:${organizationId}`),
+    ))
+    .orderBy(desc(platformAuditLogsTable.createdAt))
+    .limit(50);
+  response.json({ logs: logs.map((log) => ({ ...log, createdAt: log.createdAt.toISOString() })) });
+});
+
+router.post("/super-admin/organizations/:organizationId/billing-portal", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
+  const admin = response.locals.platformAdmin as PlatformAdminContext;
+  const organizationId = organizationIdFromRequest(request);
+  if (!organizationId) {
+    response.status(400).json({ error: "معرّف المنشأة غير صحيح." });
+    return;
+  }
+  const [organization] = await db.select({
+    stripeCustomerId: organizationsTable.stripeCustomerId,
+    name: organizationsTable.name,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId)).limit(1);
+  if (!organization) {
+    response.status(404).json({ error: "المنشأة غير موجودة." });
+    return;
+  }
+  if (!organization.stripeCustomerId) {
+    response.status(409).json({ error: "لا توجد بيانات دفع مرتبطة بهذه المنشأة بعد." });
+    return;
+  }
+
+  try {
+    const stripe = await (await import("../lib/stripe-client")).getUncachableStripeClient();
+    const baseUrl = `${request.protocol}://${request.get("host")}`;
+    const session = await stripe.billingPortal.sessions.create({
+      customer: organization.stripeCustomerId,
+      return_url: `${baseUrl}/super-admin`,
+    });
+    const [audit] = await db.insert(platformAuditLogsTable).values({
+      adminId: admin.id,
+      organizationId,
+      actorName: admin.displayName,
+      action: "subscription_portal_opened",
+      entity: `organization:${organizationId}`,
+      details: JSON.stringify({ confirmed: true, openedAt: new Date().toISOString() }),
+    }).returning({ id: platformAuditLogsTable.id });
+    response.json({ url: session.url, auditLogId: audit?.id ?? null });
+  } catch (error) {
+    request.log.error({ error, organizationId }, "Platform billing portal failed");
+    response.status(503).json({ error: "تعذر فتح إدارة الاشتراك حالياً." });
+  }
 });
 
 export default router;

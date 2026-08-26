@@ -24,7 +24,7 @@ const LOCATION_SCOPES = new Set(["all", "selected", "none"]);
 const PASSWORD_RESET_MINUTES = 30;
 const connectors = new ReplitConnectors();
 
-function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" | "dataGeneration" | "planId" | "subscriptionStatus" | "trialStartedAt" | "trialEndsAt" | "subscriptionStartedAt" | "subscriptionEndsAt">) {
+function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" | "dataGeneration" | "planId" | "subscriptionStatus" | "trialStartedAt" | "trialEndsAt" | "subscriptionStartedAt" | "subscriptionEndsAt" | "platformAccessSuspendedAt">) {
   const subscription: SubscriptionFields = {
     planId: organization.planId,
     subscriptionStatus: organization.subscriptionStatus,
@@ -32,6 +32,7 @@ function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" 
     trialEndsAt: organization.trialEndsAt,
     subscriptionStartedAt: organization.subscriptionStartedAt,
     subscriptionEndsAt: organization.subscriptionEndsAt,
+    platformAccessSuspendedAt: organization.platformAccessSuspendedAt,
   };
   return {
     id: user.id,
@@ -289,6 +290,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
     trialEndsAt: result.organization.trialEndsAt,
     subscriptionStartedAt: result.organization.subscriptionStartedAt,
     subscriptionEndsAt: result.organization.subscriptionEndsAt,
+      platformAccessSuspendedAt: result.organization.platformAccessSuspendedAt,
   }) });
 });
 
@@ -306,6 +308,7 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
     trialEndsAt: organizationsTable.trialEndsAt,
     subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
     subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
   })
     .from(teamUsersTable)
     .innerJoin(organizationsTable, eq(teamUsersTable.organizationId, organizationsTable.id))

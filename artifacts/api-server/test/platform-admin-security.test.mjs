@@ -6,11 +6,13 @@ import { eq } from "drizzle-orm";
 import {
   db,
   organizationsTable,
+  platformAuditLogsTable,
   platformAdminsTable,
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
 import { hashPassword } from "../src/lib/team-auth.ts";
+import { lockAndValidateDataGeneration } from "../src/middleware/team-auth.ts";
 
 let server;
 let origin;
@@ -150,6 +152,113 @@ test("يسمح للسوبر أدمن ويحسب الاشتراك والمدة ا
   assert.ok(organization.daysRemaining >= 29 && organization.daysRemaining <= 30);
   assert.equal(JSON.stringify(organization).includes("password"), false);
   assert.equal(JSON.stringify(organization).includes("stripe"), false);
+
+});
+
+test("يتطلب التأكيد ويطبّق تعليق الوصول واستعادته ذرياً مع سجل موافقات كامل", async () => {
+  const login = await request("/platform-auth/login", {
+    method: "POST",
+    body: { username, password },
+    forwardedFor: "203.0.113.184",
+  });
+  assert.equal(login.response.status, 200, JSON.stringify(login.payload));
+  const adminCookie = cookieFrom(login.response, "wudooh_super_admin_session");
+  assert.ok(adminCookie);
+
+  const [before] = await db.select({
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId));
+  assert.ok(before);
+
+  const unconfirmed = await request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST",
+    cookie: adminCookie,
+    body: { action: "suspend_access", reason: "اختبار التأكيد" },
+  });
+  assert.equal(unconfirmed.response.status, 400);
+  assert.equal(unconfirmed.payload.code, "confirmation_required");
+
+  const [afterUnconfirmed] = await db.select({
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId));
+  assert.deepEqual(afterUnconfirmed, before, "يجب ألا يتغير الاشتراك من دون تأكيد");
+
+  const suspended = await request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST",
+    cookie: adminCookie,
+    body: { action: "suspend_access", reason: "اختبار تعليق وصول المنشأة", confirmed: true },
+  });
+  assert.equal(suspended.response.status, 200, JSON.stringify(suspended.payload));
+  assert.equal(suspended.payload.subscription.accessStatus, "inactive");
+
+  const [afterSuspend] = await db.select({
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId));
+  assert.equal(afterSuspend.subscriptionStatus, before.subscriptionStatus, "يجب إبقاء حالة Stripe الأصلية");
+  assert.equal(afterSuspend.subscriptionEndsAt.toISOString(), before.subscriptionEndsAt.toISOString());
+  assert.ok(afterSuspend.platformAccessSuspendedAt instanceof Date);
+
+  const stalePreSuspensionResponse = {
+    locals: {
+      auth: { organizationId },
+      dataGeneration: 1,
+    },
+  };
+  const writeStillAllowed = await db.transaction((tx) => lockAndValidateDataGeneration(tx, stalePreSuspensionResponse));
+  assert.equal(writeStillAllowed, false, "يجب أن يعيد قفل الكتابة فحص التعليق حتى لو بدأت المصادقة قبله");
+
+  const ownerLogin = await request("/auth/login", {
+    method: "POST",
+    body: { email: ownerEmail, password: "Owner-test-password-123" },
+    forwardedFor: "203.0.113.185",
+  });
+  assert.equal(ownerLogin.response.status, 200, JSON.stringify(ownerLogin.payload));
+  assert.equal(ownerLogin.payload.user.subscription.status, "inactive");
+  assert.equal(ownerLogin.payload.user.subscription.accessActive, false);
+
+  const restored = await request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST",
+    cookie: adminCookie,
+    body: { action: "restore_access", reason: "اختبار استعادة الوصول", confirmed: true },
+  });
+  assert.equal(restored.response.status, 200, JSON.stringify(restored.payload));
+  assert.equal(restored.payload.subscription.accessStatus, "active");
+
+  const extended = await request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST",
+    cookie: adminCookie,
+    body: { action: "extend_access", durationDays: 5, reason: "اختبار تمديد الوصول", confirmed: true },
+  });
+  assert.equal(extended.response.status, 200, JSON.stringify(extended.payload));
+  assert.equal(extended.payload.subscription.accessStatus, "active");
+  assert.ok(new Date(extended.payload.subscription.subscriptionEndsAt) > before.subscriptionEndsAt);
+
+  const auditResponse = await request(`/super-admin/organizations/${organizationId}/audit-logs`, {
+    cookie: adminCookie,
+  });
+  assert.equal(auditResponse.response.status, 200, JSON.stringify(auditResponse.payload));
+  assert.ok(auditResponse.payload.logs.length >= 3);
+  const loggedActions = new Set(auditResponse.payload.logs.map((log) => log.action));
+  assert.ok(loggedActions.has("suspend_access"));
+  assert.ok(loggedActions.has("restore_access"));
+  assert.ok(loggedActions.has("extend_access"));
+  const suspendLog = auditResponse.payload.logs.find((log) => log.action === "suspend_access");
+  const suspendDetails = JSON.parse(suspendLog.details);
+  assert.equal(suspendDetails.confirmed, true);
+  assert.equal(suspendDetails.reason, "اختبار تعليق وصول المنشأة");
+  assert.equal(suspendDetails.previous.accessStatus, "active");
+  assert.equal(suspendDetails.next.accessStatus, "inactive");
+
+  const directAuditRows = await db.select({ id: platformAuditLogsTable.id })
+    .from(platformAuditLogsTable)
+    .where(eq(platformAuditLogsTable.organizationId, organizationId));
+  assert.ok(directAuditRows.length >= 3);
 
   const logout = await request("/platform-auth/logout", { method: "POST", cookie: adminCookie });
   assert.equal(logout.response.status, 204);

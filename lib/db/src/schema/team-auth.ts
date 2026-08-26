@@ -20,6 +20,7 @@ export const organizationsTable = pgTable("organizations", {
   trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }).notNull().default(sql`now() + interval '14 days'`),
   subscriptionStartedAt: timestamp("subscription_started_at", { withTimezone: true }),
   subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
+  platformAccessSuspendedAt: timestamp("platform_access_suspended_at", { withTimezone: true }),
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

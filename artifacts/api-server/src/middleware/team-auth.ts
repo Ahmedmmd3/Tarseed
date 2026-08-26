@@ -11,11 +11,13 @@ export type SubscriptionFields = {
   trialEndsAt: Date | null;
   subscriptionStartedAt: Date | null;
   subscriptionEndsAt: Date | null;
+  platformAccessSuspendedAt: Date | null;
 };
 export type AuthContext = TeamUser & { projectName: string; dataGeneration: number } & SubscriptionFields;
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export function subscriptionState(subscription: SubscriptionFields, now = new Date()): SubscriptionStatus {
+  if (subscription.platformAccessSuspendedAt) return "inactive";
   if (subscription.subscriptionStatus === "active"
     && (!subscription.subscriptionEndsAt || subscription.subscriptionEndsAt > now)) {
     return "active";
@@ -47,6 +49,7 @@ export async function getAuthContext(request: Request): Promise<AuthContext | nu
       trialEndsAt: organizationsTable.trialEndsAt,
       subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
       subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+      platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
     })
     .from(authSessionsTable)
     .innerJoin(teamUsersTable, eq(authSessionsTable.userId, teamUsersTable.id))
@@ -68,6 +71,7 @@ export async function getAuthContext(request: Request): Promise<AuthContext | nu
     trialEndsAt: result.trialEndsAt,
     subscriptionStartedAt: result.subscriptionStartedAt,
     subscriptionEndsAt: result.subscriptionEndsAt,
+    platformAccessSuspendedAt: result.platformAccessSuspendedAt,
   } : null;
 }
 
@@ -120,9 +124,18 @@ export async function lockAndValidateDataGeneration(tx: DatabaseTransaction, res
   const auth = response.locals.auth as AuthContext | undefined;
   const generation = response.locals.dataGeneration;
   if (!auth || !Number.isSafeInteger(generation)) return false;
-  const [organization] = await tx.select({ dataGeneration: organizationsTable.dataGeneration })
+  const [organization] = await tx.select({
+    dataGeneration: organizationsTable.dataGeneration,
+    planId: organizationsTable.planId,
+    subscriptionStatus: organizationsTable.subscriptionStatus,
+    trialStartedAt: organizationsTable.trialStartedAt,
+    trialEndsAt: organizationsTable.trialEndsAt,
+    subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
+    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
+    platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
+  })
     .from(organizationsTable)
     .where(eq(organizationsTable.id, auth.organizationId))
     .for("update");
-  return organization?.dataGeneration === generation;
+  return organization?.dataGeneration === generation && hasSubscriptionAccess(organization);
 }

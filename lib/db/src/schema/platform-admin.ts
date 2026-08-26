@@ -7,6 +7,7 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { organizationsTable } from "./team-auth";
 
 export const platformAdminsTable = pgTable(
   "platform_admins",
@@ -49,6 +50,7 @@ export const platformAuditLogsTable = pgTable(
   {
     id: serial("id").primaryKey(),
     adminId: integer("admin_id").references(() => platformAdminsTable.id, { onDelete: "set null" }),
+    organizationId: integer("organization_id").references(() => organizationsTable.id, { onDelete: "cascade" }),
     actorName: text("actor_name").notNull(),
     action: text("action").notNull(),
     entity: text("entity").notNull().default(""),
@@ -57,6 +59,7 @@ export const platformAuditLogsTable = pgTable(
   },
   (table) => [
     index("platform_audit_logs_admin_created_idx").on(table.adminId, table.createdAt),
+    index("platform_audit_logs_organization_created_idx").on(table.organizationId, table.createdAt),
   ],
 );
 
