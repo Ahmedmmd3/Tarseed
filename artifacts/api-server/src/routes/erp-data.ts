@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices"]);
@@ -73,15 +73,16 @@ function specializedMutationMessage(tableName: string): string {
     : "تُسجّل حركات المخزون من المسار المعتمد فقط.";
 }
 
-async function audit(auth: AuthContext, action: string, entity: string): Promise<void> {
+async function audit(auth: AuthContext, response: Response, action: string, entity: string): Promise<void> {
   const { teamAuditLogsTable } = await import("@workspace/db");
-  await db.insert(teamAuditLogsTable).values({
-    organizationId: auth.organizationId,
-    actorId: auth.id,
-    actorName: auth.name || auth.email,
-    action,
-    entity,
-    details: "",
+  await db.transaction(async (tx) => {
+    // Audit rows are tenant writes; never let a just-suspended organization
+    // append one after the protected mutation has committed.
+    if (!await lockAndValidateDataGeneration(tx, response)) return;
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email,
+      action, entity, details: "",
+    });
   });
 }
 
@@ -111,9 +112,15 @@ class MutationRejected extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
   }
+}
+
+function lockedMutationRejected(response: Response): MutationRejected {
+  const rejection = lockedWriteRejection(response);
+  return new MutationRejected(rejection.status, rejection.error, rejection.code);
 }
 
 function operationFingerprint(value: unknown): string {
@@ -203,7 +210,7 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
   try {
     ({ created, record } = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) {
-        throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+        throw lockedMutationRejected(response);
       }
       const [inserted] = await tx.insert(erpRecordsTable).values({
         organizationId: access.auth.organizationId,
@@ -224,7 +231,7 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
     }));
   } catch (error) {
     if (error instanceof MutationRejected) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
     }
     throw error;
@@ -233,7 +240,7 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
     response.status(500).json({ error: "تعذر حفظ السجل." });
     return;
   }
-  if (created) await audit(access.auth, `${access.tableName}_created`, String(record.id));
+  if (created) await audit(access.auth, response, `${access.tableName}_created`, String(record.id));
   response.status(created ? 201 : 200).json({ record: { ...record.data, id: record.id, userId: access.auth.organizationId } });
 });
 
@@ -282,14 +289,15 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       return;
     }
     if (result.kind === "stale") {
-      response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+      const rejection = lockedWriteRejection(response);
+      response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
       return;
     }
     if (result.kind === "forbidden") {
       response.status(403).json({ error: "ليس لديك صلاحية للمواقع المحددة." });
       return;
     }
-    await audit(access.auth, "products_updated", String(id));
+    await audit(access.auth, response, "products_updated", String(id));
     response.json({ record: { ...result.record.data, id: result.record.id, userId: access.auth.organizationId } });
     return;
   }
@@ -298,7 +306,7 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     try {
       const result = await db.transaction(async (tx) => {
         if (!await lockAndValidateDataGeneration(tx, response)) {
-          throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+          throw lockedMutationRejected(response);
         }
         const [claimedOperation] = await tx.insert(erpRecordsTable).values({
           organizationId: access.auth.organizationId,
@@ -374,12 +382,12 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         }).where(eq(erpRecordsTable.id, claimedOperation.id));
         return { record: responseRecord, replayed: false };
       });
-      if (!result.replayed) await audit(access.auth, `${access.tableName}_updated`, String(id));
+      if (!result.replayed) await audit(access.auth, response, `${access.tableName}_updated`, String(id));
       response.json({ record: result.record });
       return;
     } catch (error) {
       if (error instanceof MutationRejected) {
-        response.status(error.status).json({ error: error.message });
+        response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
         return;
       }
       throw error;
@@ -424,18 +432,18 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
   try {
     [updated] = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) {
-        throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+        throw lockedMutationRejected(response);
       }
       return tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
     });
   } catch (error) {
     if (error instanceof MutationRejected) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
     }
     throw error;
   }
-  await audit(access.auth, `${access.tableName}_updated`, String(id));
+  await audit(access.auth, response, `${access.tableName}_updated`, String(id));
   response.json({ record: { ...updated.data, id: updated.id, userId: access.auth.organizationId } });
 });
 
@@ -478,7 +486,8 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       return;
     }
     if (deleted === "stale") {
-      response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+      const rejection = lockedWriteRejection(response);
+      response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
       return;
     }
     if (deleted === "forbidden") {
@@ -486,7 +495,7 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       return;
     }
     if (deleted === null) return;
-    await audit(access.auth, "products_deleted", String(id));
+    await audit(access.auth, response, "products_deleted", String(id));
     response.sendStatus(204);
     return;
   }
@@ -512,18 +521,18 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
   try {
     await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) {
-        throw new MutationRejected(409, "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+        throw lockedMutationRejected(response);
       }
       await tx.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
     });
   } catch (error) {
     if (error instanceof MutationRejected) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
     }
     throw error;
   }
-  await audit(access.auth, `${access.tableName}_deleted`, String(id));
+  await audit(access.auth, response, `${access.tableName}_deleted`, String(id));
   response.sendStatus(204);
 });
 

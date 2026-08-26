@@ -96,6 +96,12 @@ async function recordAudit(auth: AuthContext, action: string, entity = "", detai
   });
 }
 
+function subscriptionWriteFailure(organization: SubscriptionFields | undefined): { error: string; code: string } {
+  return organization?.platformAccessSuspendedAt
+    ? { error: "تم تعليق وصول هذه المنشأة من إدارة المنصة.", code: "platform_access_suspended" }
+    : { error: "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.", code: "subscription_required" };
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({
     "&": "&amp;",
@@ -462,18 +468,33 @@ router.post("/team/members", requireAuth, requireSubscriptionAccess, requireOwne
     response.status(400).json({ error: validation.error });
     return;
   }
-  const existing = await db.select({ id: teamUsersTable.id }).from(teamUsersTable).where(eq(teamUsersTable.email, validation.data.email)).limit(1);
-  if (existing.length) {
+  const { password, ...memberData } = validation.data;
+  const passwordHash = await hashPassword(password);
+  const result = await db.transaction(async (tx) => {
+    const [organization] = await tx.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, auth.organizationId)).for("update");
+    if (!organization || !hasSubscriptionAccess(organization)) return { kind: "access" as const, organization };
+    const [existing] = await tx.select({ id: teamUsersTable.id }).from(teamUsersTable)
+      .where(eq(teamUsersTable.email, memberData.email)).limit(1);
+    if (existing) return { kind: "conflict" as const };
+    const [user] = await tx.insert(teamUsersTable).values({
+      ...memberData, organizationId: auth.organizationId, passwordHash,
+    }).returning();
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email,
+      action: "member_created", entity: user.name, details: user.roleId,
+    });
+    return { kind: "created" as const, user };
+  });
+  if (result.kind === "access") {
+    response.status(402).json(subscriptionWriteFailure(result.organization));
+    return;
+  }
+  if (result.kind === "conflict") {
     response.status(409).json({ error: "تعذر إنشاء الحساب بهذه البيانات." });
     return;
   }
-  const { password, ...memberData } = validation.data;
-  const [user] = await db.insert(teamUsersTable).values({
-    ...memberData,
-    organizationId: auth.organizationId,
-    passwordHash: await hashPassword(password),
-  }).returning();
-  await recordAudit(auth, "member_created", user.name, user.roleId);
+  const user = result.user;
   response.status(201).json({ member: safeUser(user, auth) });
 });
 
@@ -485,37 +506,45 @@ router.patch("/team/members/:id", requireAuth, requireSubscriptionAccess, requir
     response.status(400).json({ error: validation.error || "معرّف العضو غير صالح." });
     return;
   }
-  const [member] = await db.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).limit(1);
-  if (!member || member.roleId === "owner") {
-    response.status(404).json({ error: "لم يتم العثور على عضو الفريق." });
-    return;
-  }
   const { password, ...memberData } = validation.data;
   const update = {
     ...memberData,
     updatedAt: new Date(),
     ...(password ? { passwordHash: await hashPassword(password) } : {}),
   };
-  const [updated] = await db.update(teamUsersTable).set(update).where(eq(teamUsersTable.id, id)).returning();
-  if (updated.status === "inactive") {
-    await db.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
-  }
-  await recordAudit(auth, updated.status === "inactive" ? "member_disabled" : "member_updated", updated.name, updated.roleId);
+  const result = await db.transaction(async (tx) => {
+    const [organization] = await tx.select().from(organizationsTable).where(eq(organizationsTable.id, auth.organizationId)).for("update");
+    if (!organization || !hasSubscriptionAccess(organization)) return { kind: "access" as const, organization };
+    const [member] = await tx.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).for("update");
+    if (!member || member.roleId === "owner") return { kind: "missing" as const };
+    const [updated] = await tx.update(teamUsersTable).set(update).where(eq(teamUsersTable.id, id)).returning();
+    if (updated.status === "inactive") await tx.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
+    await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: updated.status === "inactive" ? "member_disabled" : "member_updated", entity: updated.name, details: updated.roleId });
+    return { kind: "updated" as const, updated };
+  });
+  if (result.kind === "access") { response.status(402).json(subscriptionWriteFailure(result.organization)); return; }
+  if (result.kind === "missing") { response.status(404).json({ error: "لم يتم العثور على عضو الفريق." }); return; }
+  const updated = result.updated;
   response.json({ member: safeUser(updated, auth) });
 });
 
 router.post("/team/members/:id/toggle", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const id = Number(request.params.id);
-  const [member] = await db.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).limit(1);
-  if (!member || member.roleId === "owner") {
-    response.status(404).json({ error: "لم يتم العثور على عضو الفريق." });
-    return;
-  }
-  const status = member.status === "inactive" ? "active" : "inactive";
-  const [updated] = await db.update(teamUsersTable).set({ status, updatedAt: new Date() }).where(eq(teamUsersTable.id, id)).returning();
-  if (status === "inactive") await db.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
-  await recordAudit(auth, status === "inactive" ? "member_disabled" : "member_enabled", updated.name, updated.roleId);
+  const result = await db.transaction(async (tx) => {
+    const [organization] = await tx.select().from(organizationsTable).where(eq(organizationsTable.id, auth.organizationId)).for("update");
+    if (!organization || !hasSubscriptionAccess(organization)) return { kind: "access" as const, organization };
+    const [member] = await tx.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).for("update");
+    if (!member || member.roleId === "owner") return { kind: "missing" as const };
+    const status = member.status === "inactive" ? "active" : "inactive";
+    const [updated] = await tx.update(teamUsersTable).set({ status, updatedAt: new Date() }).where(eq(teamUsersTable.id, id)).returning();
+    if (status === "inactive") await tx.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
+    await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: status === "inactive" ? "member_disabled" : "member_enabled", entity: updated.name, details: updated.roleId });
+    return { kind: "updated" as const, updated };
+  });
+  if (result.kind === "access") { response.status(402).json(subscriptionWriteFailure(result.organization)); return; }
+  if (result.kind === "missing") { response.status(404).json({ error: "لم يتم العثور على عضو الفريق." }); return; }
+  const updated = result.updated;
   response.json({ member: safeUser(updated, auth) });
 });
 

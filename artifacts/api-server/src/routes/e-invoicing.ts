@@ -6,6 +6,7 @@ import {
   eInvoiceDocumentsTable,
   eInvoiceUnitsTable,
   erpRecordsTable,
+  organizationsTable,
   type EInvoiceUnit,
 } from "@workspace/db";
 import {
@@ -26,6 +27,9 @@ import {
   requireAuth,
   requireCurrentDataGeneration,
   requireSubscriptionAccess,
+  lockAndValidateDataGeneration,
+  lockedWriteRejection,
+  hasSubscriptionAccess,
   type AuthContext,
 } from "../middleware/team-auth";
 
@@ -36,6 +40,7 @@ const MAX_CERTIFICATE_EXPIRY_WARNING_DAYS = 365;
 const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 
 type RecordData = Record<string, unknown>;
+type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 function value(body: unknown): RecordData {
   return body && typeof body === "object" && !Array.isArray(body) ? body as RecordData : {};
@@ -184,11 +189,33 @@ async function audit(auth: AuthContext, action: string, entity: string, details 
 }
 
 async function unitForOrganization(organizationId: number): Promise<EInvoiceUnit> {
-  const [existing] = await db.select().from(eInvoiceUnitsTable)
-    .where(eq(eInvoiceUnitsTable.organizationId, organizationId)).limit(1);
-  if (existing) return existing;
-  const [created] = await db.insert(eInvoiceUnitsTable).values({ organizationId }).returning();
-  return created;
+  // Unit creation is a write too. Lock the same organization row used by
+  // tenant mutations so an administrative suspension cannot race it.
+  return db.transaction(async (tx) => {
+    const [organization] = await tx.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId)).for("update");
+    if (!organization || !hasSubscriptionAccess(organization)) {
+      throw new EInvoiceRouteError(
+        organization?.platformAccessSuspendedAt
+          ? "تم تعليق وصول هذه المنشأة من إدارة المنصة."
+          : "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.",
+        402,
+        { code: organization?.platformAccessSuspendedAt ? "platform_access_suspended" : "subscription_required" },
+      );
+    }
+    const [existing] = await tx.select().from(eInvoiceUnitsTable)
+      .where(eq(eInvoiceUnitsTable.organizationId, organizationId)).limit(1);
+    if (existing) return existing;
+    const [created] = await tx.insert(eInvoiceUnitsTable).values({ organizationId }).returning();
+    return created;
+  });
+}
+
+async function requireLockedWrite(tx: Transaction, response: Response): Promise<void> {
+  if (!await lockAndValidateDataGeneration(tx, response)) {
+    const rejection = lockedWriteRejection(response);
+    throw new EInvoiceRouteError(rejection.error, rejection.status, { code: rejection.code });
+  }
 }
 
 function authorityXmlFromResponse(body: RecordData): string | undefined {
@@ -342,13 +369,6 @@ router.put("/e-invoicing/setup", requireAuth, requireSubscriptionAccess, require
     if (countryCode !== "SA") throw new EInvoiceRouteError("الفوترة الإلكترونية لهذه النسخة مهيأة للمنشآت السعودية فقط.");
     const vatRate = Number(body.vatRate ?? 15);
     if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) throw new EInvoiceRouteError("نسبة الضريبة غير صالحة.");
-    const current = await unitForOrganization(auth.organizationId);
-    if (current.csrPem || current.certificateCiphertext) {
-      throw new EInvoiceRouteError(
-        "بيانات جهة الإصدار مقفلة بعد إنشاء طلب الشهادة. أنشئ وحدة إصدار جديدة عند تغيير البيانات القانونية.",
-        409,
-      );
-    }
     const seller = {
       sellerName: requiredText(body.sellerName, "الاسم القانوني للمنشأة"),
       vatNumber,
@@ -361,17 +381,27 @@ router.put("/e-invoicing/setup", requireAuth, requireSubscriptionAccess, require
       vatRate,
       pricesIncludeVat: body.pricesIncludeVat === true,
     };
-    const [updated] = await db.update(eInvoiceUnitsTable).set({
-      unitName: requiredText(body.unitName ?? current.unitName, "اسم وحدة الإصدار"),
-      deviceSerialNumber: requiredText(body.deviceSerialNumber ?? current.deviceSerialNumber, "الرقم التسلسلي لوحدة الإصدار"),
-      environment: body.environment === "production" ? "production" : "sandbox",
-      ...seller,
-      vatRate: seller.vatRate.toFixed(2),
-      certificateExpiryWarningDays: certificateExpiryWarningDays(body.certificateExpiryWarningDays, current.certificateExpiryWarningDays),
-      status: current.csrPem ? "csr_generated" : "configured",
-      updatedAt: new Date(),
-    }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
-    await audit(auth, "einvoice_configuration_saved", String(updated.id));
+    const updated = await db.transaction(async (tx) => {
+      await requireLockedWrite(tx, response);
+      await tx.insert(eInvoiceUnitsTable).values({ organizationId: auth.organizationId }).onConflictDoNothing();
+      const [current] = await tx.select().from(eInvoiceUnitsTable)
+        .where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
+      if (!current) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
+      if (current.csrPem || current.certificateCiphertext) {
+        throw new EInvoiceRouteError("بيانات جهة الإصدار مقفلة بعد إنشاء طلب الشهادة. أنشئ وحدة إصدار جديدة عند تغيير البيانات القانونية.", 409);
+      }
+      const [saved] = await tx.update(eInvoiceUnitsTable).set({
+        unitName: requiredText(body.unitName ?? current.unitName, "اسم وحدة الإصدار"),
+        deviceSerialNumber: requiredText(body.deviceSerialNumber ?? current.deviceSerialNumber, "الرقم التسلسلي لوحدة الإصدار"),
+        environment: body.environment === "production" ? "production" : "sandbox",
+        ...seller, vatRate: seller.vatRate.toFixed(2),
+        certificateExpiryWarningDays: certificateExpiryWarningDays(body.certificateExpiryWarningDays, current.certificateExpiryWarningDays),
+        status: current.csrPem ? "csr_generated" : "configured", updatedAt: new Date(),
+      }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
+      const { teamAuditLogsTable } = await import("@workspace/db");
+      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_configuration_saved", entity: String(saved.id), details: "" });
+      return saved;
+    });
     return { unit: unitResponse(updated) };
   });
 });
@@ -384,13 +414,15 @@ router.post("/e-invoicing/setup/csr", requireAuth, requireSubscriptionAccess, re
     const seller = sellerFromUnit(current);
     if (!configurationIsComplete(seller)) throw new EInvoiceRouteError("أكمل بيانات المنشأة الضريبية والعنوان قبل إنشاء طلب الشهادة.");
     const generated = await generateCsr(seller, current.unitName, current.deviceSerialNumber);
-    const [updated] = await db.update(eInvoiceUnitsTable).set({
-      csrPem: generated.csrPem,
-      privateKeyCiphertext: encryptEInvoiceSecret(generated.privateKeyPem),
-      status: "csr_generated",
-      updatedAt: new Date(),
-    }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
-    await audit(auth, "einvoice_csr_generated", String(updated.id));
+    const updated = await db.transaction(async (tx) => {
+      await requireLockedWrite(tx, response);
+      const [locked] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.id, current.id)).for("update");
+      if (!locked) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
+      const [saved] = await tx.update(eInvoiceUnitsTable).set({ csrPem: generated.csrPem, privateKeyCiphertext: encryptEInvoiceSecret(generated.privateKeyPem), status: "csr_generated", updatedAt: new Date() }).where(eq(eInvoiceUnitsTable.id, locked.id)).returning();
+      const { teamAuditLogsTable } = await import("@workspace/db");
+      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_csr_generated", entity: String(saved.id), details: "" });
+      return saved;
+    });
     return { unit: unitResponse(updated), csrPem: generated.csrPem };
   });
 });
@@ -399,14 +431,17 @@ router.put("/e-invoicing/setup/certificate-warning", requireAuth, requireSubscri
   const auth = requireOwner(response);
   if (!auth) return;
   await run(response, async () => {
-    const current = await unitForOrganization(auth.organizationId);
     const body = value(request.body);
     const warningDays = certificateExpiryWarningDays(body.certificateExpiryWarningDays);
-    const [updated] = await db.update(eInvoiceUnitsTable).set({
-      certificateExpiryWarningDays: warningDays,
-      updatedAt: new Date(),
-    }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
-    await audit(auth, "einvoice_certificate_warning_updated", String(updated.id), String(warningDays));
+    const updated = await db.transaction(async (tx) => {
+      await requireLockedWrite(tx, response);
+      const [current] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
+      if (!current) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
+      const [saved] = await tx.update(eInvoiceUnitsTable).set({ certificateExpiryWarningDays: warningDays, updatedAt: new Date() }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
+      const { teamAuditLogsTable } = await import("@workspace/db");
+      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_certificate_warning_updated", entity: String(saved.id), details: String(warningDays) });
+      return saved;
+    });
     return { unit: unitResponse(updated) };
   });
 });
@@ -416,32 +451,22 @@ router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, r
   if (!auth) return;
   await run(response, async () => {
     const body = value(request.body);
-    const current = await unitForOrganization(auth.organizationId);
-    if (!current.privateKeyCiphertext) throw new EInvoiceRouteError("أنشئ طلب الشهادة أولاً ثم أكمل اختبار الامتثال في بوابة فاتورة.");
     const certificatePem = requiredText(body.certificatePem, "شهادة وحدة الإصدار", 30_000);
     const parsedExpiry = certificateExpiryFromPem(certificatePem);
-    const [updated] = await db.update(eInvoiceUnitsTable).set({
-      certificateCiphertext: encryptEInvoiceSecret(certificatePem),
-      csidCiphertext: encryptEInvoiceSecret(requiredText(body.csid, "معرّف شهادة الحل", 5_000)),
-      secretCiphertext: encryptEInvoiceSecret(requiredText(body.secret, "سر شهادة الحل", 5_000)),
-      certificateExpiresAt: parsedExpiry,
-      status: "credentials_saved",
-      complianceStatus: "not_started",
-      complianceSuiteStatus: "not_started",
-      complianceSuiteResults: null,
-      complianceError: null,
-      lastComplianceCheckAt: null,
-      updatedAt: new Date(),
-    }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
-    await db.update(eInvoiceDocumentsTable).set({
-      status: "pending_compliance",
-      updatedAt: new Date(),
-    }).where(and(
-      eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
-      eq(eInvoiceDocumentsTable.unitId, current.id),
-      inArray(eInvoiceDocumentsTable.status, ["pending_submission", "rejected"]),
-    ));
-    await audit(auth, "einvoice_credentials_saved", String(updated.id));
+    const updated = await db.transaction(async (tx) => {
+      await requireLockedWrite(tx, response);
+      const [current] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
+      if (!current?.privateKeyCiphertext) throw new EInvoiceRouteError("أنشئ طلب الشهادة أولاً ثم أكمل اختبار الامتثال في بوابة فاتورة.");
+      const [saved] = await tx.update(eInvoiceUnitsTable).set({
+        certificateCiphertext: encryptEInvoiceSecret(certificatePem), csidCiphertext: encryptEInvoiceSecret(requiredText(body.csid, "معرّف شهادة الحل", 5_000)),
+        secretCiphertext: encryptEInvoiceSecret(requiredText(body.secret, "سر شهادة الحل", 5_000)), certificateExpiresAt: parsedExpiry,
+        status: "credentials_saved", complianceStatus: "not_started", complianceSuiteStatus: "not_started", complianceSuiteResults: null, complianceError: null, lastComplianceCheckAt: null, updatedAt: new Date(),
+      }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
+      await tx.update(eInvoiceDocumentsTable).set({ status: "pending_compliance", updatedAt: new Date() }).where(and(eq(eInvoiceDocumentsTable.organizationId, auth.organizationId), eq(eInvoiceDocumentsTable.unitId, current.id), inArray(eInvoiceDocumentsTable.status, ["pending_submission", "rejected"])));
+      const { teamAuditLogsTable } = await import("@workspace/db");
+      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_credentials_saved", entity: String(saved.id), details: "" });
+      return saved;
+    });
     return { unit: unitResponse(updated) };
   });
 });
@@ -532,9 +557,12 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
   const auth = requireOwner(response);
   if (!auth) return;
   await run(response, async () => {
+    const outcome = await db.transaction(async (tx) => {
+    await requireLockedWrite(tx, response);
     const body = value(request.body);
     const preferredDocumentId = body.documentId == null ? null : safeId(body.documentId);
-    const unit = await unitForOrganization(auth.organizationId);
+    const [unit] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
+    if (!unit) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
     requireUsableCertificate(unit);
     const csid = decryptEInvoiceSecret(unit.csidCiphertext);
     const secret = decryptEInvoiceSecret(unit.secretCiphertext);
@@ -544,7 +572,7 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
     }
     const baseUrl = process.env.ZATCA_SANDBOX_BASE_URL;
     if (!baseUrl) throw new EInvoiceRouteError("عنوان Sandbox المعتمد غير مهيأ على الخادم.", 409);
-    const documents = await db.select().from(eInvoiceDocumentsTable).where(and(
+    const documents = await tx.select().from(eInvoiceDocumentsTable).where(and(
       eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
       eq(eInvoiceDocumentsTable.unitId, unit.id),
     )).orderBy(desc(eInvoiceDocumentsTable.issuedAt));
@@ -554,7 +582,7 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
     if (preferredDocumentId != null && !preferredDocument) {
       throw new EInvoiceRouteError("المستند المحدد لا يتبع لوحدة الإصدار الحالية.", 404);
     }
-    await db.update(eInvoiceUnitsTable).set({
+    await tx.update(eInvoiceUnitsTable).set({
       complianceStatus: "checking",
       complianceSuiteStatus: "checking",
       complianceError: null,
@@ -588,7 +616,7 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
         const returnedXml = authorityXmlFromResponse(remote.body);
         if (returnedXml) {
           const authorityXmlObjectPath = await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority");
-          await db.update(eInvoiceDocumentsTable).set({ authorityXmlObjectPath, updatedAt: new Date() })
+          await tx.update(eInvoiceDocumentsTable).set({ authorityXmlObjectPath, updatedAt: new Date() })
             .where(eq(eInvoiceDocumentsTable.id, document.id));
         }
         results.push({
@@ -626,7 +654,7 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
         .map((result) => `${result.label}: ${result.authorityMessage ?? "لم تجتز الحالة."}`)
         .join(" | ")
         .slice(0, 2_000);
-    const [updatedUnit] = await db.update(eInvoiceUnitsTable).set({
+    const [updatedUnit] = await tx.update(eInvoiceUnitsTable).set({
       status: accepted ? "compliance_passed" : "credentials_saved",
       complianceStatus: accepted ? "passed" : (hasUnknownResult ? "unknown" : "failed"),
       complianceSuiteStatus: accepted ? "passed" : (hasUnknownResult ? "unknown" : "failed"),
@@ -637,7 +665,7 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
     }).where(eq(eInvoiceUnitsTable.id, unit.id)).returning();
     if (accepted) {
       const passedDocumentIds = results.flatMap((result) => result.status === "passed" && result.documentId ? [result.documentId] : []);
-      await db.update(eInvoiceDocumentsTable).set({ status: "pending_submission", updatedAt: new Date() })
+      await tx.update(eInvoiceDocumentsTable).set({ status: "pending_submission", updatedAt: new Date() })
         .where(and(
           eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
           eq(eInvoiceDocumentsTable.unitId, unit.id),
@@ -645,25 +673,30 @@ router.post("/e-invoicing/compliance/check", requireAuth, requireSubscriptionAcc
           inArray(eInvoiceDocumentsTable.id, passedDocumentIds),
         ));
     }
-    await audit(auth, accepted ? "einvoice_compliance_passed" : "einvoice_compliance_failed", String(unit.id), JSON.stringify(results.map((result) => ({
+    const { teamAuditLogsTable } = await import("@workspace/db");
+    await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: accepted ? "einvoice_compliance_passed" : "einvoice_compliance_failed", entity: String(unit.id), details: JSON.stringify(results.map((result) => ({
       fixture: result.fixtureId,
       status: result.status,
       httpStatus: result.httpStatus,
-    }))));
+    }))) });
     const resultPayload = {
       unit: unitResponse(updatedUnit),
       suite: complianceSuiteResponse(updatedUnit),
     };
-    if (!accepted) {
+    return accepted
+      ? { kind: "accepted" as const, payload: resultPayload }
+      : { kind: "failed" as const, unknown: hasUnknownResult, payload: resultPayload };
+    });
+    if (outcome.kind === "failed") {
       throw new EInvoiceRouteError(
-        hasUnknownResult
+        outcome.unknown
           ? "نتيجة حزمة الامتثال غير مؤكدة؛ راجع سجل الهيئة قبل إعادة الفحص."
           : "لم تجتز جميع حالات حزمة الامتثال الرسمية.",
-        hasUnknownResult ? 503 : 422,
-        resultPayload,
+        outcome.unknown ? 503 : 422,
+        outcome.payload,
       );
     }
-    return resultPayload;
+    return outcome.payload;
   });
 });
 
@@ -671,13 +704,16 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
   const auth = requireSales(response);
   if (!auth) return;
   await run(response, async () => {
+    const outcome = await db.transaction(async (tx) => {
+    await requireLockedWrite(tx, response);
     const id = safeId(Array.isArray(request.params.id) ? request.params.id[0] : request.params.id);
-    const [document] = await db.select().from(eInvoiceDocumentsTable).where(and(
+    const [document] = await tx.select().from(eInvoiceDocumentsTable).where(and(
       eq(eInvoiceDocumentsTable.id, id),
       eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
     )).limit(1);
     if (!document?.xmlObjectPath) throw new EInvoiceRouteError("لا يوجد XML مهيأ لإرساله.", 409);
-    const unit = await unitForOrganization(auth.organizationId);
+    const [unit] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
+    if (!unit) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
     requireUsableCertificate(unit);
     const documentCompliancePassed = parseComplianceSuiteResults(unit.complianceSuiteResults)
       .some((result) => result.status === "passed" && result.documentId === document.id);
@@ -690,7 +726,7 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     const endpoint = document.documentType === "standard"
       ? "/invoices/clearance/single"
       : "/invoices/reporting/single";
-    const [claimed] = await db.update(eInvoiceDocumentsTable).set({
+    const [claimed] = await tx.update(eInvoiceDocumentsTable).set({
       status: "submitting",
       submissionAttempts: sql`${eInvoiceDocumentsTable.submissionAttempts} + 1`,
       lastSubmissionAt: new Date(),
@@ -702,7 +738,8 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       notInArray(eInvoiceDocumentsTable.status, ["submitting", "cleared", "reported", "submission_unknown"]),
     )).returning();
     if (!claimed) throw new EInvoiceRouteError("هناك محاولة إرسال قيد المعالجة أو نتيجة غير مؤكدة لهذا المستند.", 409);
-    const latestUnit = await unitForOrganization(auth.organizationId);
+    const [latestUnit] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.id, unit.id)).for("update");
+    if (!latestUnit) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
     const latestCertificate = certificateState(latestUnit);
     let submissionCredentials: { baseUrl: string; csid: string; secret: string } | null = null;
     try {
@@ -720,14 +757,14 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       if (!latestBaseUrl) throw new EInvoiceRouteError("عنوان بيئة فاتورة غير مهيأ على الخادم. أضف عنوان البيئة المعتمد قبل الإرسال.", 409);
       submissionCredentials = { baseUrl: latestBaseUrl, csid: latestCsid, secret: latestSecret };
     } catch (error) {
-      await db.update(eInvoiceDocumentsTable).set({
+      await tx.update(eInvoiceDocumentsTable).set({
         status: latestCertificate.usable ? "pending_compliance" : "pending_submission",
         submissionError: error instanceof Error ? error.message : "لم تعد الشهادة صالحة للإرسال.",
         updatedAt: new Date(),
       }).where(eq(eInvoiceDocumentsTable.id, document.id));
-      throw error;
+      return { kind: "credential_error" as const, error: error instanceof Error ? error.message : "لم تعد الشهادة صالحة للإرسال." };
     }
-    if (!submissionCredentials) throw new EInvoiceRouteError("تعذر تجهيز بيانات الإرسال.", 500);
+    if (!submissionCredentials) return { kind: "credential_error" as const, error: "تعذر تجهيز بيانات الإرسال." };
     let remote: { response: globalThis.Response; body: RecordData };
     try {
       remote = await authorityRequest(
@@ -738,13 +775,14 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
         document,
       );
     } catch {
-      await db.update(eInvoiceDocumentsTable).set({
+      await tx.update(eInvoiceDocumentsTable).set({
         status: "submission_unknown",
         submissionError: "انقطع الاتصال قبل استلام نتيجة الهيئة. راجع سجل الهيئة قبل إعادة الإرسال.",
         updatedAt: new Date(),
       }).where(eq(eInvoiceDocumentsTable.id, document.id));
-      await audit(auth, "einvoice_submission_unknown", String(document.id));
-      throw new EInvoiceRouteError("نتيجة الإرسال غير مؤكدة؛ لا تعِد المحاولة قبل مراجعة سجل الهيئة.", 503);
+      const { teamAuditLogsTable } = await import("@workspace/db");
+      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_submission_unknown", entity: String(document.id), details: "" });
+      return { kind: "unknown" as const };
     }
     const authorityStatus = document.documentType === "standard"
       ? remote.body.clearanceStatus
@@ -756,7 +794,7 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     const authorityXmlObjectPath = returnedXml
       ? await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority")
       : null;
-    const [updated] = await db.update(eInvoiceDocumentsTable).set({
+    const [updated] = await tx.update(eInvoiceDocumentsTable).set({
       status,
       submissionReference: typeof authorityStatus === "string" ? authorityStatus : remote.response.headers.get("request-id"),
       authorityXmlObjectPath: authorityXmlObjectPath ?? document.authorityXmlObjectPath,
@@ -767,9 +805,15 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       ).slice(0, 2_000),
       updatedAt: new Date(),
     }).where(eq(eInvoiceDocumentsTable.id, document.id)).returning();
-    await audit(auth, accepted ? "einvoice_submitted" : "einvoice_submission_rejected", String(document.id), String(remote.response.status));
-    if (!accepted) throw new EInvoiceRouteError(updated.submissionError || "لم تؤكد الهيئة قبول الفاتورة.", 422);
-    return { document: { id: updated.id, status: updated.status, submissionReference: updated.submissionReference } };
+    const { teamAuditLogsTable } = await import("@workspace/db");
+    await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: accepted ? "einvoice_submitted" : "einvoice_submission_rejected", entity: String(document.id), details: String(remote.response.status) });
+    if (!accepted) return { kind: "rejected" as const, error: updated.submissionError || "لم تؤكد الهيئة قبول الفاتورة." };
+    return { kind: "accepted" as const, document: { id: updated.id, status: updated.status, submissionReference: updated.submissionReference } };
+    });
+    if (outcome.kind === "credential_error") throw new EInvoiceRouteError(outcome.error, 409);
+    if (outcome.kind === "unknown") throw new EInvoiceRouteError("نتيجة الإرسال غير مؤكدة؛ لا تعِد المحاولة قبل مراجعة سجل الهيئة.", 503);
+    if (outcome.kind === "rejected") throw new EInvoiceRouteError(outcome.error, 422);
+    return { document: outcome.document };
   });
 });
 
@@ -796,6 +840,7 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
     const quantity = 1;
     const reason = requiredText(body.reason, "سبب الإشعار");
     const created = await db.transaction(async (tx) => {
+      await requireLockedWrite(tx, response);
       const [unit] = await tx.select().from(eInvoiceUnitsTable).where(
         eq(eInvoiceUnitsTable.organizationId, auth.organizationId),
       ).for("update");
@@ -848,9 +893,10 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
         lastComplianceCheckAt: null,
         updatedAt: new Date(),
       }).where(eq(eInvoiceUnitsTable.id, unit.id));
+      const { teamAuditLogsTable } = await import("@workspace/db");
+      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_note_issued", entity: String(updated.id), details: noteType });
       return updated;
     });
-    await audit(auth, "einvoice_note_issued", String(created.id), noteType);
     return { document: { id: created.id, invoiceNumber: created.invoiceNumber, status: created.status, qrPayload: created.qrPayload } };
   });
 });

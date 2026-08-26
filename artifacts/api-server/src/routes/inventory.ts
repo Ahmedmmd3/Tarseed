@@ -4,7 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, eInvoiceDocumentsTable, eInvoiceUnitsTable, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { configurationIsComplete, decryptEInvoiceSecret, generateInvoiceDocument, type SellerProfile } from "../lib/e-invoicing";
 import { savePrivateInvoiceXml } from "../lib/private-object-store";
-import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -13,14 +13,15 @@ type ErpRecord = typeof erpRecordsTable.$inferSelect;
 type Transaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 class InventoryRouteError extends Error {
-  constructor(message: string, readonly status: number = 409) {
+  constructor(message: string, readonly status: number = 409, readonly code?: string) {
     super(message);
   }
 }
 
 async function requireLockedDataGeneration(tx: Transaction, response: Response): Promise<void> {
   if (!await lockAndValidateDataGeneration(tx, response)) {
-    throw new InventoryRouteError("تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.");
+    const rejection = lockedWriteRejection(response);
+    throw new InventoryRouteError(rejection.error, rejection.status, rejection.code);
   }
 }
 
@@ -182,7 +183,7 @@ async function runAction(response: Response, action: () => Promise<RecordData>):
     response.json(await action());
   } catch (error) {
     if (error instanceof InventoryRouteError) {
-      response.status(error.status).json({ error: error.message });
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
     }
     throw error;

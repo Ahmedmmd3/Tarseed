@@ -111,9 +111,12 @@ export function requireCurrentDataGeneration(request: Request, response: Respons
 export function requireSubscriptionAccess(_request: Request, response: Response, next: NextFunction): void {
   const auth = response.locals.auth as AuthContext | undefined;
   if (!auth || !hasSubscriptionAccess(auth)) {
+    const suspended = Boolean(auth?.platformAccessSuspendedAt);
     response.status(402).json({
-      error: "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.",
-      code: "subscription_required",
+      error: suspended
+        ? "تم تعليق وصول هذه المنشأة من إدارة المنصة."
+        : "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.",
+      code: suspended ? "platform_access_suspended" : "subscription_required",
     });
     return;
   }
@@ -137,5 +140,38 @@ export async function lockAndValidateDataGeneration(tx: DatabaseTransaction, res
     .from(organizationsTable)
     .where(eq(organizationsTable.id, auth.organizationId))
     .for("update");
-  return organization?.dataGeneration === generation && hasSubscriptionAccess(organization);
+  if (!organization || !hasSubscriptionAccess(organization)) {
+    response.locals.writeAccessFailure = organization?.platformAccessSuspendedAt
+      ? "platform_access_suspended"
+      : "subscription_required";
+    return false;
+  }
+  if (organization.dataGeneration !== generation) {
+    response.locals.writeAccessFailure = "stale_data_generation";
+    return false;
+  }
+  return true;
+}
+
+/** Response suitable for a write rejected after acquiring the organization lock. */
+export function lockedWriteRejection(response: Response): { status: number; error: string; code: string } {
+  if (response.locals.writeAccessFailure === "platform_access_suspended") {
+    return {
+      status: 402,
+      error: "تم تعليق وصول هذه المنشأة من إدارة المنصة.",
+      code: "platform_access_suspended",
+    };
+  }
+  if (response.locals.writeAccessFailure === "subscription_required") {
+    return {
+      status: 402,
+      error: "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.",
+      code: "subscription_required",
+    };
+  }
+  return {
+    status: 409,
+    error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل.",
+    code: "stale_data_generation",
+  };
 }

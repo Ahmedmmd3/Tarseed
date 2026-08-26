@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
-import { requireAuth, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 const BACKUP_VERSION = 1;
@@ -457,6 +457,15 @@ router.post("/backup/restore", requireAuth, requireSubscriptionAccess, requireOw
   }
 
   const result = await db.transaction(async (tx) => {
+    // This is deliberately the first database operation. The platform admin
+    // takes this exact row lock when suspending access, making suspension
+    // linearizable with even a long restore.
+    const [lockedOrganization] = await tx.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, auth.organizationId)).for("update");
+    if (!lockedOrganization) return { kind: "missing_organization" as const };
+    if (!hasSubscriptionAccess(lockedOrganization)) {
+      return { kind: lockedOrganization.platformAccessSuspendedAt ? "suspended" as const : "subscription_required" as const };
+    }
     // Restores preserve record IDs from the backup and reset the shared serial
     // sequence afterwards. Block concurrent record writers until both steps
     // complete so a restore cannot move the sequence behind a newly inserted ID.
@@ -493,6 +502,14 @@ router.post("/backup/restore", requireAuth, requireSubscriptionAccess, requireOw
         (SELECT MAX(id) IS NOT NULL FROM erp_records)
       )
     `);
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: auth.organizationId,
+      actorId: auth.id,
+      actorName: auth.name || auth.email,
+      action: "erp_backup_restored",
+      entity: "erp_records",
+      details: `${parsed.records!.length} records`,
+    });
     return { kind: "restored" as const, dataGeneration: organization.dataGeneration };
   });
 
@@ -504,15 +521,16 @@ router.post("/backup/restore", requireAuth, requireSubscriptionAccess, requireOw
     response.status(404).json({ error: "المنشأة غير متاحة." });
     return;
   }
+  if (result.kind === "suspended" || result.kind === "subscription_required") {
+    response.status(402).json({
+      error: result.kind === "suspended"
+        ? "تم تعليق وصول هذه المنشأة من إدارة المنصة."
+        : "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.",
+      code: result.kind === "suspended" ? "platform_access_suspended" : "subscription_required",
+    });
+    return;
+  }
 
-  await db.insert(teamAuditLogsTable).values({
-    organizationId: auth.organizationId,
-    actorId: auth.id,
-    actorName: auth.name || auth.email,
-    action: "erp_backup_restored",
-    entity: "erp_records",
-    details: `${parsed.records.length} records`,
-  });
   response.json({
     message: "تمت استعادة النسخة الاحتياطية بنجاح.",
     recordCount: parsed.records.length,

@@ -1,7 +1,7 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -39,6 +39,17 @@ async function recordsFor(auth: AuthContext, tableName: string): Promise<AnyReco
   return rows.map((row): AnyRecord => {
     const data = row.data as Record<string, unknown>;
     return { ...data, id: row.id };
+  });
+}
+
+async function guardedAudit(response: Response, auth: AuthContext, action: string, entity: string, details: string): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    if (!await lockAndValidateDataGeneration(tx, response)) return false;
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email,
+      action, entity, details,
+    });
+    return true;
   });
 }
 
@@ -236,20 +247,18 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       return true;
     });
     if (!inserted) {
-      response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+      const rejection = lockedWriteRejection(response);
+      response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
       return;
     }
     created += 1;
   }
   if (created > 0) {
-    await db.insert(teamAuditLogsTable).values({
-      organizationId: auth.organizationId,
-      actorId: auth.id,
-      actorName: auth.name || auth.email,
-      action: "source_journals_synced",
-      entity: "journalEntries",
-      details: `تم إنشاء ${created} قيداً من مصادر العمليات.`,
-    });
+    if (!await guardedAudit(response, auth, "source_journals_synced", "journalEntries", `تم إنشاء ${created} قيداً من مصادر العمليات.`)) {
+      const rejection = lockedWriteRejection(response);
+      response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+      return;
+    }
   }
   response.json({ created, skipped });
 });
@@ -299,17 +308,15 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
     return created;
   });
   if (!closure) {
-    response.status(409).json({ error: "تغيّرت بيانات المنشأة منذ تحميلها. حدّث الصفحة قبل متابعة التعديل." });
+    const rejection = lockedWriteRejection(response);
+    response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
     return;
   }
-  await db.insert(teamAuditLogsTable).values({
-    organizationId: auth.organizationId,
-    actorId: auth.id,
-    actorName: auth.name || auth.email,
-    action: "financial_period_closed",
-    entity: "financialClosures",
-    details: `إقفال الفترة من ${from} إلى ${to}.`,
-  });
+  if (!await guardedAudit(response, auth, "financial_period_closed", "financialClosures", `إقفال الفترة من ${from} إلى ${to}.`)) {
+    const rejection = lockedWriteRejection(response);
+    response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+    return;
+  }
   response.status(201).json({ closure: { ...closure.data, id: closure.id } });
 });
 

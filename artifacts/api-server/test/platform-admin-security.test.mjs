@@ -5,8 +5,10 @@ import test, { after, before } from "node:test";
 import { eq } from "drizzle-orm";
 import {
   db,
+  erpRecordsTable,
   organizationsTable,
   platformAuditLogsTable,
+  teamAuditLogsTable,
   platformAdminsTable,
   teamUsersTable,
 } from "@workspace/db";
@@ -24,7 +26,7 @@ const password = "Secure-platform-test-password-123";
 const organizationName = `منشأة اختبار الإدارة ${suffix}`;
 const ownerEmail = `owner-${suffix}@example.test`;
 
-async function request(path, { method = "GET", body, cookie, forwardedFor = "203.0.113.180" } = {}) {
+async function request(path, { method = "GET", body, cookie, headers = {}, forwardedFor = "203.0.113.180" } = {}) {
   const response = await fetch(`${origin}/api${path}`, {
     method,
     headers: {
@@ -32,6 +34,7 @@ async function request(path, { method = "GET", body, cookie, forwardedFor = "203
       "X-Forwarded-For": forwardedFor,
       ...(cookie ? { Cookie: cookie } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers,
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -264,4 +267,100 @@ test("يتطلب التأكيد ويطبّق تعليق الوصول واستع�
   assert.equal(logout.response.status, 204);
   const sessionAfterLogout = await request("/platform-auth/me", { cookie: adminCookie });
   assert.equal(sessionAfterLogout.payload.admin, null);
+});
+
+test("تنتظر عملية التعليق القفل وتُرفض عمليات النسخ والفوترة والفريق المنتظرة بلا كتابة", async () => {
+  const adminLogin = await request("/platform-auth/login", { method: "POST", body: { username, password } });
+  const adminCookie = cookieFrom(adminLogin.response, "wudooh_super_admin_session");
+  const ownerLogin = await request("/auth/login", {
+    method: "POST", body: { email: ownerEmail, password: "Owner-test-password-123" },
+  });
+  const ownerCookie = cookieFrom(ownerLogin.response, "wudooh_session");
+  assert.ok(adminCookie && ownerCookie);
+
+  // First prove the HTTP suspension action cannot pass an existing tenant
+  // organization lock. This is the same PostgreSQL row lock used by all
+  // protected mutations.
+  let releaseHeld;
+  let lockedResolve;
+  const locked = new Promise(resolve => { lockedResolve = resolve; });
+  const held = db.transaction(async tx => {
+    await tx.select().from(organizationsTable).where(eq(organizationsTable.id, organizationId)).for("update");
+    lockedResolve();
+    await new Promise(resolve => { releaseHeld = resolve; });
+  });
+  await locked;
+  let suspensionFinished = false;
+  const suspension = request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST", cookie: adminCookie, body: { action: "suspend_access", confirmed: true, reason: "اختبار قفل التزامن" },
+  }).then(result => { suspensionFinished = true; return result; });
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(suspensionFinished, false, "يجب أن ينتظر التعليق العملية التي تمسك قفل المنشأة");
+  releaseHeld();
+  await held;
+  const suspended = await suspension;
+  assert.equal(suspended.response.status, 200, JSON.stringify(suspended.payload));
+
+  const activeAgain = await request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST", cookie: adminCookie, body: { action: "restore_access", confirmed: true, reason: "تهيئة اختبار العمليات المنتظرة" },
+  });
+  assert.equal(activeAgain.response.status, 200, JSON.stringify(activeAgain.payload));
+
+  const beforeRecords = await db.select({ id: erpRecordsTable.id }).from(erpRecordsTable)
+    .where(eq(erpRecordsTable.organizationId, organizationId));
+  const beforeAudit = await db.select({ id: teamAuditLogsTable.id }).from(teamAuditLogsTable)
+    .where(eq(teamAuditLogsTable.organizationId, organizationId));
+
+  const [generation] = await db.select({ dataGeneration: organizationsTable.dataGeneration }).from(organizationsTable)
+    .where(eq(organizationsTable.id, organizationId));
+  const suffix2 = randomUUID().slice(0, 8);
+  let releaseSuspension;
+  let suspensionLockedResolve;
+  const suspensionLocked = new Promise(resolve => { suspensionLockedResolve = resolve; });
+  const heldSuspension = db.transaction(async tx => {
+    await tx.select().from(organizationsTable).where(eq(organizationsTable.id, organizationId)).for("update");
+    await tx.update(organizationsTable).set({ platformAccessSuspendedAt: new Date() })
+      .where(eq(organizationsTable.id, organizationId));
+    suspensionLockedResolve();
+    await new Promise(resolve => { releaseSuspension = resolve; });
+  });
+  await suspensionLocked;
+
+  let completedWrites = 0;
+  const writes = Promise.all([
+    request("/backup/restore", { method: "POST", cookie: ownerCookie, body: { version: 1, organizationId, records: [] } }),
+    request("/e-invoicing/setup", {
+      method: "PUT", cookie: ownerCookie, headers: { "X-Wudooh-Data-Generation": String(generation.dataGeneration) },
+      body: { unitName: "وحدة اختبار", deviceSerialNumber: "DEVICE-LOCK", sellerName: "منشأة اختبار", vatNumber: "300000000000003", commercialRegistrationNumber: "1010000000", street: "شارع", buildingNumber: "1", city: "الرياض", postalCode: "12345", countryCode: "SA", vatRate: 15 },
+    }),
+    request("/team/members", {
+      method: "POST", cookie: ownerCookie,
+      body: { name: "عضو قفل", email: `blocked-${suffix2}@example.test`, password: "Member-password-123", roleId: "sales", locationScope: "none", permissions: {} },
+    }),
+  ].map(promise => promise.then(result => {
+    completedWrites += 1;
+    return result;
+  })));
+  await new Promise(resolve => setTimeout(resolve, 40));
+  assert.equal(completedWrites, 0, "يجب أن تنتظر عمليات المنشأة التحقق من قفل التعليق");
+  releaseSuspension();
+  await heldSuspension;
+  const [backup, setup, member] = await writes;
+
+  for (const result of [backup, setup, member]) {
+    assert.equal(result.response.status, 402, JSON.stringify(result.payload));
+    assert.equal(result.payload.code, "platform_access_suspended");
+  }
+  const afterRecords = await db.select({ id: erpRecordsTable.id }).from(erpRecordsTable)
+    .where(eq(erpRecordsTable.organizationId, organizationId));
+  const afterAudit = await db.select({ id: teamAuditLogsTable.id }).from(teamAuditLogsTable)
+    .where(eq(teamAuditLogsTable.organizationId, organizationId));
+  assert.deepEqual(afterRecords, beforeRecords, "لا يجوز أن تكتب العمليات المعلقة سجلات المجال");
+  assert.equal(afterAudit.length, beforeAudit.length, "لا يجوز أن تنشئ العمليات المعلقة سجلات تدقيق منشأة");
+
+  // Restore so cleanup and any later tests retain an active tenant.
+  const restored = await request(`/super-admin/organizations/${organizationId}/subscription-action`, {
+    method: "POST", cookie: adminCookie, body: { action: "restore_access", confirmed: true, reason: "تنظيف اختبار القفل" },
+  });
+  assert.equal(restored.response.status, 200, JSON.stringify(restored.payload));
 });
