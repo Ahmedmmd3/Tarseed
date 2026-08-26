@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { eq } from "drizzle-orm";
+import {
+  db,
+  stripeWebhookSecurityMetricsTable,
+} from "@workspace/db";
 import {
   dispatchStripeWebhookSecurityAlert,
   recordExpiredStripeWebhookSignature,
@@ -7,6 +12,15 @@ import {
   STRIPE_EXPIRED_SIGNATURE_WINDOW_MS,
 } from "../src/lib/logger.ts";
 import { isExpiredStripeSignatureError } from "../src/lib/stripe-webhooks.ts";
+
+async function clearExpiredSignatureMetric() {
+  await db.delete(stripeWebhookSecurityMetricsTable).where(
+    eq(stripeWebhookSecurityMetricsTable.rejectionReason, "expired_signature"),
+  );
+}
+
+test.beforeEach(clearExpiredSignatureMetric);
+test.after(clearExpiredSignatureMetric);
 
 test("يتعرف فقط على خطأ انتهاء مهلة توقيع Stripe", () => {
   const expiredError = Object.assign(new Error("Timestamp outside the tolerance zone"), {
