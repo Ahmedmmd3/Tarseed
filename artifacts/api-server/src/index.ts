@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./lib/stripe-client";
+import { ensureInitialPlatformAdmin } from "./lib/platform-admin-bootstrap";
 
 const rawPort = process.env["PORT"];
 
@@ -35,6 +36,10 @@ async function initializeStripe(): Promise<void> {
 
 try {
   await initializeStripe();
+  const platformAdminCreated = await ensureInitialPlatformAdmin();
+  if (platformAdminCreated) {
+    logger.info("Initial platform administrator created.");
+  }
   app.listen(port, (err) => {
     if (err) {
       logger.error({ err }, "Error listening on port");
@@ -43,6 +48,6 @@ try {
     logger.info({ port }, "Server listening");
   });
 } catch (error) {
-  logger.error({ err: error }, "Stripe initialization failed");
+  logger.error({ err: error }, "Server initialization failed");
   process.exit(1);
 }
