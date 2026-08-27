@@ -6,6 +6,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import {
   authSessionsTable,
   db,
+  eInvoiceDocumentsTable,
+  eInvoiceUnitsTable,
   erpRecordsTable,
   organizationsTable,
   platformAdminsTable,
@@ -22,11 +24,14 @@ const ids = {
   users: {},
   warehouses: {},
   products: {},
+  accountingRecords: {},
+  eInvoiceDocuments: {},
 };
 const passwords = {
   owner: "Owner-security-test-123",
   member: "Member-security-test-123",
   inventoryMember: "Inventory-security-test-123",
+  accountingMember: "Accounting-security-test-123",
   expired: "Expired-security-test-123",
   admin: "Admin-security-test-123",
 };
@@ -236,6 +241,124 @@ before(async () => {
     warehouseIds: [firstWarehouse.id],
     password: passwords.inventoryMember,
   });
+  await createUser(activeOrganization.id, {
+    key: "accounting-member",
+    roleId: "custom",
+    permissions: { sales: true, accounting: true },
+    locationScope: "selected",
+    warehouseIds: [firstWarehouse.id],
+    password: passwords.accountingMember,
+  });
+  const accounts = {};
+  for (const account of [
+    { code: "1000", name: "النقدية", type: "asset" },
+    { code: "2000", name: "الدائنون", type: "liability" },
+    { code: "4000", name: "المبيعات", type: "revenue" },
+    { code: "5000", name: "المشتريات", type: "expense" },
+    { code: "5100", name: "المصروفات", type: "expense" },
+  ]) {
+    accounts[account.code] = await createRecord(activeOrganization.id, "accounts", {
+      ...account,
+      openingBalance: 0,
+      status: "active",
+    });
+  }
+  ids.accountingRecords.accounts = accounts;
+  ids.accountingRecords.allowedInvoice = await createRecord(activeOrganization.id, "invoices", {
+    warehouseId: firstWarehouse.id,
+    invoiceNumber: "INV-ALLOWED",
+    date: "2026-08-10",
+    total: 100,
+  });
+  ids.accountingRecords.restrictedInvoice = await createRecord(activeOrganization.id, "invoices", {
+    warehouseId: secondWarehouse.id,
+    invoiceNumber: "INV-RESTRICTED",
+    date: "2026-08-10",
+    total: 900,
+  });
+  ids.accountingRecords.allowedPurchase = await createRecord(activeOrganization.id, "purchaseOrders", {
+    warehouseId: firstWarehouse.id,
+    number: "PO-ALLOWED",
+    date: "2026-08-11",
+    total: 50,
+  });
+  ids.accountingRecords.restrictedPurchase = await createRecord(activeOrganization.id, "purchaseOrders", {
+    warehouseId: secondWarehouse.id,
+    number: "PO-RESTRICTED",
+    date: "2026-08-11",
+    total: 500,
+  });
+  ids.accountingRecords.allowedExpense = await createRecord(activeOrganization.id, "expenses", {
+    warehouseId: firstWarehouse.id,
+    number: "EXP-ALLOWED",
+    date: "2026-08-12",
+    amount: 20,
+  });
+  ids.accountingRecords.restrictedExpense = await createRecord(activeOrganization.id, "expenses", {
+    warehouseId: secondWarehouse.id,
+    number: "EXP-RESTRICTED",
+    date: "2026-08-12",
+    amount: 200,
+  });
+  ids.accountingRecords.allowedReceivable = await createRecord(activeOrganization.id, "receivables", {
+    warehouseId: firstWarehouse.id,
+    type: "receivable",
+    party: "عميل الموقع المسموح",
+    date: "2026-08-10",
+    amount: 100,
+  });
+  ids.accountingRecords.restrictedReceivable = await createRecord(activeOrganization.id, "receivables", {
+    warehouseId: secondWarehouse.id,
+    type: "receivable",
+    party: "عميل الموقع المحجوب",
+    date: "2026-08-10",
+    amount: 900,
+  });
+  ids.accountingRecords.organizationClosure = await createRecord(activeOrganization.id, "financialClosures", {
+    from: "2025-01-01",
+    to: "2025-12-31",
+    status: "closed",
+    netIncome: 9999,
+  });
+  ids.accountingRecords.restrictedLegacyJournal = await createRecord(activeOrganization.id, "journalEntries", {
+    warehouseId: firstWarehouse.id,
+    number: "LEGACY-RESTRICTED",
+    date: "2026-08-10",
+    description: "قيد قديم مرتبط بمصدر خارج النطاق",
+    status: "posted",
+    sourceType: "sale",
+    sourceId: ids.accountingRecords.restrictedInvoice.id,
+    lines: [
+      { accountId: String(accounts["1000"].id), debit: 900, credit: 0 },
+      { accountId: String(accounts["4000"].id), debit: 0, credit: 900 },
+    ],
+  });
+  const [eInvoiceUnit] = await db.insert(eInvoiceUnitsTable).values({
+    organizationId: activeOrganization.id,
+  }).returning();
+  for (const [key, invoiceRecord, counter] of [
+    ["allowed", ids.accountingRecords.allowedInvoice, 1],
+    ["restricted", ids.accountingRecords.restrictedInvoice, 2],
+  ]) {
+    const [document] = await db.insert(eInvoiceDocumentsTable).values({
+      organizationId: activeOrganization.id,
+      unitId: eInvoiceUnit.id,
+      invoiceRecordId: invoiceRecord.id,
+      documentType: "simplified",
+      status: "pending_submission",
+      invoiceNumber: invoiceRecord.data.invoiceNumber,
+      uuid: randomUUID(),
+      invoiceCounter: counter,
+      previousInvoiceHash: `previous-${key}`,
+      invoiceHash: `hash-${key}`,
+      qrPayload: `qr-${key}`,
+      xmlDigest: `digest-${key}`,
+      xmlObjectPath: `/private/${key}.xml`,
+      authorityXmlObjectPath: `/private/${key}-authority.xml`,
+      issuedAt: new Date("2026-08-10T10:00:00.000Z"),
+    }).returning();
+    ids.eInvoiceDocuments[key] = document;
+  }
   const [platformAdmin] = await db.insert(platformAdminsTable).values({
     username: `security-admin-${suffix}`,
     displayName: "مدير اختبار الأمان",
@@ -319,6 +442,110 @@ test("يطبّق الدور والصلاحية ونطاق المواقع على 
 
   const teamMembers = await request("/team/members", { cookie: memberLogin.cookie });
   assert.equal(teamMembers.response.status, 403, JSON.stringify(teamMembers.payload));
+});
+
+test("يعزل الفوترة الإلكترونية وعمليات المحاسبة حسب نطاق الموقع", async () => {
+  const memberLogin = await login(ids.users["accounting-member"].email, passwords.accountingMember);
+  const allowedDocument = ids.eInvoiceDocuments.allowed;
+  const restrictedDocument = ids.eInvoiceDocuments.restricted;
+
+  const documents = await request("/e-invoicing/documents", { cookie: memberLogin.cookie });
+  assert.equal(documents.response.status, 200, JSON.stringify(documents.payload));
+  assert.deepEqual(documents.payload.documents.map((document) => document.id), [allowedDocument.id]);
+
+  const documentCountBefore = await db.$count(eInvoiceDocumentsTable, eq(
+    eInvoiceDocumentsTable.organizationId,
+    ids.users["accounting-member"].organizationId,
+  ));
+  const restrictedBefore = await db.select({
+    status: eInvoiceDocumentsTable.status,
+    submissionAttempts: eInvoiceDocumentsTable.submissionAttempts,
+  }).from(eInvoiceDocumentsTable).where(eq(eInvoiceDocumentsTable.id, restrictedDocument.id));
+  for (const [path, method, body] of [
+    [`/e-invoicing/documents/${restrictedDocument.id}/xml`, "GET", undefined],
+    [`/e-invoicing/documents/${restrictedDocument.id}/authority-xml`, "GET", undefined],
+    [`/e-invoicing/documents/${restrictedDocument.id}/submit`, "POST", undefined],
+    [`/e-invoicing/documents/${restrictedDocument.id}/notes`, "POST", { type: "credit_note", amount: 10, reason: "اختبار العزل" }],
+  ]) {
+    const result = await request(path, {
+      method,
+      cookie: memberLogin.cookie,
+      headers: method === "POST" ? { "X-Wudooh-Data-Generation": "1" } : {},
+      ...(body ? { body } : {}),
+    });
+    assert.equal(result.response.status, 404, `${path}: ${JSON.stringify(result.payload)}`);
+  }
+  const documentCountAfter = await db.$count(eInvoiceDocumentsTable, eq(
+    eInvoiceDocumentsTable.organizationId,
+    ids.users["accounting-member"].organizationId,
+  ));
+  const restrictedAfter = await db.select({
+    status: eInvoiceDocumentsTable.status,
+    submissionAttempts: eInvoiceDocumentsTable.submissionAttempts,
+  }).from(eInvoiceDocumentsTable).where(eq(eInvoiceDocumentsTable.id, restrictedDocument.id));
+  assert.equal(documentCountAfter, documentCountBefore, "يجب ألا ينشئ الرفض إشعاراً ضريبياً");
+  assert.deepEqual(restrictedAfter, restrictedBefore, "يجب ألا يغيّر الرفض حالة المستند أو محاولات إرساله");
+
+  const synced = await request("/accounting/sync-source-journals", {
+    method: "POST",
+    cookie: memberLogin.cookie,
+    headers: { "X-Wudooh-Data-Generation": "1" },
+  });
+  assert.equal(synced.response.status, 200, JSON.stringify(synced.payload));
+  assert.equal(synced.payload.created, 3);
+  const sourceJournals = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, ids.users["accounting-member"].organizationId),
+    eq(erpRecordsTable.tableName, "journalEntries"),
+  ));
+  const createdSourceJournals = sourceJournals.filter(
+    (journal) => journal.id !== ids.accountingRecords.restrictedLegacyJournal.id,
+  );
+  assert.deepEqual(
+    new Set(createdSourceJournals.map((journal) => journal.data.sourceId)),
+    new Set([
+      ids.accountingRecords.allowedInvoice.id,
+      ids.accountingRecords.allowedPurchase.id,
+      ids.accountingRecords.allowedExpense.id,
+    ]),
+  );
+  assert.equal(createdSourceJournals.every((journal) => journal.data.warehouseId === ids.warehouses.allowed), true);
+  assert.equal(sourceJournals.some(
+    (journal) => journal.id === ids.accountingRecords.restrictedLegacyJournal.id,
+  ), true, "يجب أن يثبت الاختبار أن القيد القديم خارج النطاق موجود فعلاً");
+
+  const summary = await request("/accounting/summary?from=2026-01-01&to=2026-12-31", {
+    cookie: memberLogin.cookie,
+  });
+  assert.equal(summary.response.status, 200, JSON.stringify(summary.payload));
+  assert.deepEqual(summary.payload.sourceCounts, { invoices: 1, expenses: 1, purchases: 1 });
+  assert.equal(summary.payload.totals.revenue, 100);
+  assert.equal(summary.payload.totals.expense, 70);
+  assert.equal(summary.payload.totals.netIncome, 30);
+  assert.equal(summary.payload.totals.receivables, 100);
+  assert.deepEqual(summary.payload.receivables.map((item) => item.party), ["عميل الموقع المسموح"]);
+
+  const visibleClosures = await request("/data/financialClosures", {
+    cookie: memberLogin.cookie,
+  });
+  assert.equal(visibleClosures.response.status, 200, JSON.stringify(visibleClosures.payload));
+  assert.deepEqual(visibleClosures.payload.records, []);
+
+  const closureCountBefore = await db.$count(erpRecordsTable, and(
+    eq(erpRecordsTable.organizationId, ids.users["accounting-member"].organizationId),
+    eq(erpRecordsTable.tableName, "financialClosures"),
+  ));
+  const closure = await request("/accounting/close", {
+    method: "POST",
+    cookie: memberLogin.cookie,
+    headers: { "X-Wudooh-Data-Generation": "1" },
+    body: { from: "2026-01-01", to: "2026-12-31" },
+  });
+  assert.equal(closure.response.status, 403, JSON.stringify(closure.payload));
+  const closureCountAfter = await db.$count(erpRecordsTable, and(
+    eq(erpRecordsTable.organizationId, ids.users["accounting-member"].organizationId),
+    eq(erpRecordsTable.tableName, "financialClosures"),
+  ));
+  assert.equal(closureCountAfter, closureCountBefore, "يجب ألا ينشئ الرفض إقفالاً مالياً");
 });
 
 test("يبطل جلسات عضو الفريق عند تغيير كلمة مروره", async () => {

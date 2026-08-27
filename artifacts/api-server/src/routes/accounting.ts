@@ -1,7 +1,8 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { isLocationAllowed } from "../lib/location-scope";
 
 const router: IRouter = Router();
 
@@ -31,7 +32,7 @@ const inPeriod = (record: Record<string, unknown>, from: string, to: string): bo
   return !date || (date >= from && date <= to);
 };
 
-async function recordsFor(auth: AuthContext, tableName: string): Promise<AnyRecord[]> {
+async function organizationRecordsFor(auth: AuthContext, tableName: string): Promise<AnyRecord[]> {
   const rows = await db.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, auth.organizationId),
     eq(erpRecordsTable.tableName, tableName),
@@ -39,6 +40,44 @@ async function recordsFor(auth: AuthContext, tableName: string): Promise<AnyReco
   return rows.map((row): AnyRecord => {
     const data = row.data as Record<string, unknown>;
     return { ...data, id: row.id };
+  });
+}
+
+async function recordsFor(auth: AuthContext, tableName: string): Promise<AnyRecord[]> {
+  const records = await organizationRecordsFor(auth, tableName);
+  if (tableName !== "journalEntries") {
+    return records.filter((record) => isLocationAllowed(auth, tableName, record, record.id));
+  }
+
+  const sourceTableByType: Record<string, string> = {
+    sale: "invoices",
+    purchase: "purchaseOrders",
+    expense: "expenses",
+  };
+  const sourceIds = [...new Set(records.flatMap((record) => {
+    const sourceTable = sourceTableByType[String(record.sourceType ?? "")];
+    const sourceId = Number(record.sourceId);
+    return sourceTable && Number.isInteger(sourceId) && sourceId > 0 ? [sourceId] : [];
+  }))];
+  const sourceRows = sourceIds.length
+    ? await db.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, auth.organizationId),
+      inArray(erpRecordsTable.id, sourceIds),
+    ))
+    : [];
+  const sourcesById = new Map(sourceRows.map((row) => [row.id, row]));
+  return records.filter((record) => {
+    const sourceTable = sourceTableByType[String(record.sourceType ?? "")];
+    const sourceId = Number(record.sourceId);
+    if (!sourceTable || !Number.isInteger(sourceId) || sourceId <= 0) {
+      return isLocationAllowed(auth, tableName, record, record.id);
+    }
+    const source = sourcesById.get(sourceId);
+    return Boolean(
+      source
+      && source.tableName === sourceTable
+      && isLocationAllowed(auth, source.tableName, source.data, source.id),
+    );
   });
 }
 
@@ -201,9 +240,9 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
   const accountForCode = (code: string) => accounts.find((account) => String(account.code) === code);
   const existingSources = new Set(existingJournals.map((journal) => `${journal.sourceType}:${journal.sourceId}`));
   const sources = [
-    ...invoices.map((record) => ({ record, type: "sale", debitCode: record.customerId ? "1200" : "1000", creditCode: "4000", label: "فاتورة بيع" })),
-    ...purchases.map((record) => ({ record, type: "purchase", debitCode: "5000", creditCode: "2000", label: "أمر شراء" })),
-    ...expenses.map((record) => ({ record, type: "expense", debitCode: "5100", creditCode: "1000", label: "مصروف" })),
+    ...invoices.map((record) => ({ record, tableName: "invoices", type: "sale", debitCode: record.customerId ? "1200" : "1000", creditCode: "4000", label: "فاتورة بيع" })),
+    ...purchases.map((record) => ({ record, tableName: "purchaseOrders", type: "purchase", debitCode: "5000", creditCode: "2000", label: "أمر شراء" })),
+    ...expenses.map((record) => ({ record, tableName: "expenses", type: "expense", debitCode: "5100", creditCode: "1000", label: "مصروف" })),
   ];
   let created = 0;
   const skipped: Array<{ sourceId: number; reason: string }> = [];
@@ -219,7 +258,7 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       continue;
     }
     const sourceDate = asDate(source.record.date ?? source.record.issueDate) || new Date().toISOString().slice(0, 10);
-    const closed = await recordsFor(auth, "financialClosures");
+    const closed = await organizationRecordsFor(auth, "financialClosures");
     const isClosed = closed.some((closure) => closure.status === "closed"
       && sourceDate >= String(closure.from ?? "") && sourceDate <= String(closure.to ?? ""));
     if (isClosed) {
@@ -228,6 +267,14 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
     }
     const inserted = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) return false;
+      const [currentSource] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, source.record.id),
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, source.tableName),
+      )).for("update");
+      if (!currentSource || !isLocationAllowed(auth, currentSource.tableName, currentSource.data, currentSource.id)) {
+        return "out_of_scope" as const;
+      }
       await tx.insert(erpRecordsTable).values({
         organizationId: auth.organizationId,
         tableName: "journalEntries",
@@ -238,18 +285,23 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
           status: "posted",
           sourceType: source.type,
           sourceId: source.record.id,
+          ...(currentSource.data.warehouseId != null ? { warehouseId: currentSource.data.warehouseId } : {}),
           lines: [
             { accountId: String(debitAccount.id), debit: amount, credit: 0 },
             { accountId: String(creditAccount.id), debit: 0, credit: amount },
           ],
         },
       });
-      return true;
+      return "inserted" as const;
     });
     if (!inserted) {
       const rejection = lockedWriteRejection(response);
       response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
       return;
+    }
+    if (inserted === "out_of_scope") {
+      skipped.push({ sourceId: source.record.id, reason: "لم يعد مصدر العملية ضمن نطاق المواقع المسموح." });
+      continue;
     }
     created += 1;
   }
@@ -265,6 +317,10 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
 
 router.post("/accounting/close", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner" && auth.locationScope !== "all") {
+    response.status(403).json({ error: "الإقفال المالي الشامل متاح للمالك أو للمحاسب المخوّل بجميع المواقع فقط." });
+    return;
+  }
   const body = request.body as Record<string, unknown>;
   const from = typeof body.from === "string" ? body.from : "";
   const to = typeof body.to === "string" ? body.to : "";

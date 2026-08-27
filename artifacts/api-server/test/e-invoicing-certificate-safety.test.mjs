@@ -11,6 +11,7 @@ import {
   db,
   eInvoiceDocumentsTable,
   eInvoiceUnitsTable,
+  erpRecordsTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
 import { decryptEInvoiceSecret, encryptEInvoiceSecret, generateCsr } from "../src/lib/e-invoicing.ts";
@@ -89,6 +90,16 @@ async function createPreparedDocument() {
   generationByCookie.set(cookie, registered.payload.user.dataGeneration);
   const organizationId = registered.payload.user.organizationId;
   assert.equal(typeof organizationId, "number");
+  const [invoiceRecord] = await db.insert(erpRecordsTable).values({
+    organizationId,
+    tableName: "invoices",
+    data: {
+      warehouseId: registered.payload.user.warehouseIds?.[0],
+      invoiceNumber: unique("CERT-INVOICE"),
+      date: new Date().toISOString().slice(0, 10),
+      total: 100,
+    },
+  }).returning();
 
   const csr = await generateCsr(seller, "POS-CERT-TEST", unique("DEVICE"));
   const oldCertificatePem = selfSignedCertificate(csr.privateKeyPem, unique("old-certificate"));
@@ -111,7 +122,7 @@ async function createPreparedDocument() {
   const [document] = await db.insert(eInvoiceDocumentsTable).values({
     organizationId,
     unitId: unit.id,
-    invoiceRecordId: 1,
+    invoiceRecordId: invoiceRecord.id,
     documentType: "simplified",
     status: "pending_submission",
     invoiceNumber: unique("CERT-SUBMIT"),

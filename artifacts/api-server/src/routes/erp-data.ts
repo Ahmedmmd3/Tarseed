@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
+import { isLocationAllowed } from "../lib/location-scope";
 import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -45,22 +46,6 @@ function rejectUnauthorizedInventoryCatalogMutation(access: { auth: AuthContext;
     return true;
   }
   return false;
-}
-
-function locationIds(tableName: string, data: Record<string, unknown>, recordId?: number): number[] {
-  if (tableName === "warehouses") return recordId ? [recordId] : [];
-  return ["warehouseId", "fromWarehouseId", "toWarehouseId"]
-    .map(key => Number(data[key]))
-    .filter(id => Number.isInteger(id) && id > 0);
-}
-
-function isLocationAllowed(auth: AuthContext, tableName: string, data: Record<string, unknown>, recordId?: number): boolean {
-  if (auth.roleId === "owner" || auth.locationScope === "all") return true;
-  const ids = locationIds(tableName, data, recordId);
-  if (auth.locationScope === "none") return ids.length === 0;
-  if (!ids.length) return true;
-  const allowed = new Set(auth.warehouseIds.map(Number));
-  return ids.every(id => allowed.has(id));
 }
 
 function isAccountingSource(tableName: string): boolean {

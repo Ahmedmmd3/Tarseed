@@ -32,6 +32,7 @@ import {
   hasSubscriptionAccess,
   type AuthContext,
 } from "../middleware/team-auth";
+import { isLocationAllowed } from "../lib/location-scope";
 
 const router: IRouter = Router();
 const DEFAULT_CERTIFICATE_EXPIRY_WARNING_DAYS = 30;
@@ -481,8 +482,20 @@ router.get("/e-invoicing/documents", requireAuth, requireSubscriptionAccess, asy
       eInvoiceDocumentsTable.organizationId,
       auth.organizationId,
     )).orderBy(desc(eInvoiceDocumentsTable.issuedAt)).limit(200);
+    const invoiceRecordIds = [...new Set(records.map((document) => document.invoiceRecordId))];
+    const invoiceRecords = invoiceRecordIds.length
+      ? await db.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "invoices"),
+        inArray(erpRecordsTable.id, invoiceRecordIds),
+      ))
+      : [];
+    const allowedInvoiceRecordIds = new Set(invoiceRecords
+      .filter((record) => isLocationAllowed(auth, "invoices", record.data, record.id))
+      .map((record) => record.id));
+    const visibleRecords = records.filter((document) => allowedInvoiceRecordIds.has(document.invoiceRecordId));
     return {
-      documents: records.map((document) => ({
+      documents: visibleRecords.map((document) => ({
         id: document.id,
         invoiceRecordId: document.invoiceRecordId,
         parentDocumentId: document.parentDocumentId,
@@ -516,6 +529,16 @@ router.get("/e-invoicing/documents/:id/xml", requireAuth, requireSubscriptionAcc
       eq(eInvoiceDocumentsTable.id, id),
       eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
     )).limit(1);
+    const [invoice] = document
+      ? await db.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, document.invoiceRecordId),
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "invoices"),
+      )).limit(1)
+      : [];
+    if (!document || !invoice || !isLocationAllowed(auth, "invoices", invoice.data, invoice.id)) {
+      throw new EInvoiceRouteError("المستند غير متاح.", 404);
+    }
     if (!document?.xmlObjectPath) throw new EInvoiceRouteError("ملف XML غير متاح لهذا المستند.", 404);
     const xml = await readPrivateInvoiceXml(document.xmlObjectPath);
     response.setHeader("Content-Type", "application/xml; charset=utf-8");
@@ -539,6 +562,16 @@ router.get("/e-invoicing/documents/:id/authority-xml", requireAuth, requireSubsc
       eq(eInvoiceDocumentsTable.id, id),
       eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
     )).limit(1);
+    const [invoice] = document
+      ? await db.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, document.invoiceRecordId),
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "invoices"),
+      )).limit(1)
+      : [];
+    if (!document || !invoice || !isLocationAllowed(auth, "invoices", invoice.data, invoice.id)) {
+      throw new EInvoiceRouteError("المستند غير متاح.", 404);
+    }
     if (!document?.authorityXmlObjectPath) throw new EInvoiceRouteError("لم تُعد الهيئة نسخة XML لهذا المستند.", 404);
     const xml = await readPrivateInvoiceXml(document.authorityXmlObjectPath);
     response.setHeader("Content-Type", "application/xml; charset=utf-8");
@@ -710,7 +743,17 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     const [document] = await tx.select().from(eInvoiceDocumentsTable).where(and(
       eq(eInvoiceDocumentsTable.id, id),
       eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
-    )).limit(1);
+    )).limit(1).for("update");
+    const [invoice] = document
+      ? await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, document.invoiceRecordId),
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "invoices"),
+      )).limit(1).for("update")
+      : [];
+    if (!document || !invoice || !isLocationAllowed(auth, "invoices", invoice.data, invoice.id)) {
+      throw new EInvoiceRouteError("المستند غير متاح.", 404);
+    }
     if (!document?.xmlObjectPath) throw new EInvoiceRouteError("لا يوجد XML مهيأ لإرساله.", 409);
     const [unit] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
     if (!unit) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
@@ -835,39 +878,56 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
       eq(erpRecordsTable.tableName, "invoices"),
     )).limit(1);
     if (!invoice) throw new EInvoiceRouteError("بيانات الفاتورة الأصلية غير متاحة.", 409);
+    if (!isLocationAllowed(auth, "invoices", invoice.data, invoice.id)) {
+      throw new EInvoiceRouteError("المستند غير متاح.", 404);
+    }
     const amountValue = Number(body.amount);
     if (!Number.isFinite(amountValue) || amountValue <= 0) throw new EInvoiceRouteError("أدخل مبلغ الإشعار بشكل صحيح.");
     const quantity = 1;
     const reason = requiredText(body.reason, "سبب الإشعار");
     const created = await db.transaction(async (tx) => {
       await requireLockedWrite(tx, response);
+      const [lockedOriginal] = await tx.select().from(eInvoiceDocumentsTable).where(and(
+        eq(eInvoiceDocumentsTable.id, original.id),
+        eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+      )).limit(1).for("update");
+      const [lockedInvoice] = lockedOriginal
+        ? await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, lockedOriginal.invoiceRecordId),
+          eq(erpRecordsTable.organizationId, auth.organizationId),
+          eq(erpRecordsTable.tableName, "invoices"),
+        )).limit(1).for("update")
+        : [];
+      if (!lockedOriginal || !lockedInvoice || !isLocationAllowed(auth, "invoices", lockedInvoice.data, lockedInvoice.id)) {
+        throw new EInvoiceRouteError("المستند غير متاح.", 404);
+      }
       const [unit] = await tx.select().from(eInvoiceUnitsTable).where(
         eq(eInvoiceUnitsTable.organizationId, auth.organizationId),
       ).for("update");
       if (!unit) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
       const seller = sellerFromUnit(unit);
       if (!configurationIsComplete(seller)) throw new EInvoiceRouteError("لا يمكن إصدار إشعار قبل إكمال إعدادات الفوترة.");
-      const invoiceNumber = `${noteType === "credit_note" ? "CN" : "DN"}-${original.invoiceNumber}-${unit.nextInvoiceCounter}`;
+      const invoiceNumber = `${noteType === "credit_note" ? "CN" : "DN"}-${lockedOriginal.invoiceNumber}-${unit.nextInvoiceCounter}`;
       const generated = await generateInvoiceDocument({
         invoiceNumber,
         invoiceCounter: unit.nextInvoiceCounter,
         previousInvoiceHash: unit.previousInvoiceHash,
         documentType: noteType,
         issueAt: new Date(),
-        customerName: String(invoice.data.customerName ?? "عميل نقدي"),
+        customerName: String(lockedInvoice.data.customerName ?? "عميل نقدي"),
         customerVatNumber: optionalText(body.customerVatNumber, 15),
-        paymentMethod: String(invoice.data.paymentMethod ?? "cash"),
+        paymentMethod: String(lockedInvoice.data.paymentMethod ?? "cash"),
         lines: [{ name: reason, sku: "", quantity, unitPrice: amountValue, total: amountValue }],
         seller,
-        parentInvoiceUuid: original.uuid,
+        parentInvoiceUuid: lockedOriginal.uuid,
         privateKeyPem: decryptEInvoiceSecret(unit.privateKeyCiphertext),
         certificatePem: decryptEInvoiceSecret(unit.certificateCiphertext),
       });
       const [note] = await tx.insert(eInvoiceDocumentsTable).values({
         organizationId: auth.organizationId,
         unitId: unit.id,
-        invoiceRecordId: original.invoiceRecordId,
-        parentDocumentId: original.id,
+        invoiceRecordId: lockedOriginal.invoiceRecordId,
+        parentDocumentId: lockedOriginal.id,
         documentType: noteType,
         status: generated.signatureValid ? "pending_compliance" : "pending_credentials",
         invoiceNumber,
