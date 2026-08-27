@@ -153,8 +153,35 @@ export async function lockAndValidateDataGeneration(tx: DatabaseTransaction, res
   return true;
 }
 
+export async function refreshAuthAfterOrganizationLock(
+  tx: DatabaseTransaction,
+  response: Response,
+): Promise<AuthContext | null> {
+  const auth = response.locals.auth as AuthContext | undefined;
+  if (!auth) return null;
+  const [user] = await tx.select().from(teamUsersTable).where(and(
+    eq(teamUsersTable.id, auth.id),
+    eq(teamUsersTable.organizationId, auth.organizationId),
+    eq(teamUsersTable.status, "active"),
+  )).limit(1);
+  if (!user) {
+    response.locals.writeAccessFailure = "authorization_changed";
+    return null;
+  }
+  const freshAuth = { ...auth, ...user };
+  response.locals.auth = freshAuth;
+  return freshAuth;
+}
+
 /** Response suitable for a write rejected after acquiring the organization lock. */
 export function lockedWriteRejection(response: Response): { status: number; error: string; code: string } {
+  if (response.locals.writeAccessFailure === "authorization_changed") {
+    return {
+      status: 403,
+      error: "تغيّرت صلاحيات المستخدم أو حالته. أعد تسجيل الدخول قبل متابعة التعديل.",
+      code: "authorization_changed",
+    };
+  }
   if (response.locals.writeAccessFailure === "platform_access_suspended") {
     return {
       status: 402,

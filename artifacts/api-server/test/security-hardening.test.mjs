@@ -11,6 +11,7 @@ import {
   erpRecordsTable,
   organizationsTable,
   platformAdminsTable,
+  pool,
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
@@ -169,6 +170,20 @@ async function createRecord(organizationId, tableName, data) {
     data,
   }).returning();
   return record;
+}
+
+async function waitForOrganizationLockWaiter() {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await pool.query(`
+      select count(*)::int as count
+      from pg_locks
+      where not granted
+        and locktype = 'transactionid'
+    `);
+    if (result.rows[0]?.count > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("لم يصل الطلب إلى انتظار قفل المنشأة ضمن المهلة.");
 }
 
 before(async () => {
@@ -546,6 +561,176 @@ test("يعزل الفوترة الإلكترونية وعمليات المحاس
     eq(erpRecordsTable.tableName, "financialClosures"),
   ));
   assert.equal(closureCountAfter, closureCountBefore, "يجب ألا ينشئ الرفض إقفالاً مالياً");
+});
+
+test("يسلسل الإقفال المالي مع ترحيل المصادر وكتابتها تحت قفل المنشأة", async () => {
+  const ownerCookie = await createSessionCookie(ids.users.owner.id);
+  const accountingCookie = await createSessionCookie(ids.users["accounting-member"].id);
+  const organizationId = ids.users.owner.organizationId;
+  const source = await createRecord(organizationId, "expenses", {
+    warehouseId: ids.warehouses.allowed,
+    number: `EXP-RACE-${suffix}`,
+    date: "2031-06-15",
+    amount: 75,
+  });
+
+  let closeRequest;
+  let syncRequest;
+  await db.transaction(async (tx) => {
+    await tx.select({ id: organizationsTable.id })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId))
+      .for("update");
+    closeRequest = request("/accounting/close", {
+      method: "POST",
+      cookie: ownerCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+      body: { from: "2031-01-01", to: "2031-12-31" },
+    });
+    await waitForOrganizationLockWaiter();
+    syncRequest = request("/accounting/sync-source-journals", {
+      method: "POST",
+      cookie: accountingCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+
+  const [closed, synced] = await Promise.all([closeRequest, syncRequest]);
+  assert.equal(closed.response.status, 201, JSON.stringify(closed.payload));
+  assert.equal(synced.response.status, 200, JSON.stringify(synced.payload));
+  assert.equal(
+    synced.payload.skipped.some((item) => item.sourceId === source.id && item.reason.includes("مقفلة")),
+    true,
+    JSON.stringify(synced.payload),
+  );
+  const sourceJournals = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "journalEntries"),
+  ));
+  assert.equal(
+    sourceJournals.some((journal) => journal.data.sourceType === "expense" && journal.data.sourceId === source.id),
+    false,
+    "لا يجوز ترحيل مصدر بعد أن يلتزم الإقفال المالي السابق له",
+  );
+
+  const syncFirstSource = await createRecord(organizationId, "expenses", {
+    warehouseId: ids.warehouses.allowed,
+    number: `EXP-SYNC-FIRST-${suffix}`,
+    date: "2033-06-15",
+    amount: 60,
+  });
+  let syncFirstRequest;
+  let closeAfterSyncRequest;
+  await db.transaction(async (tx) => {
+    await tx.select({ id: organizationsTable.id })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId))
+      .for("update");
+    syncFirstRequest = request("/accounting/sync-source-journals", {
+      method: "POST",
+      cookie: accountingCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+    });
+    await waitForOrganizationLockWaiter();
+    closeAfterSyncRequest = request("/accounting/close", {
+      method: "POST",
+      cookie: ownerCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+      body: { from: "2033-01-01", to: "2033-12-31" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+
+  const [syncFirst, closeAfterSync] = await Promise.all([syncFirstRequest, closeAfterSyncRequest]);
+  assert.equal(syncFirst.response.status, 200, JSON.stringify(syncFirst.payload));
+  assert.equal(syncFirst.payload.created, 1, JSON.stringify(syncFirst.payload));
+  assert.equal(closeAfterSync.response.status, 201, JSON.stringify(closeAfterSync.payload));
+  assert.equal(closeAfterSync.payload.closure.totals.expense, 60);
+  assert.equal(closeAfterSync.payload.closure.journals, undefined);
+  const syncFirstJournals = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "journalEntries"),
+  ));
+  assert.equal(
+    syncFirstJournals.filter((journal) => journal.data.sourceType === "expense" && journal.data.sourceId === syncFirstSource.id).length,
+    1,
+  );
+
+  const duplicateSource = await createRecord(organizationId, "expenses", {
+    warehouseId: ids.warehouses.allowed,
+    number: `EXP-DUPLICATE-${suffix}`,
+    date: "2034-06-15",
+    amount: 40,
+  });
+  let firstSyncRequest;
+  let secondSyncRequest;
+  await db.transaction(async (tx) => {
+    await tx.select({ id: organizationsTable.id })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId))
+      .for("update");
+    firstSyncRequest = request("/accounting/sync-source-journals", {
+      method: "POST",
+      cookie: accountingCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+    });
+    await waitForOrganizationLockWaiter();
+    secondSyncRequest = request("/accounting/sync-source-journals", {
+      method: "POST",
+      cookie: accountingCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+  const duplicateSyncResults = await Promise.all([firstSyncRequest, secondSyncRequest]);
+  assert.deepEqual(
+    duplicateSyncResults.map((result) => result.response.status),
+    [200, 200],
+  );
+  assert.equal(duplicateSyncResults.reduce((sum, result) => sum + result.payload.created, 0), 1);
+  const duplicateJournals = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "journalEntries"),
+  ));
+  assert.equal(
+    duplicateJournals.filter((journal) => journal.data.sourceType === "expense" && journal.data.sourceId === duplicateSource.id).length,
+    1,
+    "يجب أن ينتج عن طلبي المزامنة المتزامنين قيد مصدر واحد فقط",
+  );
+
+  let secondCloseRequest;
+  let sourceCreateRequest;
+  await db.transaction(async (tx) => {
+    await tx.select({ id: organizationsTable.id })
+      .from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId))
+      .for("update");
+    secondCloseRequest = request("/accounting/close", {
+      method: "POST",
+      cookie: ownerCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+      body: { from: "2032-01-01", to: "2032-12-31" },
+    });
+    await waitForOrganizationLockWaiter();
+    sourceCreateRequest = request("/data/expenses", {
+      method: "POST",
+      cookie: accountingCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+      body: {
+        warehouseId: ids.warehouses.allowed,
+        number: `EXP-CREATE-RACE-${suffix}`,
+        date: "2032-06-15",
+        amount: 25,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  });
+
+  const [secondClosed, sourceCreated] = await Promise.all([secondCloseRequest, sourceCreateRequest]);
+  assert.equal(secondClosed.response.status, 201, JSON.stringify(secondClosed.payload));
+  assert.equal(sourceCreated.response.status, 409, JSON.stringify(sourceCreated.payload));
+  assert.match(sourceCreated.payload.error, /مقفلة/);
 });
 
 test("يبطل جلسات عضو الفريق عند تغيير كلمة مروره", async () => {

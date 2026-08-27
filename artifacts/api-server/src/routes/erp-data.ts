@@ -2,9 +2,11 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
 import { isLocationAllowed } from "../lib/location-scope";
-import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
+type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DatabaseExecutor = typeof db | DatabaseTransaction;
 const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
@@ -24,12 +26,17 @@ function requireTableAccess(request: Request, response: Response): { auth: AuthC
     response.status(404).json({ error: "نوع البيانات غير متاح." });
     return null;
   }
-  const allowedModules = Array.isArray(modules) ? modules : [modules];
-  if (auth.roleId !== "owner" && !allowedModules.some((module) => auth.permissions[module] === true)) {
+  if (!hasTableAccess(auth, tableName)) {
     response.status(403).json({ error: "ليس لديك صلاحية لهذه الوحدة." });
     return null;
   }
   return { auth, tableName };
+}
+
+function hasTableAccess(auth: AuthContext, tableName: string): boolean {
+  const modules = TABLE_MODULES[tableName];
+  const allowedModules = Array.isArray(modules) ? modules : [modules];
+  return auth.roleId === "owner" || allowedModules.some((module) => auth.permissions[module] === true);
 }
 
 function canManageInventoryCatalog(auth: AuthContext): boolean {
@@ -119,8 +126,12 @@ function operationFingerprint(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-async function isClosedDate(auth: AuthContext, date: string): Promise<boolean> {
-  const closures = await db.select().from(erpRecordsTable).where(and(
+async function isClosedDate(
+  auth: AuthContext,
+  date: string,
+  executor: DatabaseExecutor = db,
+): Promise<boolean> {
+  const closures = await executor.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, auth.organizationId),
     eq(erpRecordsTable.tableName, "financialClosures"),
   ));
@@ -197,8 +208,26 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       if (!await lockAndValidateDataGeneration(tx, response)) {
         throw lockedMutationRejected(response);
       }
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, access.tableName)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      if (!isLocationAllowed(currentAuth, access.tableName, recordData)) {
+        throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
+      }
+      if (isAccountingSource(access.tableName) && await isClosedDate(
+        currentAuth,
+        String(recordData.date ?? recordData.issueDate ?? ""),
+        tx,
+      )) {
+        throw new MutationRejected(409, "لا يمكن تعديل مصدر محاسبي في فترة مالية مقفلة.");
+      }
+      if (access.tableName === "journalEntries" && await isClosedDate(currentAuth, String(recordData.date), tx)) {
+        throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن إنشاء قيد فيها.");
+      }
       const [inserted] = await tx.insert(erpRecordsTable).values({
-        organizationId: access.auth.organizationId,
+        organizationId: currentAuth.organizationId,
         tableName: access.tableName,
         clientOperationId: clientOperationId || null,
         data: recordData,
@@ -258,12 +287,17 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
   if (access.tableName === "products") {
     const result = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) return { kind: "stale" as const };
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, access.tableName)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        return { kind: "stale" as const };
+      }
       const [current] = await tx.select().from(erpRecordsTable).where(and(
-        eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
+        eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
       if (!current) return { kind: "missing" as const };
       const data = { ...current.data, ...(body as Record<string, unknown>), stock: current.data.stock };
-      if (!isLocationAllowed(access.auth, access.tableName, data, current.id)) {
+      if (!isLocationAllowed(currentAuth, access.tableName, data, current.id)) {
         return { kind: "forbidden" as const };
       }
       const [updated] = await tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
@@ -293,8 +327,13 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         if (!await lockAndValidateDataGeneration(tx, response)) {
           throw lockedMutationRejected(response);
         }
+        const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+        if (!currentAuth || !hasTableAccess(currentAuth, access.tableName)) {
+          response.locals.writeAccessFailure = "authorization_changed";
+          throw lockedMutationRejected(response);
+        }
         const [claimedOperation] = await tx.insert(erpRecordsTable).values({
-          organizationId: access.auth.organizationId,
+          organizationId: currentAuth.organizationId,
           tableName: "mutationOperations",
           clientOperationId,
           data: {
@@ -309,7 +348,7 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
 
         if (!claimedOperation) {
           const [completedOperation] = await tx.select().from(erpRecordsTable).where(and(
-            eq(erpRecordsTable.organizationId, access.auth.organizationId),
+            eq(erpRecordsTable.organizationId, currentAuth.organizationId),
             eq(erpRecordsTable.tableName, "mutationOperations"),
             eq(erpRecordsTable.clientOperationId, clientOperationId),
           )).limit(1);
@@ -331,10 +370,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
 
         const [existing] = await tx.select().from(erpRecordsTable).where(and(
           eq(erpRecordsTable.id, id),
-          eq(erpRecordsTable.organizationId, access.auth.organizationId),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
           eq(erpRecordsTable.tableName, access.tableName),
         )).for("update");
-        if (!existing || !isLocationAllowed(access.auth, access.tableName, existing.data, existing.id)) {
+        if (!existing || !isLocationAllowed(currentAuth, access.tableName, existing.data, existing.id)) {
           throw new MutationRejected(404, "السجل غير متاح.");
         }
         if (existing.data.status === "posted") {
@@ -344,10 +383,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         const data = { ...existing.data, ...(body as Record<string, unknown>) };
         const error = validateJournal(data);
         if (error) throw new MutationRejected(400, error);
-        if (await isClosedDate(access.auth, String(data.date))) {
+        if (await isClosedDate(currentAuth, String(data.date), tx)) {
           throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن ترحيل قيد فيها.");
         }
-        if (!isLocationAllowed(access.auth, access.tableName, data, existing.id)) {
+        if (!isLocationAllowed(currentAuth, access.tableName, data, existing.id)) {
           throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
         }
 
@@ -419,7 +458,44 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (!await lockAndValidateDataGeneration(tx, response)) {
         throw lockedMutationRejected(response);
       }
-      return tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, access.tableName)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      const [current] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, access.tableName),
+      )).for("update");
+      if (!current || !isLocationAllowed(currentAuth, access.tableName, current.data, current.id)) {
+        throw new MutationRejected(404, "السجل غير متاح.");
+      }
+      if (access.tableName === "financialClosures") {
+        throw new MutationRejected(405, "لا يمكن تعديل الإقفال المالي بعد اعتماده.");
+      }
+      if (access.tableName === "journalEntries" && current.data.status === "posted") {
+        throw new MutationRejected(409, "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك.");
+      }
+      const currentData = { ...current.data, ...(body as Record<string, unknown>) };
+      if (isAccountingSource(access.tableName) && await isClosedDate(
+        currentAuth,
+        String(currentData.date ?? currentData.issueDate ?? ""),
+        tx,
+      )) {
+        throw new MutationRejected(409, "لا يمكن تعديل مصدر محاسبي في فترة مالية مقفلة.");
+      }
+      if (access.tableName === "journalEntries") {
+        const error = validateJournal(currentData);
+        if (error) throw new MutationRejected(400, error);
+        if (await isClosedDate(currentAuth, String(currentData.date), tx)) {
+          throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن ترحيل قيد فيها.");
+        }
+      }
+      if (!isLocationAllowed(currentAuth, access.tableName, currentData, current.id)) {
+        throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
+      }
+      return tx.update(erpRecordsTable).set({ data: currentData, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
     });
   } catch (error) {
     if (error instanceof MutationRejected) {
@@ -447,15 +523,20 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
   if (access.tableName === "products") {
     const deleted = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) return "stale" as const;
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, access.tableName)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        return "stale" as const;
+      }
       const [product] = await tx.select().from(erpRecordsTable).where(and(
-        eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, access.auth.organizationId), eq(erpRecordsTable.tableName, "products"),
+        eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
       if (!product) return "missing" as const;
-      if (!isLocationAllowed(access.auth, access.tableName, product.data, product.id)) {
+      if (!isLocationAllowed(currentAuth, access.tableName, product.data, product.id)) {
         return "forbidden" as const;
       }
       const [reference] = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
-        eq(erpRecordsTable.organizationId, access.auth.organizationId),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
         sql`${erpRecordsTable.tableName} in ('inventoryBalances', 'stockTransfers', 'stockAdjustments', 'sales')`,
         sql`${erpRecordsTable.data}->>'productId' = ${String(id)}`,
       )).limit(1);
@@ -507,6 +588,32 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
     await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) {
         throw lockedMutationRejected(response);
+      }
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, access.tableName)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      const [current] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, access.tableName),
+      )).for("update");
+      if (!current || !isLocationAllowed(currentAuth, access.tableName, current.data, current.id)) {
+        throw new MutationRejected(404, "السجل غير متاح.");
+      }
+      if (access.tableName === "financialClosures") {
+        throw new MutationRejected(405, "لا يمكن حذف الإقفال المالي المعتمد.");
+      }
+      if (access.tableName === "journalEntries" && current.data.status === "posted") {
+        throw new MutationRejected(409, "القيد المرحّل غير قابل للحذف. أنشئ قيداً عكسياً بدلاً من ذلك.");
+      }
+      if (isAccountingSource(access.tableName) && await isClosedDate(
+        currentAuth,
+        String(current.data.date ?? current.data.issueDate ?? ""),
+        tx,
+      )) {
+        throw new MutationRejected(409, "لا يمكن حذف مصدر محاسبي من فترة مالية مقفلة.");
       }
       await tx.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
     });

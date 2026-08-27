@@ -1,12 +1,14 @@
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
 
 const router: IRouter = Router();
 
 type AnyRecord = Record<string, unknown> & { id: number };
+type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DatabaseExecutor = typeof db | DatabaseTransaction;
 
 const asNumber = (value: unknown): number => {
   const number = typeof value === "number" ? value : Number(value);
@@ -20,11 +22,15 @@ const asDate = (value: unknown): string => {
 
 function requireAccounting(_request: Request, response: Response, next: NextFunction): void {
   const auth = response.locals.auth as AuthContext | undefined;
-  if (!auth || (auth.roleId !== "owner" && auth.permissions.accounting !== true)) {
+  if (!auth || !hasAccountingAccess(auth)) {
     response.status(403).json({ error: "ليس لديك صلاحية لوحدة المحاسبة." });
     return;
   }
   next();
+}
+
+function hasAccountingAccess(auth: AuthContext): boolean {
+  return auth.roleId === "owner" || auth.permissions.accounting === true;
 }
 
 const inPeriod = (record: Record<string, unknown>, from: string, to: string): boolean => {
@@ -32,8 +38,12 @@ const inPeriod = (record: Record<string, unknown>, from: string, to: string): bo
   return !date || (date >= from && date <= to);
 };
 
-async function organizationRecordsFor(auth: AuthContext, tableName: string): Promise<AnyRecord[]> {
-  const rows = await db.select().from(erpRecordsTable).where(and(
+async function organizationRecordsFor(
+  auth: AuthContext,
+  tableName: string,
+  executor: DatabaseExecutor = db,
+): Promise<AnyRecord[]> {
+  const rows = await executor.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, auth.organizationId),
     eq(erpRecordsTable.tableName, tableName),
   ));
@@ -43,8 +53,12 @@ async function organizationRecordsFor(auth: AuthContext, tableName: string): Pro
   });
 }
 
-async function recordsFor(auth: AuthContext, tableName: string): Promise<AnyRecord[]> {
-  const records = await organizationRecordsFor(auth, tableName);
+async function recordsFor(
+  auth: AuthContext,
+  tableName: string,
+  executor: DatabaseExecutor = db,
+): Promise<AnyRecord[]> {
+  const records = await organizationRecordsFor(auth, tableName, executor);
   if (tableName !== "journalEntries") {
     return records.filter((record) => isLocationAllowed(auth, tableName, record, record.id));
   }
@@ -60,7 +74,7 @@ async function recordsFor(auth: AuthContext, tableName: string): Promise<AnyReco
     return sourceTable && Number.isInteger(sourceId) && sourceId > 0 ? [sourceId] : [];
   }))];
   const sourceRows = sourceIds.length
-    ? await db.select().from(erpRecordsTable).where(and(
+    ? await executor.select().from(erpRecordsTable).where(and(
       eq(erpRecordsTable.organizationId, auth.organizationId),
       inArray(erpRecordsTable.id, sourceIds),
     ))
@@ -230,19 +244,17 @@ router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requir
 
 router.post("/accounting/sync-source-journals", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
-  const [accounts, invoices, purchases, expenses, existingJournals] = await Promise.all([
-    recordsFor(auth, "accounts"),
+  const [invoices, purchases, expenses, existingJournals] = await Promise.all([
     recordsFor(auth, "invoices"),
     recordsFor(auth, "purchaseOrders"),
     recordsFor(auth, "expenses"),
     recordsFor(auth, "journalEntries"),
   ]);
-  const accountForCode = (code: string) => accounts.find((account) => String(account.code) === code);
   const existingSources = new Set(existingJournals.map((journal) => `${journal.sourceType}:${journal.sourceId}`));
   const sources = [
-    ...invoices.map((record) => ({ record, tableName: "invoices", type: "sale", debitCode: record.customerId ? "1200" : "1000", creditCode: "4000", label: "فاتورة بيع" })),
-    ...purchases.map((record) => ({ record, tableName: "purchaseOrders", type: "purchase", debitCode: "5000", creditCode: "2000", label: "أمر شراء" })),
-    ...expenses.map((record) => ({ record, tableName: "expenses", type: "expense", debitCode: "5100", creditCode: "1000", label: "مصروف" })),
+    ...invoices.map((record) => ({ record, tableName: "invoices", type: "sale", label: "فاتورة بيع" })),
+    ...purchases.map((record) => ({ record, tableName: "purchaseOrders", type: "purchase", label: "أمر شراء" })),
+    ...expenses.map((record) => ({ record, tableName: "expenses", type: "expense", label: "مصروف" })),
   ];
   let created = 0;
   const skipped: Array<{ sourceId: number; reason: string }> = [];
@@ -250,38 +262,46 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
   for (const source of sources) {
     const sourceKey = `${source.type}:${source.record.id}`;
     if (existingSources.has(sourceKey)) continue;
-    const amount = asNumber(source.record.total ?? source.record.amount ?? source.record.totalAmount);
-    const debitAccount = accountForCode(source.debitCode);
-    const creditAccount = accountForCode(source.creditCode);
-    if (amount <= 0 || !debitAccount || !creditAccount) {
-      skipped.push({ sourceId: source.record.id, reason: "يلزم مبلغ موجب وحسابات افتراضية مطابقة في دليل الحسابات." });
-      continue;
-    }
-    const sourceDate = asDate(source.record.date ?? source.record.issueDate) || new Date().toISOString().slice(0, 10);
-    const closed = await organizationRecordsFor(auth, "financialClosures");
-    const isClosed = closed.some((closure) => closure.status === "closed"
-      && sourceDate >= String(closure.from ?? "") && sourceDate <= String(closure.to ?? ""));
-    if (isClosed) {
-      skipped.push({ sourceId: source.record.id, reason: "تاريخ العملية يقع في فترة مالية مقفلة." });
-      continue;
-    }
     const inserted = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) return false;
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        return false;
+      }
       const [currentSource] = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.id, source.record.id),
-        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
         eq(erpRecordsTable.tableName, source.tableName),
       )).for("update");
-      if (!currentSource || !isLocationAllowed(auth, currentSource.tableName, currentSource.data, currentSource.id)) {
+      if (!currentSource || !isLocationAllowed(currentAuth, currentSource.tableName, currentSource.data, currentSource.id)) {
         return "out_of_scope" as const;
       }
+      const sourceDate = asDate(currentSource.data.date ?? currentSource.data.issueDate) || new Date().toISOString().slice(0, 10);
+      const closed = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      const isClosed = closed.some((closure) => closure.status === "closed"
+        && sourceDate >= String(closure.from ?? "") && sourceDate <= String(closure.to ?? ""));
+      if (isClosed) return "closed" as const;
+      const currentJournals = await organizationRecordsFor(currentAuth, "journalEntries", tx);
+      if (currentJournals.some((journal) => journal.sourceType === source.type && journal.sourceId === source.record.id)) {
+        return "exists" as const;
+      }
+      const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
+      const debitCode = source.type === "sale"
+        ? (currentSource.data.customerId ? "1200" : "1000")
+        : source.type === "purchase" ? "5000" : "5100";
+      const creditCode = source.type === "sale" ? "4000" : source.type === "purchase" ? "2000" : "1000";
+      const debitAccount = accounts.find((account) => String(account.code) === debitCode);
+      const creditAccount = accounts.find((account) => String(account.code) === creditCode);
+      const amount = asNumber(currentSource.data.total ?? currentSource.data.amount ?? currentSource.data.totalAmount);
+      if (amount <= 0 || !debitAccount || !creditAccount) return "invalid" as const;
       await tx.insert(erpRecordsTable).values({
-        organizationId: auth.organizationId,
+        organizationId: currentAuth.organizationId,
         tableName: "journalEntries",
         data: {
           number: `AUTO-${source.type.toUpperCase()}-${source.record.id}`,
           date: sourceDate,
-          description: `${source.label} ${String(source.record.number ?? source.record.invoiceNumber ?? `#${source.record.id}`)}`,
+          description: `${source.label} ${String(currentSource.data.number ?? currentSource.data.invoiceNumber ?? `#${currentSource.id}`)}`,
           status: "posted",
           sourceType: source.type,
           sourceId: source.record.id,
@@ -303,6 +323,15 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       skipped.push({ sourceId: source.record.id, reason: "لم يعد مصدر العملية ضمن نطاق المواقع المسموح." });
       continue;
     }
+    if (inserted === "closed") {
+      skipped.push({ sourceId: source.record.id, reason: "تاريخ العملية يقع في فترة مالية مقفلة." });
+      continue;
+    }
+    if (inserted === "invalid") {
+      skipped.push({ sourceId: source.record.id, reason: "يلزم مبلغ موجب وحسابات افتراضية مطابقة في دليل الحسابات." });
+      continue;
+    }
+    if (inserted === "exists") continue;
     created += 1;
   }
   if (created > 0) {
@@ -328,22 +357,22 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
     response.status(400).json({ error: "يجب تحديد فترة مالية صحيحة." });
     return;
   }
-  const [accounts, journals, receivables, invoices, purchases] = await Promise.all([
-    recordsFor(auth, "accounts"),
-    recordsFor(auth, "journalEntries"),
-    recordsFor(auth, "receivables"),
-    recordsFor(auth, "invoices"),
-    recordsFor(auth, "purchaseOrders"),
-  ]);
-  const priorClosures = await recordsFor(auth, "financialClosures");
-  const overlap = priorClosures.find((closure) => closure.status === "closed" && from <= String(closure.to) && to >= String(closure.from));
-  if (overlap) {
-    response.status(409).json({ error: "تتداخل الفترة المحددة مع إقفال مالي معتمد." });
-    return;
-  }
-  const report = calculateReport(accounts, journals, from, to);
   const closure = await db.transaction(async (tx) => {
     if (!await lockAndValidateDataGeneration(tx, response)) return null;
+    const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+    if (!currentAuth || !hasAccountingAccess(currentAuth) || (currentAuth.roleId !== "owner" && currentAuth.locationScope !== "all")) {
+      response.locals.writeAccessFailure = "authorization_changed";
+      return null;
+    }
+    const accounts = await recordsFor(currentAuth, "accounts", tx);
+    const journals = await recordsFor(currentAuth, "journalEntries", tx);
+    const receivables = await recordsFor(currentAuth, "receivables", tx);
+    const invoices = await recordsFor(currentAuth, "invoices", tx);
+    const purchases = await recordsFor(currentAuth, "purchaseOrders", tx);
+    const priorClosures = await recordsFor(currentAuth, "financialClosures", tx);
+    const overlap = priorClosures.find((item) => item.status === "closed" && from <= String(item.to) && to >= String(item.from));
+    if (overlap) return "overlap" as const;
+    const report = calculateReport(accounts, journals, from, to);
     const [created] = await tx.insert(erpRecordsTable).values({
       organizationId: auth.organizationId,
       tableName: "financialClosures",
@@ -351,7 +380,7 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
         from,
         to,
         closedAt: new Date().toISOString(),
-        closedBy: auth.id,
+        closedBy: currentAuth.id,
         status: "closed",
         policy: "snapshot_locked",
         netIncome: report.totals.netIncome,
@@ -366,6 +395,10 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
   if (!closure) {
     const rejection = lockedWriteRejection(response);
     response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+    return;
+  }
+  if (closure === "overlap") {
+    response.status(409).json({ error: "تتداخل الفترة المحددة مع إقفال مالي معتمد." });
     return;
   }
   if (!await guardedAudit(response, auth, "financial_period_closed", "financialClosures", `إقفال الفترة من ${from} إلى ${to}.`)) {
