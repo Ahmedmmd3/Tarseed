@@ -104,10 +104,21 @@ function tokenFrom(cookie) {
   return cookie?.split("=", 2)[1] ?? "";
 }
 
+async function createSessionCookie(userId) {
+  const token = randomUUID();
+  await db.insert(authSessionsTable).values({
+    userId,
+    tokenHash: hashSessionToken(token),
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  });
+  return `wudooh_session=${token}`;
+}
+
 async function login(email, password) {
   const result = await request("/auth/login", {
     method: "POST",
     body: { email, password },
+    forwardedFor: `2001:db8:${randomUUID().slice(0, 4)}:${randomUUID().slice(0, 4)}::1`,
   });
   assert.equal(result.response.status, 200, JSON.stringify(result.payload));
   const cookie = cookieFrom(result.response);
@@ -310,6 +321,41 @@ test("يطبّق الدور والصلاحية ونطاق المواقع على 
   assert.equal(teamMembers.response.status, 403, JSON.stringify(teamMembers.payload));
 });
 
+test("يبطل جلسات عضو الفريق عند تغيير كلمة مروره", async () => {
+  const ownerCookie = await createSessionCookie(ids.users.owner.id);
+  const memberLogin = await login(ids.users.member.email, passwords.member);
+  const newPassword = "Member-security-recovered-456";
+
+  const passwordChange = await request(`/team/members/${ids.users.member.id}`, {
+    method: "PATCH",
+    cookie: ownerCookie,
+    body: {
+      name: ids.users.member.name,
+      email: ids.users.member.email,
+      password: newPassword,
+      roleId: ids.users.member.roleId,
+      status: "active",
+      permissions: ids.users.member.permissions,
+      locationScope: ids.users.member.locationScope,
+      warehouseIds: ids.users.member.warehouseIds,
+    },
+  });
+  assert.equal(passwordChange.response.status, 200, JSON.stringify(passwordChange.payload));
+
+  const oldSession = await request("/auth/me", { cookie: memberLogin.cookie });
+  assert.equal(oldSession.response.status, 200, JSON.stringify(oldSession.payload));
+  assert.equal(oldSession.payload.user, null);
+
+  const oldPassword = await request("/auth/login", {
+    method: "POST",
+    body: { email: ids.users.member.email, password: passwords.member },
+  });
+  assert.equal(oldPassword.response.status, 401, JSON.stringify(oldPassword.payload));
+
+  const recoveredLogin = await login(ids.users.member.email, newPassword);
+  assert.equal(recoveredLogin.payload.user.id, ids.users.member.id);
+});
+
 test("يرفض الجلسات المنتهية والملغاة ويفصل كوكيز الإدارة العليا عن جلسة المنشأة", async () => {
   const firstLogin = await login(ids.users.owner.email, passwords.owner);
   const cookieHeader = firstLogin.response.headers.get("set-cookie") ?? "";
@@ -360,6 +406,54 @@ test("يرفض الجلسات المنتهية والملغاة ويفصل كو�
 });
 
 test("يرفض الطلبات الحساسة من Origin مفقود أو غير صالح مع إبقاء المسارات العامة متاحة", async () => {
+  const loginWithoutOrigin = await request("/auth/login", {
+    method: "POST",
+    noOrigin: true,
+    body: { email: ids.users.owner.email, password: passwords.owner },
+  });
+  assert.equal(loginWithoutOrigin.response.status, 403, JSON.stringify(loginWithoutOrigin.payload));
+  assert.equal(cookieFrom(loginWithoutOrigin.response), null);
+
+  const crossSiteLogin = await request("/auth/login", {
+    method: "POST",
+    originHeader: "https://evil.example",
+    body: { email: ids.users.owner.email, password: passwords.owner },
+  });
+  assert.equal(crossSiteLogin.response.status, 403, JSON.stringify(crossSiteLogin.payload));
+  assert.equal(cookieFrom(crossSiteLogin.response), null);
+
+  const crossSiteRegistration = await request("/auth/register", {
+    method: "POST",
+    originHeader: "https://evil.example",
+    body: {
+      projectName: "منشأة أصل غير موثوق",
+      name: "مهاجم",
+      email: `cross-site-${suffix}@example.test`,
+      password: passwords.owner,
+    },
+  });
+  assert.equal(crossSiteRegistration.response.status, 403, JSON.stringify(crossSiteRegistration.payload));
+  assert.equal(cookieFrom(crossSiteRegistration.response), null);
+
+  for (const path of ["/auth/login/", "/auth/register/", "/platform-auth/login/"]) {
+    const trailingSlashBypass = await request(path, {
+      method: "POST",
+      originHeader: "https://evil.example",
+      body: path.includes("register")
+        ? {
+            projectName: "منشأة مسار بديل",
+            name: "مهاجم",
+            email: `trailing-${suffix}@example.test`,
+            password: passwords.owner,
+          }
+        : path.includes("platform")
+          ? { username: `security-admin-${suffix}`, password: passwords.admin }
+          : { email: ids.users.owner.email, password: passwords.owner },
+    });
+    assert.equal(trailingSlashBypass.response.status, 403, `${path}: ${JSON.stringify(trailingSlashBypass.payload)}`);
+    assert.equal(trailingSlashBypass.response.headers.get("set-cookie"), null);
+  }
+
   const ownerLogin = await login(ids.users.owner.email, passwords.owner);
   const protectedWrite = {
     method: "POST",

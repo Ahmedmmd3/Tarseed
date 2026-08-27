@@ -75,6 +75,11 @@ const passwordResetRule: PublicAuthRateLimitRule = {
   byIp: { limit: 5, windowMs: 15 * 60 * 1000 },
   byEmail: { limit: 3, windowMs: 15 * 60 * 1000 },
 };
+const preSessionAuthPaths = new Set([
+  "/api/auth/login",
+  "/api/auth/register",
+  "/api/platform-auth/login",
+]);
 
 function consumeRateLimit(key: string, rule: RateLimitRule): { limited: boolean; retryAfterSeconds: number } {
   const now = Date.now();
@@ -176,8 +181,13 @@ app.use(cookieParser());
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use((request, response, next) => {
-  if (["GET", "HEAD", "OPTIONS"].includes(request.method)
-    || (!request.cookies?.wudooh_session && !request.cookies?.wudooh_super_admin_session)) {
+  if (["GET", "HEAD", "OPTIONS"].includes(request.method)) {
+    next();
+    return;
+  }
+  const hasSession = Boolean(request.cookies?.wudooh_session || request.cookies?.wudooh_super_admin_session);
+  const normalizedPath = request.path.replace(/\/+$/, "") || "/";
+  if (!hasSession && !preSessionAuthPaths.has(normalizedPath)) {
     next();
     return;
   }

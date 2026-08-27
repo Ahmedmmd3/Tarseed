@@ -92,14 +92,30 @@ test("يُبقي الرد عاماً ويسجل سبب فشل البريد وي�
   });
   assert.equal(createdMember.response.status, 201, JSON.stringify(createdMember.payload));
 
+  const activeStartedAt = performance.now();
   const reset = await request("/api/auth/password-reset/request", {
     method: "POST",
     body: { email: memberEmail },
   });
+  const activeDuration = performance.now() - activeStartedAt;
   assert.equal(reset.response.status, 202, JSON.stringify(reset.payload));
   assert.equal(reset.payload.message, "إذا كان البريد الإلكتروني مسجلاً، فستصلك رسالة تحتوي على رابط استعادة كلمة المرور.");
   assert.equal(JSON.stringify(reset.payload).includes(memberEmail), false);
   assert.ok(resetEmailBody, "يجب أن يحاول الخادم إرسال رسالة الاستعادة");
+
+  const unknownStartedAt = performance.now();
+  const unknownReset = await request("/api/auth/password-reset/request", {
+    method: "POST",
+    body: { email: `${unique("unknown-reset")}@example.test` },
+  });
+  const unknownDuration = performance.now() - unknownStartedAt;
+  assert.equal(unknownReset.response.status, 202, JSON.stringify(unknownReset.payload));
+  assert.ok(activeDuration >= 250, `زمن الحساب الفعلي أقصر من الحد المتوقع: ${activeDuration}ms`);
+  assert.ok(unknownDuration >= 250, `زمن الحساب غير الموجود أقصر من الحد المتوقع: ${unknownDuration}ms`);
+  assert.ok(
+    Math.abs(activeDuration - unknownDuration) < 200,
+    `فرق زمن الاستعادة أكبر من هامش الاختبار: active=${activeDuration}ms unknown=${unknownDuration}ms`,
+  );
 
   const tokenMatch = resetEmailBody.html.match(/reset-password\?token=([^"'&]+)/);
   assert.ok(tokenMatch, "يجب أن تحتوي رسالة الاستعادة على رمز اختبار");

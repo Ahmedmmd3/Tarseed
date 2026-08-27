@@ -22,6 +22,7 @@ const PERMISSION_KEYS = new Set(["dashboard", "sales", "accounting", "inventory"
 const ROLE_IDS = new Set(["sales", "accountant", "inventory", "hr", "manager", "custom"]);
 const LOCATION_SCOPES = new Set(["all", "selected", "none"]);
 const PASSWORD_RESET_MINUTES = 30;
+const PASSWORD_RESET_RESPONSE_FLOOR_MS = 300;
 const connectors = new ReplitConnectors();
 
 function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" | "dataGeneration" | "planId" | "subscriptionStatus" | "trialStartedAt" | "trialEndsAt" | "subscriptionStartedAt" | "subscriptionEndsAt" | "platformAccessSuspendedAt">) {
@@ -153,6 +154,52 @@ async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string
           <p>إذا لم تطلب تغيير كلمة المرور، يمكنك تجاهل هذه الرسالة بأمان.</p>
         </div>`,
   });
+}
+
+async function deliverPasswordResetEmail({
+  user,
+  request,
+  token,
+  recordId,
+}: {
+  user: TeamUser;
+  request: Request;
+  token: string;
+  recordId: number;
+}): Promise<void> {
+  try {
+    await sendPasswordResetEmail({
+      email: user.email,
+      name: user.name,
+      resetUrl: passwordResetUrl(request, token),
+    });
+  } catch (error) {
+    await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, recordId));
+    const reason = deliveryFailureReason(error);
+    logger.error(
+      {
+        err: error,
+        organizationId: user.organizationId,
+        userId: user.id,
+        provider: "resend",
+        operation: "password_reset_delivery",
+        deliveryFailureReason: reason,
+      },
+      "Unable to deliver password reset email",
+    );
+    try {
+      await notifyOwnersAboutResetDeliveryFailure({
+        organizationId: user.organizationId,
+        targetEmail: user.email,
+        reason,
+      });
+    } catch (notificationError) {
+      logger.error(
+        { err: notificationError, userId: user.id },
+        "Unable to record password reset failure notification",
+      );
+    }
+  }
 }
 
 function deliveryFailureReason(error: unknown): string {
@@ -304,34 +351,65 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
   const body = request.body as Record<string, unknown>;
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const password = typeof body.password === "string" ? body.password : "";
-  const [result] = await db.select({
-    user: teamUsersTable,
-    projectName: organizationsTable.name,
-    dataGeneration: organizationsTable.dataGeneration,
-    planId: organizationsTable.planId,
-    subscriptionStatus: organizationsTable.subscriptionStatus,
-    trialStartedAt: organizationsTable.trialStartedAt,
-    trialEndsAt: organizationsTable.trialEndsAt,
-    subscriptionStartedAt: organizationsTable.subscriptionStartedAt,
-    subscriptionEndsAt: organizationsTable.subscriptionEndsAt,
-    platformAccessSuspendedAt: organizationsTable.platformAccessSuspendedAt,
-  })
-    .from(teamUsersTable)
-    .innerJoin(organizationsTable, eq(teamUsersTable.organizationId, organizationsTable.id))
+  const [candidate] = await db.select({
+    id: teamUsersTable.id,
+    organizationId: teamUsersTable.organizationId,
+  }).from(teamUsersTable)
     .where(eq(teamUsersTable.email, email))
     .limit(1);
-  if (!result || result.user.status !== "active" || !(await verifyPassword(password, result.user.passwordHash))) {
+  if (!candidate) {
     response.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
     return;
   }
-  const token = await createSession(result.user.id);
-  setSession(response, token);
-  const auth = { ...result.user, ...result } as AuthContext;
+
+  const result = await db.transaction(async (tx) => {
+    const [organization] = await tx.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, candidate.organizationId))
+      .for("update");
+    if (!organization) return null;
+    const [user] = await tx.select().from(teamUsersTable)
+      .where(and(
+        eq(teamUsersTable.id, candidate.id),
+        eq(teamUsersTable.organizationId, organization.id),
+        eq(teamUsersTable.email, email),
+      ))
+      .for("update");
+    if (!user || user.status !== "active" || !(await verifyPassword(password, user.passwordHash))) {
+      return null;
+    }
+    const token = createSessionToken();
+    const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+    await tx.insert(authSessionsTable).values({
+      userId: user.id,
+      tokenHash: hashSessionToken(token),
+      expiresAt,
+    });
+    return { user, organization, token };
+  });
+  if (!result) {
+    response.status(401).json({ error: "البريد الإلكتروني أو كلمة المرور غير صحيحة." });
+    return;
+  }
+
+  setSession(response, result.token);
+  const auth: AuthContext = {
+    ...result.user,
+    projectName: result.organization.name,
+    dataGeneration: result.organization.dataGeneration,
+    planId: result.organization.planId,
+    subscriptionStatus: result.organization.subscriptionStatus,
+    trialStartedAt: result.organization.trialStartedAt,
+    trialEndsAt: result.organization.trialEndsAt,
+    subscriptionStartedAt: result.organization.subscriptionStartedAt,
+    subscriptionEndsAt: result.organization.subscriptionEndsAt,
+    platformAccessSuspendedAt: result.organization.platformAccessSuspendedAt,
+  };
   await recordAudit(auth, "login", "user", result.user.email);
-  response.json({ user: safeUser(result.user, result) });
+  response.json({ user: safeUser(result.user, auth) });
 });
 
 router.post("/auth/password-reset/request", async (request: Request, response: Response): Promise<void> => {
+  const startedAt = Date.now();
   const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
   const message = "إذا كان البريد الإلكتروني مسجلاً، فستصلك رسالة تحتوي على رابط استعادة كلمة المرور.";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -339,57 +417,43 @@ router.post("/auth/password-reset/request", async (request: Request, response: R
     return;
   }
 
-  const [user] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.email, email)).limit(1);
-  if (!user || user.status !== "active") {
-    response.status(202).json({ message });
-    return;
-  }
-
   const token = createPasswordResetToken();
+  const tokenHash = hashSessionToken(token);
   const expiresAt = new Date(Date.now() + PASSWORD_RESET_MINUTES * 60 * 1000);
-  const [record] = await db.transaction(async (tx) => {
+  const reset = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.email, email)).limit(1);
+    if (!user || user.status !== "active") {
+      await tx.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.tokenHash, tokenHash));
+      await tx.select({ id: passwordResetTokensTable.id })
+        .from(passwordResetTokensTable)
+        .where(eq(passwordResetTokensTable.tokenHash, tokenHash))
+        .limit(1);
+      return null;
+    }
     await tx.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.userId, user.id));
-    return tx.insert(passwordResetTokensTable).values({
+    const [record] = await tx.insert(passwordResetTokensTable).values({
       userId: user.id,
-      tokenHash: hashSessionToken(token),
+      tokenHash,
       expiresAt,
     }).returning();
+    return { user, record };
   });
 
-  try {
-    await sendPasswordResetEmail({
-      email: user.email,
-      name: user.name,
-      resetUrl: passwordResetUrl(request, token),
+  if (reset) {
+    // Unknown addresses have no provider request. Keep the response independent
+    // of email delivery so that this difference cannot be measured as account
+    // enumeration, while still cleaning up unusable tokens on delivery failure.
+    void deliverPasswordResetEmail({
+      user: reset.user,
+      request,
+      token,
+      recordId: reset.record.id,
     });
-  } catch (error) {
-    await db.delete(passwordResetTokensTable).where(eq(passwordResetTokensTable.id, record.id));
-    const reason = deliveryFailureReason(error);
-    logger.error(
-      {
-        err: error,
-        organizationId: user.organizationId,
-        userId: user.id,
-        provider: "resend",
-        operation: "password_reset_delivery",
-        deliveryFailureReason: reason,
-      },
-      "Unable to deliver password reset email",
-    );
-    try {
-      await notifyOwnersAboutResetDeliveryFailure({
-        organizationId: user.organizationId,
-        targetEmail: user.email,
-        reason,
-      });
-    } catch (notificationError) {
-      logger.error(
-        { err: notificationError, userId: user.id },
-        "Unable to record password reset delivery failure notification",
-      );
-    }
   }
-
+  const remainingDelay = PASSWORD_RESET_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+  if (remainingDelay > 0) {
+    await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+  }
   response.status(202).json({ message });
 });
 
@@ -518,7 +582,9 @@ router.patch("/team/members/:id", requireAuth, requireSubscriptionAccess, requir
     const [member] = await tx.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).for("update");
     if (!member || member.roleId === "owner") return { kind: "missing" as const };
     const [updated] = await tx.update(teamUsersTable).set(update).where(eq(teamUsersTable.id, id)).returning();
-    if (updated.status === "inactive") await tx.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
+    if (password || updated.status === "inactive") {
+      await tx.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
+    }
     await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: updated.status === "inactive" ? "member_disabled" : "member_updated", entity: updated.name, details: updated.roleId });
     return { kind: "updated" as const, updated };
   });

@@ -15,3 +15,4 @@
 - [توافق أحداث GitHub Actions](github-actions-event-compatibility.md) — تحقق من دعم اسم الحدث في صيغة Actions قبل إضافته إلى workflow.
 - [فصل تعليق الوصول عن Stripe](platform-access-suspension.md) — علّق وصول المنشأة بعلم مستقل، ولا تكتب فوق حالة الاشتراك التي يملكها Stripe.
 - [دقة اختبارات حراس الصلاحيات](authorization-guard-test-precision.md) — لا تعتبر 403 دليلاً كافياً؛ أثبت أن الحارس المقصود نُفّذ وأن البيانات بقيت بلا تغيير.
+- [تزامن إنشاء الجلسة مع تدوير الاعتماد](credential-session-serialization.md) — تحقّق من كلمة المرور وأنشئ الجلسة تحت قفل المستخدم نفسه المستخدم في تغيير الاعتماد.
