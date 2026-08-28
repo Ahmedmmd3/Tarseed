@@ -1,12 +1,15 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Sparkles, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { ToastAction } from '@/components/ui/toast';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useStore } from '@/context/store';
+import { useToast } from '@/hooks/use-toast';
 import { FinancialAssistant } from '@/components/financial-assistant';
 
 type NavigationItem = { name: string; href: string; icon: LucideIcon; permission?: string; ownerOnly?: boolean };
@@ -44,20 +47,151 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
   },
 ];
 
+type FinancialAnomaly = {
+  type: string;
+  title: string;
+  details: string;
+  currentValue?: number;
+  baselineValue?: number;
+  changePercent?: number;
+  count?: number;
+  total?: number;
+};
+
+type AnomalyAnalysisResult = {
+  hasAnomalies: boolean;
+  anomalies: FinancialAnomaly[];
+  analysis: string | null;
+  analyzedAt: string;
+  metrics: {
+    period: { from: string; to: string };
+    averagePreviousWeeklyExpenses: number;
+    currentWeekExpenses: number;
+    expenseChangePercent: number;
+    averagePreviousWeeklySales: number;
+    currentWeekSales: number;
+    salesChangePercent: number;
+    overdueReceivablesOverThirtyDays: number;
+    unpaidInvoices: number;
+  };
+};
+
+type StoredAnomalyAnalysis = {
+  checkedAt: number;
+  result?: AnomalyAnalysisResult;
+};
+
+const anomalyCooldownMs = 6 * 60 * 60 * 1000;
+const anomalyStoragePrefix = 'wudooh-financial-anomaly-v1';
+const anomalyCooldownMemory = new Map<string, number>();
+const notifiedAnomalyKeys = new Set<string>();
+
 export function AppLayout({ children }: { children: ReactNode }) {
   const [location] = useLocation();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const { currentUser, signOut, connectionMode, canRetrySharedConnection, syncQueue, retrySharedConnection } = useStore();
+  const { toast, dismiss } = useToast();
+  const dismissToastRef = React.useRef(dismiss);
+  dismissToastRef.current = dismiss;
   const [isSigningOut, setIsSigningOut] = React.useState(false);
   const [phoneDialogOpen, setPhoneDialogOpen] = React.useState(false);
+  const [anomalyResult, setAnomalyResult] = React.useState<AnomalyAnalysisResult | null>(null);
+  const [anomalyResultIdentity, setAnomalyResultIdentity] = React.useState('');
+  const [anomalyDrawerOpen, setAnomalyDrawerOpen] = React.useState(false);
+  const [anomalyLoading, setAnomalyLoading] = React.useState(false);
+  const [anomalyError, setAnomalyError] = React.useState('');
   const subscriptionRequired = isSubscriptionProtectedRoute(location);
   const authenticationBlocked = subscriptionRequired && !currentUser;
   const subscriptionBlocked = Boolean(currentUser && subscriptionRequired && !currentUser.subscription?.accessActive);
   const canViewCurrentRoute = !subscriptionRequired || Boolean(currentUser && !subscriptionBlocked && canAccessNavigationItem(location, currentUser));
+  const canReadAnomalies = Boolean(
+    currentUser
+    && currentUser.subscription.accessActive
+    && (currentUser.roleId === 'owner' || (currentUser.permissions.sales === true && currentUser.permissions.accounting === true)),
+  );
+  const anomalyScope = currentUser ? anomalyScopeFingerprint(currentUser) : '';
+  const anomalyIdentity = currentUser && canReadAnomalies ? `${currentUser.organizationId}:${currentUser.id}:${anomalyScope}` : '';
+  const visibleAnomalyResult = anomalyResultIdentity === anomalyIdentity ? anomalyResult : null;
+  const anomalyIdentityRef = React.useRef('');
+  anomalyIdentityRef.current = anomalyIdentity;
   const closeSidebar = () => setSidebarOpen(false);
   const visibleGroups = navigationGroups
     .map((group) => ({ ...group, items: group.items.filter((item) => !currentUser || (item.ownerOnly ? currentUser.roleId === 'owner' : canAccessNavigationItem(item.href, currentUser))) }))
     .filter((group) => group.items.length > 0);
+
+  React.useEffect(() => {
+    if (!anomalyIdentity || !currentUser) return;
+    setAnomalyResult(null);
+    setAnomalyResultIdentity('');
+    setAnomalyDrawerOpen(false);
+    setAnomalyLoading(false);
+    setAnomalyError('');
+    const storageKey = anomalyStorageKey(currentUser.organizationId, currentUser.id, anomalyScope);
+    const previous = readStoredAnomalyAnalysis(storageKey);
+    const now = Date.now();
+    const cooldownUntil = Math.max(previous?.checkedAt ?? 0, anomalyCooldownMemory.get(storageKey) ?? 0) + anomalyCooldownMs;
+    let toastId: string | undefined;
+
+    const showAnomalyToast = (result: AnomalyAnalysisResult) => {
+      if (!result.hasAnomalies || notifiedAnomalyKeys.has(storageKey)) return;
+      notifiedAnomalyKeys.add(storageKey);
+      const firstAnomaly = result.anomalies[0];
+      const description = result.analysis || firstAnomaly?.details || 'يرجى مراجعة التفاصيل المالية لمنشأتك.';
+      toastId = toast({
+        title: 'تنبيه مالي ذكي',
+        description,
+        className: 'border-amber-300 bg-amber-50 text-amber-950',
+        action: (
+          <ToastAction altText="عرض تفاصيل التنبيه المالي" onClick={() => setAnomalyDrawerOpen(true)} className="border-amber-400 text-amber-900 hover:bg-amber-100">
+            عرض التفاصيل
+          </ToastAction>
+        ),
+      }).id;
+    };
+
+    if (now < cooldownUntil) {
+      if (previous?.result) {
+        setAnomalyResult(previous.result);
+        setAnomalyResultIdentity(anomalyIdentity);
+        showAnomalyToast(previous.result);
+      }
+      return () => { if (toastId) dismissToastRef.current(toastId); };
+    }
+
+    anomalyCooldownMemory.set(storageKey, now);
+    try {
+      localStorage.setItem(storageKey, JSON.stringify({ checkedAt: now }));
+    } catch {
+      // The in-memory cooldown still prevents duplicate requests in this session.
+    }
+    setAnomalyLoading(true);
+    setAnomalyError('');
+    let active = true;
+    void analyzeAnomalies()
+      .then((result) => {
+        if (!active || anomalyIdentityRef.current !== anomalyIdentity) return;
+        setAnomalyResult(result);
+        setAnomalyResultIdentity(anomalyIdentity);
+        try {
+          localStorage.setItem(storageKey, JSON.stringify({ checkedAt: Date.now(), result } satisfies StoredAnomalyAnalysis));
+        } catch {
+          // The current result remains visible even when local storage is unavailable.
+        }
+        showAnomalyToast(result);
+      })
+      .catch((error: unknown) => {
+        if (active && anomalyIdentityRef.current === anomalyIdentity) {
+          setAnomalyError(error instanceof Error ? error.message : 'تعذر تحليل التنبيهات المالية.');
+        }
+      })
+      .finally(() => {
+        if (active && anomalyIdentityRef.current === anomalyIdentity) setAnomalyLoading(false);
+      });
+    return () => {
+      active = false;
+      if (toastId) dismissToastRef.current(toastId);
+    };
+  }, [anomalyIdentity, anomalyScope, currentUser?.id, currentUser?.organizationId, toast]);
 
   if (connectionMode === 'loading') {
     return <div className="flex min-h-screen items-center justify-center bg-[#061d40] p-4" dir="rtl"><DashboardLoading /></div>;
@@ -153,9 +287,139 @@ export function AppLayout({ children }: { children: ReactNode }) {
         onOpenChange={setPhoneDialogOpen}
         onCompleted={() => void signOut()}
       />
+      <FinancialAnomalyDrawer
+        result={visibleAnomalyResult}
+        loading={anomalyLoading}
+        error={anomalyError}
+        open={anomalyDrawerOpen && Boolean(visibleAnomalyResult)}
+        onOpenChange={setAnomalyDrawerOpen}
+      />
       <FinancialAssistant />
     </div>
   );
+}
+
+async function analyzeAnomalies(): Promise<AnomalyAnalysisResult> {
+  const response = await fetch('/api/assistant/anomalies', {
+    method: 'POST',
+    credentials: 'include',
+  });
+  const payload = await response.json().catch(() => ({})) as Partial<AnomalyAnalysisResult> & { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? 'تعذر تحليل التنبيهات المالية.');
+  if (!Array.isArray(payload.anomalies) || typeof payload.hasAnomalies !== 'boolean' || typeof payload.analyzedAt !== 'string') {
+    throw new Error('استجابة تحليل التنبيهات المالية غير صالحة.');
+  }
+  return {
+    hasAnomalies: payload.hasAnomalies,
+    anomalies: payload.anomalies as FinancialAnomaly[],
+    analysis: typeof payload.analysis === 'string' ? payload.analysis : null,
+    analyzedAt: payload.analyzedAt,
+    metrics: payload.metrics as AnomalyAnalysisResult['metrics'],
+  };
+}
+
+function anomalyScopeFingerprint(user: {
+  dataGeneration: number;
+  roleId: string;
+  locationScope: string;
+  warehouseIds: number[];
+  permissions: Record<string, boolean>;
+}): string {
+  return [
+    user.dataGeneration,
+    user.roleId,
+    user.locationScope,
+    [...user.warehouseIds].map(Number).sort((left, right) => left - right).join('.'),
+    user.permissions.sales === true ? 's1' : 's0',
+    user.permissions.accounting === true ? 'a1' : 'a0',
+  ].join('-');
+}
+
+function anomalyStorageKey(organizationId: number, userId: number, scope: string): string {
+  return `${anomalyStoragePrefix}-${organizationId}-${userId}-${scope}`;
+}
+
+function readStoredAnomalyAnalysis(storageKey: string): StoredAnomalyAnalysis | null {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredAnomalyAnalysis>;
+    if (!Number.isFinite(parsed.checkedAt)) return null;
+    if (parsed.result !== undefined && (!parsed.result || typeof parsed.result !== 'object')) return null;
+    return parsed as StoredAnomalyAnalysis;
+  } catch {
+    return null;
+  }
+}
+
+function FinancialAnomalyDrawer({
+  result,
+  loading,
+  error,
+  open,
+  onOpenChange,
+}: {
+  result: AnomalyAnalysisResult | null;
+  loading: boolean;
+  error: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" dir="rtl" className="w-full overflow-y-auto sm:max-w-lg">
+        <SheetHeader className="text-right sm:text-right">
+          <SheetTitle className="flex items-center gap-2"><AlertTriangle className="h-5 w-5 text-amber-500" />التنبيه المالي الذكي</SheetTitle>
+          <SheetDescription>تحليل تلقائي لأداء منشأتك مقارنة بالفترات السابقة.</SheetDescription>
+        </SheetHeader>
+        {loading && <div className="mt-8 rounded-xl bg-slate-50 p-5 text-center text-sm text-slate-500">جارٍ تحليل المؤشرات المالية...</div>}
+        {error && <div className="mt-8 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700" role="alert">{error}</div>}
+        {result && (
+          <div className="mt-6 space-y-5">
+            {result.analysis && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-7 text-amber-950">
+                <div className="mb-2 flex items-center gap-2 font-black"><Sparkles className="h-4 w-4 text-amber-600" />تحليل المراقب المالي</div>
+                <p>{result.analysis}</p>
+              </div>
+            )}
+            <div className="space-y-3">
+              {result.anomalies.map((anomaly) => (
+                <div key={anomaly.type} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <p className="font-black text-slate-900">{anomaly.title}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{anomaly.details}</p>
+                </div>
+              ))}
+              {!result.anomalies.length && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">لم يرصد التحليل أي شذوذ مالي يتجاوز الحدود المحددة.</div>}
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+              <p className="font-black text-slate-800">الفترة محل التحليل</p>
+              <p className="mt-1 text-slate-500">{result.metrics.period.from} إلى {result.metrics.period.to}</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <AnomalyMetric label="مصاريف الأسبوع" value={formatAnomalyNumber(result.metrics.currentWeekExpenses)} />
+                <AnomalyMetric label="تغير المصاريف" value={formatPercent(result.metrics.expenseChangePercent)} />
+                <AnomalyMetric label="مبيعات الأسبوع" value={formatAnomalyNumber(result.metrics.currentWeekSales)} />
+                <AnomalyMetric label="تغير المبيعات" value={formatPercent(result.metrics.salesChangePercent)} />
+                <AnomalyMetric label="ذمم +30 يوماً" value={String(result.metrics.overdueReceivablesOverThirtyDays)} />
+                <AnomalyMetric label="فواتير غير مدفوعة" value={String(result.metrics.unpaidInvoices)} />
+              </div>
+            </div>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function AnomalyMetric({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-black text-slate-900">{value}</p></div>;
+}
+
+function formatAnomalyNumber(value: number): string {
+  return new Intl.NumberFormat('ar-SA', { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatPercent(value: number): string {
+  return `${new Intl.NumberFormat('ar-SA', { maximumFractionDigits: 1, signDisplay: 'exceptZero' }).format(value)}٪`;
 }
 
 function PhoneChangeDialog({
