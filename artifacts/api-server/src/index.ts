@@ -35,7 +35,15 @@ async function initializeStripe(): Promise<void> {
 }
 
 try {
-  await initializeStripe();
+  try {
+    await initializeStripe();
+  } catch (error) {
+    if (process.env.STRIPE_STARTUP_REQUIRED !== "false") throw error;
+    logger.warn(
+      { err: error },
+      "Stripe startup initialization is disabled; billing and subscription synchronization are unavailable.",
+    );
+  }
   const platformAdminCreated = await ensureInitialPlatformAdmin();
   if (platformAdminCreated) {
     logger.info("Initial platform administrator created.");
