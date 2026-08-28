@@ -203,7 +203,7 @@ function derivePartyBalances(records: AnyRecord[], type: "receivable" | "payable
         party: String(record.party ?? record.customerName ?? record.supplierName ?? "غير محدد"),
         type,
         reference: String(record.reference ?? record.invoiceNumber ?? record.number ?? `#${record.id}`),
-        dueDate: asDate(record.dueDate ?? record.date),
+        dueDate: asDate(record.dueDate ?? record.issueDate ?? record.date ?? record.createdAt),
         amount,
         paid: Math.min(amount, paid),
         remaining: Math.max(0, amount - paid),
@@ -288,7 +288,7 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       }
       const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
       const debitCode = source.type === "sale"
-        ? (currentSource.data.customerId ? "1200" : "1000")
+        ? (currentSource.data.paymentMethod === "credit" || currentSource.data.customerId ? "1200" : "1000")
         : source.type === "purchase" ? "5000" : "5100";
       const creditCode = source.type === "sale" ? "4000" : source.type === "purchase" ? "2000" : "1000";
       const debitAccount = accounts.find((account) => String(account.code) === debitCode);

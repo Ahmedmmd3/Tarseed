@@ -267,6 +267,7 @@ before(async () => {
   const accounts = {};
   for (const account of [
     { code: "1000", name: "النقدية", type: "asset" },
+    { code: "1200", name: "العملاء", type: "asset" },
     { code: "2000", name: "الدائنون", type: "liability" },
     { code: "4000", name: "المبيعات", type: "revenue" },
     { code: "5000", name: "المشتريات", type: "expense" },
@@ -283,6 +284,8 @@ before(async () => {
     warehouseId: firstWarehouse.id,
     invoiceNumber: "INV-ALLOWED",
     date: "2026-08-10",
+    dueDate: "2026-09-10",
+    paymentMethod: "credit",
     total: 100,
   });
   ids.accountingRecords.restrictedInvoice = await createRecord(activeOrganization.id, "invoices", {
@@ -524,6 +527,18 @@ test("يعزل الفوترة الإلكترونية وعمليات المحاس
     ]),
   );
   assert.equal(createdSourceJournals.every((journal) => journal.data.warehouseId === ids.warehouses.allowed), true);
+  const saleJournal = createdSourceJournals.find(
+    (journal) => journal.data.sourceType === "sale" && journal.data.sourceId === ids.accountingRecords.allowedInvoice.id,
+  );
+  assert.ok(saleJournal, "يجب إنشاء قيد لفاتورة البيع الآجل");
+  assert.equal(
+    saleJournal.data.lines.some((line) =>
+      line.accountId === String(ids.accountingRecords.accounts["1200"].id)
+      && line.debit === 100
+      && line.credit === 0),
+    true,
+    "يجب ترحيل البيع الآجل إلى حساب العملاء لا الصندوق",
+  );
   assert.equal(sourceJournals.some(
     (journal) => journal.id === ids.accountingRecords.restrictedLegacyJournal.id,
   ), true, "يجب أن يثبت الاختبار أن القيد القديم خارج النطاق موجود فعلاً");

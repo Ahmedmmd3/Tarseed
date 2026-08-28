@@ -132,8 +132,30 @@ function requiredText(value: unknown, label: string, maxLength: number): string 
 function saleDate(value: unknown): string {
   const date = requiredText(value, "تاريخ البيع", 32) || new Date().toISOString().slice(0, 10);
   const normalized = date.slice(0, 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+  if (!isValidDateKey(normalized)) {
     throw new InventoryRouteError("تاريخ البيع غير صالح.", 400);
+  }
+  return normalized;
+}
+
+function isValidDateKey(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+function creditDueDate(value: unknown, issueDate: string): string {
+  const dueDate = requiredText(value, "تاريخ استحقاق البيع الآجل", 32);
+  if (!dueDate) throw new InventoryRouteError("يجب تحديد تاريخ استحقاق البيع الآجل قبل إتمام العملية.", 400);
+  const normalized = dueDate.slice(0, 10);
+  if (!isValidDateKey(normalized)) {
+    throw new InventoryRouteError("تاريخ استحقاق البيع الآجل غير صالح.", 400);
+  }
+  if (normalized < issueDate) {
+    throw new InventoryRouteError("لا يمكن أن يسبق تاريخ الاستحقاق تاريخ البيع.", 400);
   }
   return normalized;
 }
@@ -345,6 +367,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
     const paymentMethod = ["cash", "card", "credit"].includes(String(body.paymentMethod))
       ? String(body.paymentMethod)
       : "cash";
+    const dueDate = paymentMethod === "credit" ? creditDueDate(body.dueDate, issueDate) : undefined;
     const customerName = requiredText(body.customerName, "اسم العميل", 160);
     const customerVatNumber = requiredText(body.customerVatNumber, "الرقم الضريبي للعميل", 15);
     if (customerVatNumber && !/^\d{15}$/.test(customerVatNumber)) {
@@ -427,7 +450,8 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           customerVatNumber: customerVatNumber || undefined,
           customerAddress: customerAddress || undefined,
           paymentMethod,
-          status: "paid",
+          status: paymentMethod === "credit" ? "unpaid" : "paid",
+          dueDate,
           items: lines.map(({ product, balance, ...line }) => line),
           subtotal,
           tax: 0,
@@ -524,6 +548,27 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         eInvoiceUuid: eInvoice.uuid,
         qrPayload: generated?.qrPayload ?? "",
       });
+      if (paymentMethod === "credit" && dueDate) {
+        const total = generated?.taxInclusiveAmount ?? subtotal;
+        await tx.insert(erpRecordsTable).values({
+          organizationId: auth.organizationId,
+          tableName: "receivables",
+          data: {
+            invoiceId: invoice.id,
+            party: customerName || "عميل نقدي",
+            customerName: customerName || "عميل نقدي",
+            type: "receivable",
+            reference: invoiceNumber,
+            issueDate,
+            warehouseId,
+            dueDate,
+            amount: total,
+            paid: 0,
+            status: "unpaid",
+            createdAt: new Date().toISOString(),
+          },
+        });
+      }
       for (const line of lines) {
         const product = line.product as ErpRecord;
         const balance = line.balance as ErpRecord;

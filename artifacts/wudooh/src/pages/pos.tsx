@@ -13,7 +13,7 @@ type Warehouse = { id: number | string; name: string; status?: string };
 type InventoryBalance = { productId: number | string; warehouseId: number | string; quantity: number | string };
 type CartItem = { product: Product; quantity: number };
 type RecordsPayload<T> = { records?: T[]; error?: string };
-type CheckoutPayload = { invoice?: { id: string | number; number: string; total: number | string }; error?: string };
+type CheckoutPayload = { invoice?: { id: string | number; number: string; total: number | string; dueDate?: string }; error?: string };
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
@@ -35,6 +35,7 @@ export default function POS() {
   const [customerName, setCustomerName] = useState('');
   const [customerVatNumber, setCustomerVatNumber] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
+  const [dueDate, setDueDate] = useState('');
 
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [invoice, setInvoice] = useState<{ id: string | number; number: string; total: number } | null>(null);
@@ -150,6 +151,10 @@ export default function POS() {
 
   const handleCheckout = async () => {
     if (!selectedWarehouse || cart.length === 0 || !currentUser || cartHasInsufficientStock) return;
+    if (paymentMethod === 'credit' && !dueDate) {
+      setError('حدد تاريخ استحقاق البيع الآجل قبل إتمام العملية.');
+      return;
+    }
 
     setCheckoutLoading(true);
     setError('');
@@ -160,6 +165,7 @@ export default function POS() {
         warehouseId: Number(selectedWarehouse),
         issueDate: new Date().toISOString().slice(0, 10),
         paymentMethod,
+        dueDate: paymentMethod === 'credit' ? dueDate : undefined,
         customerName: customerName.trim() || undefined,
         customerVatNumber: customerVatNumber.trim() || undefined,
         customerAddress: customerAddress.trim() || undefined,
@@ -194,6 +200,7 @@ export default function POS() {
       setCustomerName('');
       setCustomerVatNumber('');
       setCustomerAddress('');
+      setDueDate('');
       setPendingOperationId(null);
       await loadData();
     } catch (checkoutError) {
@@ -442,6 +449,25 @@ export default function POS() {
                   ))}
                 </div>
               </div>
+
+              {paymentMethod === 'credit' && (
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <label htmlFor="pos-due-date" className="mb-2 block text-xs font-bold text-amber-900">
+                    تاريخ استحقاق البيع الآجل <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    id="pos-due-date"
+                    type="date"
+                    value={dueDate}
+                    min={new Date().toISOString().slice(0, 10)}
+                    onChange={(event) => setDueDate(event.target.value)}
+                    required
+                    className="h-11 w-full rounded-xl border border-amber-200 bg-white px-4 text-sm font-medium text-slate-900 shadow-sm focus:border-teal-500 focus:outline-none"
+                    data-testid="input-credit-due-date"
+                  />
+                  <p className="mt-1.5 text-[11px] font-medium text-amber-800">لن تُصنف الفاتورة كمتأخرة قبل هذا التاريخ.</p>
+                </div>
+              )}
             </div>
 
             <Button 

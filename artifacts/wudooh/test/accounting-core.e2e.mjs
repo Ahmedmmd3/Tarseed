@@ -92,7 +92,7 @@ async function mockSharedAccounting(page, journals = seededJournals()) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        totals: { revenue: 17000, expense: 6000, netIncome: 11000 },
+        totals: { revenue: 17000, expense: 6000, netIncome: 11000, receivables: 12000, payables: 0 },
         trialBalance: accounts.map((account) => ({
           id: account.id,
           code: account.code,
@@ -109,6 +109,17 @@ async function mockSharedAccounting(page, journals = seededJournals()) {
           ],
           netIncome: 11000,
         },
+        receivables: [{
+          id: 'credit-invoice',
+          party: 'شركة الأمل',
+          type: 'receivable',
+          reference: 'POS-CREDIT-1',
+          dueDate: '2030-01-15',
+          amount: 12000,
+          paid: 0,
+          remaining: 12000,
+          status: 'unpaid',
+        }],
       }),
     });
   });
@@ -208,6 +219,9 @@ test('يعرض مجموعات الحسابات والتقارير الثلاثة
     await expect(page.getByRole('heading', { name: 'قائمة الدخل (الأرباح والخسائر)' })).toBeVisible();
     await page.getByTestId('tab-report-balance').click();
     await expect(page.getByRole('heading', { name: 'قائمة المركز المالي (الميزانية العمومية)' })).toBeVisible();
+    await expect(page.getByTestId('report-receivables')).toContainText('POS-CREDIT-1');
+    await expect(page.getByTestId('report-receivables')).toContainText('2030-01-15');
+    await expect(page.getByTestId('report-receivables')).toContainText('غير مسدد');
     await page.getByTestId('tab-report-trial').click();
     await expect(page.getByRole('heading', { name: 'ميزان المراجعة بالمجاميع والأرصدة' })).toBeVisible();
   }

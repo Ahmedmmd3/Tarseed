@@ -280,7 +280,7 @@ router.post(
               status: asNumber(invoice.total ?? invoice.amount ?? invoice.totalAmount) <= asNumber(invoice.paid ?? invoice.paidAmount)
                 ? "paid"
                 : "unpaid",
-              dueDate: invoice.dueDate ?? invoice.date ?? invoice.issueDate,
+              dueDate: invoice.dueDate ?? invoice.issueDate ?? invoice.date,
             }));
       const overdueItems = receivableSources.filter((record) => {
         const dueDate = typeof record.dueDate === "string" ? record.dueDate.slice(0, 10) : "";

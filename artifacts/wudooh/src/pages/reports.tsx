@@ -9,13 +9,24 @@ import { Badge } from '@/components/ui/badge';
 
 type ReportType = 'trial' | 'income' | 'balance';
 type ServerSummary = {
-  totals: { revenue: number; expense: number; netIncome: number };
+  totals: { revenue: number; expense: number; netIncome: number; receivables?: number; payables?: number };
   trialBalance: Array<{ id: string | number; code: string; name: string; type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense'; debit: number; credit: number }>;
   incomeStatement: {
     revenue: Array<{ id: string | number; name: string; amount: number }>;
     expense: Array<{ id: string | number; name: string; amount: number }>;
     netIncome: number;
   };
+  receivables: Array<{
+    id: string | number;
+    party: string;
+    type: 'receivable' | 'payable';
+    reference: string;
+    dueDate: string;
+    amount: number;
+    paid: number;
+    remaining: number;
+    status: 'unpaid' | 'partial' | 'paid';
+  }>;
 };
 
 export default function Reports() {
@@ -335,7 +346,8 @@ export default function Reports() {
       )}
 
       {reportType === 'balance' && (
-        <Card className="max-w-5xl mx-auto border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className="mx-auto max-w-5xl space-y-6">
+        <Card className="border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="bg-slate-50 border-b border-slate-200 p-5 text-center">
             <h3 className="text-2xl font-bold text-slate-900 tracking-tight">قائمة المركز المالي (الميزانية العمومية)</h3>
             <p className="text-sm text-slate-500 mt-1">كما في تاريخ <span className="font-mono">{toDate}</span></p>
@@ -434,6 +446,54 @@ export default function Reports() {
             )}
           </CardContent>
         </Card>
+        {serverSummary?.receivables && serverSummary.receivables.length > 0 && (
+          <Card className="overflow-hidden border-slate-200 shadow-sm" data-testid="report-receivables">
+            <div className="border-b border-slate-200 bg-slate-50 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">تفاصيل الذمم والاستحقاقات</h3>
+                  <p className="mt-1 text-sm text-slate-500">الأرصدة القائمة ومواعيد استحقاقها حتى {toDate}.</p>
+                </div>
+                <Badge variant="outline" className="bg-white">
+                  صافي الذمم المدينة: {formatCurrency(serverSummary.totals.receivables ?? 0)}
+                </Badge>
+              </div>
+            </div>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>النوع</TableHead>
+                      <TableHead>الجهة</TableHead>
+                      <TableHead>المرجع</TableHead>
+                      <TableHead>تاريخ الاستحقاق</TableHead>
+                      <TableHead className="text-left">المتبقي</TableHead>
+                      <TableHead>الحالة</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {serverSummary.receivables.map((item) => (
+                      <TableRow key={`${item.type}-${item.id}`} data-testid={`report-receivable-${item.id}`}>
+                        <TableCell>{item.type === 'receivable' ? 'ذمة مدينة' : 'ذمة دائنة'}</TableCell>
+                        <TableCell className="font-medium">{item.party}</TableCell>
+                        <TableCell>{item.reference || '-'}</TableCell>
+                        <TableCell className="font-mono">{item.dueDate || '-'}</TableCell>
+                        <TableCell className="text-left font-mono font-bold">{formatCurrency(item.remaining)}</TableCell>
+                        <TableCell>
+                          <Badge variant={item.status === 'paid' ? 'success' : item.status === 'partial' ? 'warning' : 'destructive'}>
+                            {item.status === 'paid' ? 'مسدد' : item.status === 'partial' ? 'جزئي' : 'غير مسدد'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        </div>
       )}
     </div>
   );
