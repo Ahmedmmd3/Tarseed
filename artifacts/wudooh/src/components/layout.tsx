@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useStore } from '@/context/store';
+import { FinancialAssistant } from '@/components/financial-assistant';
 
 type NavigationItem = { name: string; href: string; icon: LucideIcon; permission?: string; ownerOnly?: boolean };
 
@@ -151,6 +152,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
         onOpenChange={setPhoneDialogOpen}
         onCompleted={() => void signOut()}
       />
+      <FinancialAssistant />
     </div>
   );
 }

@@ -8,6 +8,7 @@ import backupRouter from "./backup";
 import eInvoicingRouter from "./e-invoicing";
 import billingRouter from "./billing";
 import platformAdminRouter from "./platform-admin";
+import financialAssistantRouter from "./financial-assistant";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(backupRouter);
 router.use(eInvoicingRouter);
 router.use(billingRouter);
 router.use(platformAdminRouter);
+router.use(financialAssistantRouter);
 
 export default router;
