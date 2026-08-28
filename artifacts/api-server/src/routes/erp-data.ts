@@ -17,6 +17,17 @@ const TABLE_MODULES: Record<string, string | string[]> = {
   financialClosures: "accounting",
 };
 
+const DEFAULT_ACCOUNT_DEFINITIONS = [
+  { code: "1000", name: "الصندوق", type: "asset", parent: null, balance: 0, status: "active" },
+  { code: "1100", name: "البنك", type: "asset", parent: null, balance: 0, status: "active" },
+  { code: "1200", name: "العملاء", type: "asset", parent: null, balance: 0, status: "active" },
+  { code: "2000", name: "الموردين", type: "liability", parent: null, balance: 0, status: "active" },
+  { code: "3000", name: "رأس المال", type: "equity", parent: null, balance: 0, status: "active" },
+  { code: "4000", name: "المبيعات", type: "revenue", parent: null, balance: 0, status: "active" },
+  { code: "5000", name: "المشتريات", type: "expense", parent: null, balance: 0, status: "active" },
+  { code: "5100", name: "مصروفات الرواتب", type: "expense", parent: null, balance: 0, status: "active" },
+] as const;
+
 function requireTableAccess(request: Request, response: Response): { auth: AuthContext; tableName: string } | null {
   const auth = response.locals.auth as AuthContext;
   const raw = Array.isArray(request.params.table) ? request.params.table[0] : request.params.table;
@@ -126,6 +137,15 @@ function operationFingerprint(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
+function isUniqueConstraintViolation(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth += 1) {
+    if ("code" in current && (current as { code?: unknown }).code === "23505") return true;
+    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return false;
+}
+
 async function isClosedDate(
   auth: AuthContext,
   date: string,
@@ -141,6 +161,49 @@ async function isClosedDate(
     return closure.data.status === "closed" && date >= from && date <= to;
   });
 }
+
+router.post("/accounting/initialize", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (!hasTableAccess(auth, "accounts")) {
+    response.status(403).json({ error: "ليس لديك صلاحية لوحدة المحاسبة." });
+    return;
+  }
+
+  const result = await db.transaction(async (tx) => {
+    if (!await lockAndValidateDataGeneration(tx, response)) return null;
+    const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+    if (!currentAuth || !hasTableAccess(currentAuth, "accounts")) {
+      response.locals.writeAccessFailure = "authorization_changed";
+      return null;
+    }
+
+    const inserted = await tx.insert(erpRecordsTable).values(
+      DEFAULT_ACCOUNT_DEFINITIONS.map((data) => ({
+        organizationId: currentAuth.organizationId,
+        tableName: "accounts",
+        data,
+      })),
+    ).onConflictDoNothing().returning();
+    const records = await tx.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+      eq(erpRecordsTable.tableName, "accounts"),
+    ));
+    return { auth: currentAuth, created: inserted.length, records };
+  });
+
+  if (!result) {
+    const rejection = lockedWriteRejection(response);
+    response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+    return;
+  }
+  if (result.created > 0) {
+    await audit(result.auth, response, "accounts_initialized", "accounts");
+  }
+  response.json({
+    created: result.created,
+    accounts: result.records.map((record) => ({ ...record.data, id: record.id, userId: result.auth.organizationId })),
+  });
+});
 
 router.get("/data/:table", requireAuth, requireSubscriptionAccess, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
@@ -246,6 +309,10 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
   } catch (error) {
     if (error instanceof MutationRejected) {
       response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    if (access.tableName === "accounts" && isUniqueConstraintViolation(error)) {
+      response.status(409).json({ error: "رقم الحساب مستخدم داخل هذه المنشأة." });
       return;
     }
     throw error;
@@ -500,6 +567,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
   } catch (error) {
     if (error instanceof MutationRejected) {
       response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    if (access.tableName === "accounts" && isUniqueConstraintViolation(error)) {
+      response.status(409).json({ error: "رقم الحساب مستخدم داخل هذه المنشأة." });
       return;
     }
     throw error;

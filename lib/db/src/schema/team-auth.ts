@@ -182,6 +182,9 @@ export const erpRecordsTable = pgTable(
   (table) => [
     index("erp_records_organization_table_idx").on(table.organizationId, table.tableName),
     uniqueIndex("erp_records_client_operation_unique").on(table.organizationId, table.tableName, table.clientOperationId),
+    uniqueIndex("erp_records_account_code_unique")
+      .on(table.organizationId, table.tableName, sql`(${table.data}->>'code')`)
+      .where(sql`${table.tableName} = 'accounts'`),
   ],
 );
 
