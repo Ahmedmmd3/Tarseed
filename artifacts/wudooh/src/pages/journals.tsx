@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog,
   DialogContent,
@@ -16,12 +17,62 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Search, Trash2, Calendar, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Plus, Search, Trash2, Calendar, FileText, CheckCircle2, AlertCircle, Sparkles, LoaderCircle } from 'lucide-react';
 
 type JournalStatusFilter = 'all' | 'draft' | 'posted';
 
 const today = () => new Date().toISOString().split('T')[0];
 const money = (amount: number) => new Intl.NumberFormat('ar-SA', { minimumFractionDigits: 2 }).format(amount);
+const aiParseError = 'لم أفهم العملية، حاول بوصف أوضح';
+
+type JournalSuggestion = {
+  description: string;
+  lines: Array<Omit<JournalLine, 'id'>>;
+};
+
+function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: string }>): JournalSuggestion {
+  const normalized = rawSuggestion
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(normalized);
+  } catch {
+    throw new Error(aiParseError);
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error(aiParseError);
+  const candidate = parsed as { description?: unknown; lines?: unknown };
+  if (typeof candidate.description !== 'string' || !candidate.description.trim() || !Array.isArray(candidate.lines) || candidate.lines.length < 2) {
+    throw new Error(aiParseError);
+  }
+
+  const accountIds = new Set(accounts.map((account) => account.id));
+  const lines = candidate.lines.map((line) => {
+    if (!line || typeof line !== 'object') throw new Error(aiParseError);
+    const candidateLine = line as { accountId?: unknown; debit?: unknown; credit?: unknown };
+    if (
+      typeof candidateLine.accountId !== 'string'
+      || !accountIds.has(candidateLine.accountId)
+      || typeof candidateLine.debit !== 'number'
+      || typeof candidateLine.credit !== 'number'
+      || !Number.isFinite(candidateLine.debit)
+      || !Number.isFinite(candidateLine.credit)
+      || candidateLine.debit < 0
+      || candidateLine.credit < 0
+      || ((candidateLine.debit > 0) === (candidateLine.credit > 0))
+    ) {
+      throw new Error(aiParseError);
+    }
+    return { accountId: candidateLine.accountId, debit: candidateLine.debit, credit: candidateLine.credit };
+  });
+
+  const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
+  const totalCredit = lines.reduce((sum, line) => sum + line.credit, 0);
+  if (totalDebit <= 0 || Math.abs(totalDebit - totalCredit) > 0.005) throw new Error(aiParseError);
+  return { description: candidate.description.trim(), lines };
+}
 
 export default function Journals() {
   const { journals, accounts, addJournal, postJournal } = useStore();
@@ -37,6 +88,11 @@ export default function Journals() {
     { accountId: '', debit: 0, credit: 0 },
     { accountId: '', debit: 0, credit: 0 },
   ]);
+  const [isSuggestionOpen, setIsSuggestionOpen] = useState(false);
+  const [operationDescription, setOperationDescription] = useState('');
+  const [suggestionError, setSuggestionError] = useState('');
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [isAiSuggested, setIsAiSuggested] = useState(false);
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.status === 'active').sort((left, right) => left.code.localeCompare(right.code, 'en')), [accounts]);
   const filteredJournals = useMemo(() => journals
@@ -61,6 +117,47 @@ export default function Journals() {
     setDate(today());
     setDescription('');
     setLines([{ accountId: '', debit: 0, credit: 0 }, { accountId: '', debit: 0, credit: 0 }]);
+    setIsAiSuggested(false);
+  };
+
+  const openSuggestionDialog = () => {
+    setOperationDescription('');
+    setSuggestionError('');
+    setIsSuggestionOpen(true);
+  };
+
+  const handleSuggestionSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const operation = operationDescription.trim();
+    if (!operation || isSuggesting) return;
+    setIsSuggesting(true);
+    setSuggestionError('');
+
+    try {
+      const response = await fetch('/api/assistant/journal-suggestion', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operation,
+          accounts: activeAccounts.map((account) => ({ id: account.id, code: account.code, name: account.name })),
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as { suggestion?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر اقتراح القيد حالياً.');
+      if (!payload.suggestion) throw new Error(aiParseError);
+      const suggestion = parseJournalSuggestion(payload.suggestion, activeAccounts);
+      setDescription(suggestion.description);
+      setLines(suggestion.lines);
+      setIsAiSuggested(true);
+      setSuggestionError('');
+      setIsSuggestionOpen(false);
+      setIsAddOpen(true);
+    } catch (error) {
+      setSuggestionError(error instanceof Error && error.message === aiParseError ? aiParseError : error instanceof Error ? error.message : 'تعذر اقتراح القيد حالياً.');
+    } finally {
+      setIsSuggesting(false);
+    }
   };
 
   const handleAddSubmit = async (event: React.FormEvent) => {
@@ -95,17 +192,58 @@ export default function Journals() {
           <h2 className="text-2xl font-bold tracking-tight text-slate-900">القيود اليومية</h2>
           <p className="mt-1 text-sm text-slate-500">تسجيل وتوثيق الحركات المالية بنظام القيد المزدوج.</p>
         </div>
-        <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm(); }}>
-          <DialogTrigger asChild>
-            <Button onClick={() => { resetForm(); setIsAddOpen(true); }} className="shadow-sm" data-testid="button-add-journal">
-              <Plus className="ml-2 h-4 w-4" />
-              قيد يومية جديد
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="text-xl">إضافة قيد يومية</DialogTitle>
-            </DialogHeader>
+        <div className="flex flex-wrap items-center gap-2">
+          <Dialog open={isSuggestionOpen} onOpenChange={(open) => { setIsSuggestionOpen(open); if (!open) setSuggestionError(''); }}>
+            <DialogTrigger asChild>
+              <Button type="button" variant="outline" onClick={openSuggestionDialog} className="border-blue-200 bg-blue-50 text-blue-700 shadow-sm hover:bg-blue-100 hover:text-blue-800" data-testid="button-ai-journal-suggestion">
+                <Sparkles className="ml-2 h-4 w-4" />
+                اقتراح بالذكاء الاصطناعي
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>اقتراح قيد بالذكاء الاصطناعي</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleSuggestionSubmit} className="space-y-5 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="operation-description" className="text-sm font-semibold">صف العملية بكلماتك</Label>
+                  <Textarea
+                    id="operation-description"
+                    value={operationDescription}
+                    onChange={(event) => setOperationDescription(event.target.value)}
+                    placeholder="مثال: دفعنا إيجار 3000 ريال نقداً"
+                    className="min-h-28 resize-y"
+                    maxLength={2000}
+                    required
+                    data-testid="input-ai-operation-description"
+                  />
+                </div>
+                {suggestionError && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{suggestionError}</div>}
+                <DialogFooter>
+                  <DialogClose asChild><Button type="button" variant="ghost">إلغاء</Button></DialogClose>
+                  <Button type="submit" disabled={!operationDescription.trim() || isSuggesting} className="min-w-[135px] bg-blue-600 hover:bg-blue-700" data-testid="button-submit-ai-suggestion">
+                    {isSuggesting ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+                    {isSuggesting ? 'جارٍ الاقتراح...' : 'اقترح القيد'}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm(); }}>
+            <DialogTrigger asChild>
+              <Button onClick={() => { resetForm(); setIsAddOpen(true); }} className="shadow-sm" data-testid="button-add-journal">
+                <Plus className="ml-2 h-4 w-4" />
+                قيد يومية جديد
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <div className="flex flex-wrap items-center gap-3">
+                  <DialogTitle className="text-xl">إضافة قيد يومية</DialogTitle>
+                  {isAiSuggested && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700" data-testid="badge-ai-suggested"><Sparkles className="ml-1 h-3.5 w-3.5" />مقترح بالذكاء الاصطناعي</Badge>}
+                </div>
+              </DialogHeader>
             <form onSubmit={handleAddSubmit} className="space-y-5 py-4" noValidate>
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -202,8 +340,9 @@ export default function Journals() {
                 </Button>
               </DialogFooter>
             </form>
-          </DialogContent>
-        </Dialog>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">

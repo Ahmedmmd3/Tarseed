@@ -5,12 +5,19 @@ import { requireAuth, requireSubscriptionAccess } from "../middleware/team-auth"
 const router: IRouter = Router();
 const MAX_QUESTION_LENGTH = 2_000;
 const MAX_CONTEXT_LENGTH = 12_000;
+const MAX_ACCOUNT_LIST_LENGTH = 200;
 
 const assistantSystemPrompt = `أنت مساعد مالي ذكي داخل نظام ترصيد للمحاسبة.
 حلّل الأسئلة المالية والمحاسبية فقط اعتماداً على السياق المرسل.
 أجب بالعربية الفصحى المبسطة وباختصار ووضوح، واستخدم الأرقام كما وردت في السياق.
 إذا لم تتوفر بيانات كافية، اذكر ذلك بوضوح ولا تخترع أرقاماً.
 إذا كان السؤال خارج نطاق التحليل المالي والمحاسبي، أجب حرفياً: هذا خارج اختصاصي`;
+
+const journalSuggestionSystemPrompt = (accountList: string) => `أنت محاسب قانوني عربي. عندك دليل الحسابات التالي:
+${accountList}
+المستخدم يصف عملية مالية. أعد JSON فقط بهذا الشكل:
+{"description":"string","lines":[{"accountId":"string","debit":0,"credit":0}]}
+تأكد أن مجموع المدين = مجموع الدائن. لا تضف أي نص خارج الـ JSON.`;
 
 router.post(
   "/assistant/financial",
@@ -55,6 +62,56 @@ ${question}`,
     } catch (error) {
       request.log?.error?.({ err: error }, "Financial assistant request failed");
       response.status(502).json({ error: "تعذر الوصول إلى المساعد المالي حالياً. حاول مرة أخرى." });
+    }
+  },
+);
+
+router.post(
+  "/assistant/journal-suggestion",
+  requireAuth,
+  requireSubscriptionAccess,
+  async (request: Request, response: Response): Promise<void> => {
+    const operation = typeof request.body?.operation === "string" ? request.body.operation.trim() : "";
+    const accounts: unknown[] = Array.isArray(request.body?.accounts) ? request.body.accounts : [];
+
+    if (!operation || operation.length > MAX_QUESTION_LENGTH || accounts.length === 0 || accounts.length > MAX_ACCOUNT_LIST_LENGTH) {
+      response.status(400).json({ error: "يرجى إدخال وصف للعملية ودليل حسابات صالح." });
+      return;
+    }
+
+    const accountList = accounts
+      .filter((account): account is { id: string; code: string; name: string } => {
+        if (!account || typeof account !== "object") return false;
+        const candidate = account as Record<string, unknown>;
+        return typeof candidate.id === "string"
+          && typeof candidate.code === "string"
+          && typeof candidate.name === "string";
+      })
+      .map((account) => `${account.id} | ${account.code} - ${account.name}`)
+      .join("\n");
+
+    if (!accountList) {
+      response.status(400).json({ error: "تعذر قراءة دليل الحسابات." });
+      return;
+    }
+
+    try {
+      const completion = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        system: journalSuggestionSystemPrompt(accountList),
+        messages: [{ role: "user", content: operation }],
+      });
+      const suggestion = completion.content
+        .map((block) => block.type === "text" ? block.text : "")
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+
+      response.json({ suggestion });
+    } catch (error) {
+      request.log?.error?.({ err: error }, "Journal suggestion request failed");
+      response.status(502).json({ error: "تعذر اقتراح القيد حالياً. حاول مرة أخرى." });
     }
   },
 );
