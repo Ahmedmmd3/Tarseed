@@ -40,6 +40,7 @@ const EMAIL_VERIFICATION_MINUTES = 10;
 const EMAIL_VERIFICATION_RESEND_SECONDS = 60;
 const EMAIL_VERIFICATION_MAX_ATTEMPTS = 5;
 const EMAIL_VERIFICATION_RESPONSE_FLOOR_MS = 300;
+const REGISTRATION_RESPONSE_FLOOR_MS = 300;
 const connectors = new ReplitConnectors();
 
 function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" | "dataGeneration" | "planId" | "subscriptionStatus" | "trialStartedAt" | "trialEndsAt" | "subscriptionStartedAt" | "subscriptionEndsAt" | "platformAccessSuspendedAt">) {
@@ -144,7 +145,17 @@ async function sendResendEmail({ to, subject, html }: { to: string; subject: str
   if (!configuredSender && process.env.NODE_ENV === "production") {
     throw new Error("Email delivery is not configured.");
   }
-  if (process.env.NODE_ENV === "test") return;
+  if (process.env.NODE_ENV === "test") {
+    const testDelayMs = Number.parseInt(process.env.EMAIL_DELIVERY_TEST_DELAY_MS ?? "0", 10);
+    const shouldFailForTest = process.env.EMAIL_DELIVERY_TEST_FAIL === "1";
+    if (Number.isFinite(testDelayMs) && testDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, testDelayMs));
+    }
+    if (shouldFailForTest) {
+      throw new Error("Simulated email delivery failure.");
+    }
+    return;
+  }
   const response = await connectors.proxy("resend", "/emails", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -182,6 +193,29 @@ async function sendEmailVerificationCode({
         <p>إذا لم تطلب إنشاء الحساب، تجاهل هذه الرسالة.</p>
       </div>`,
   });
+}
+
+async function deliverEmailVerificationCode({
+  email,
+  name,
+  code,
+  userId,
+  operation,
+}: {
+  email: string;
+  name: string;
+  code: string;
+  userId: number;
+  operation: string;
+}): Promise<void> {
+  try {
+    await sendEmailVerificationCode({ email, name, code });
+  } catch (error) {
+    logger.error(
+      { err: error, userId, operation },
+      "Unable to deliver email verification code",
+    );
+  }
 }
 
 async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string; name: string; resetUrl: string }): Promise<void> {
@@ -330,6 +364,7 @@ function validateMemberBody(body: Record<string, unknown>, requiresPassword: boo
 }
 
 router.post("/auth/register", async (request: Request, response: Response): Promise<void> => {
+  const startedAt = Date.now();
   const body = request.body as Record<string, unknown>;
   const projectName = typeof body.projectName === "string" ? body.projectName.trim() : "";
   const phone = typeof body.phone === "string" ? normalizeSaudiPhone(body.phone) : null;
@@ -344,86 +379,120 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
     });
     return;
   }
-  const existing = await db.select({ id: teamUsersTable.id }).from(teamUsersTable).where(or(
-    eq(teamUsersTable.email, validation.data.email),
-    eq(teamUsersTable.phone, phone),
-  )).limit(1);
-  if (existing.length) {
-    response.status(409).json({ error: "تعذر إنشاء الحساب بهذه البيانات." });
-    return;
-  }
+
   const passwordHash = await hashPassword(validation.data.password);
   const { password: _password, ...ownerData } = validation.data;
-  const trialStartedAt = new Date();
-  const trialEndsAt = new Date(trialStartedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
   const verificationCode = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.EMAIL_VERIFICATION_TEST_CODE ?? "")
     ? process.env.EMAIL_VERIFICATION_TEST_CODE as string
     : createEmailVerificationCode();
-  let result: { organizationId: number; userId: number };
-  try {
-    result = await db.transaction(async (tx) => {
-      const [organization] = await tx.insert(organizationsTable).values({
-        name: projectName,
-        planId: "trial",
-        subscriptionStatus: "trialing",
-        trialStartedAt,
-        trialEndsAt,
-      }).returning();
-      const [user] = await tx.insert(teamUsersTable).values({
-        organizationId: organization.id,
-        ...ownerData,
-        phone,
-        emailVerifiedAt: null,
-        passwordHash,
-        status: "pending_email_verification",
-        roleId: "owner",
-        permissions: Object.fromEntries([...PERMISSION_KEYS].map(key => [key, true])),
-        locationScope: "all",
-        warehouseIds: [],
-      }).returning();
-      await tx.insert(emailVerificationCodesTable).values({
-        userId: user.id,
-        codeHash: hashEmailVerificationCode(verificationCode),
-        expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
+
+  type RegistrationResult =
+    | { kind: "created"; userId: number }
+    | { kind: "pending"; userId: number; email: string; name: string; code: string | null }
+    | { kind: "existing" };
+  let result: RegistrationResult | null = null;
+  for (let attempt = 0; attempt < 2 && !result; attempt += 1) {
+    try {
+      result = await db.transaction(async (tx): Promise<RegistrationResult> => {
+        const [existing] = await tx.select().from(teamUsersTable).where(or(
+          eq(teamUsersTable.email, validation.data.email),
+          eq(teamUsersTable.phone, phone),
+        )).for("update");
+        if (existing) {
+          if (existing.status !== "pending_email_verification") {
+            return { kind: "existing" };
+          }
+
+          const now = new Date();
+          const [existingCode] = await tx.select().from(emailVerificationCodesTable)
+            .where(eq(emailVerificationCodesTable.userId, existing.id))
+            .for("update");
+          if (existingCode && now.getTime() - existingCode.lastSentAt.getTime() < EMAIL_VERIFICATION_RESEND_SECONDS * 1000) {
+            return { kind: "pending", userId: existing.id, email: existing.email, name: existing.name, code: null };
+          }
+
+          const values = {
+            codeHash: hashEmailVerificationCode(verificationCode),
+            expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
+            usedAt: null,
+            attemptCount: 0,
+            lastSentAt: now,
+          };
+          if (existingCode) {
+            await tx.update(emailVerificationCodesTable).set(values).where(eq(emailVerificationCodesTable.id, existingCode.id));
+          } else {
+            await tx.insert(emailVerificationCodesTable).values({ userId: existing.id, ...values });
+          }
+          return { kind: "pending", userId: existing.id, email: existing.email, name: existing.name, code: verificationCode };
+        }
+
+        const trialStartedAt = new Date();
+        const trialEndsAt = new Date(trialStartedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
+        const [organization] = await tx.insert(organizationsTable).values({
+          name: projectName,
+          planId: "trial",
+          subscriptionStatus: "trialing",
+          trialStartedAt,
+          trialEndsAt,
+        }).returning();
+        const [user] = await tx.insert(teamUsersTable).values({
+          organizationId: organization.id,
+          ...ownerData,
+          phone,
+          emailVerifiedAt: null,
+          passwordHash,
+          status: "pending_email_verification",
+          roleId: "owner",
+          permissions: Object.fromEntries([...PERMISSION_KEYS].map(key => [key, true])),
+          locationScope: "all",
+          warehouseIds: [],
+        }).returning();
+        await tx.insert(emailVerificationCodesTable).values({
+          userId: user.id,
+          codeHash: hashEmailVerificationCode(verificationCode),
+          expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
+        });
+        await tx.insert(erpRecordsTable).values([
+          {
+            organizationId: organization.id,
+            tableName: "warehouses",
+            data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+          },
+          {
+            organizationId: organization.id,
+            tableName: "warehouses",
+            data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+          },
+        ]);
+        return { kind: "created", userId: user.id };
       });
-      await tx.insert(erpRecordsTable).values([
-        {
-          organizationId: organization.id,
-          tableName: "warehouses",
-          data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
-        },
-        {
-          organizationId: organization.id,
-          tableName: "warehouses",
-          data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
-        },
-      ]);
-      return { organizationId: organization.id, userId: user.id };
-    });
-  } catch (error) {
-    if ((error as { code?: string }).code === "23505") {
-      response.status(409).json({ error: "تعذر إنشاء الحساب بهذه البيانات." });
-      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== "23505" || attempt > 0) throw error;
     }
-    throw error;
   }
 
-  try {
-    await sendEmailVerificationCode({
+  if (!result) throw new Error("Registration transaction did not return a result.");
+
+  if (result.kind === "created") {
+    void deliverEmailVerificationCode({
       email: validation.data.email,
       name: validation.data.name,
       code: verificationCode,
+      userId: result.userId,
+      operation: "email_verification_delivery",
     });
-  } catch (error) {
-    await db.delete(organizationsTable).where(eq(organizationsTable.id, result.organizationId));
-    logger.error(
-      { err: error, userId: result.userId, operation: "email_verification_delivery" },
-      "Unable to deliver registration verification email",
-    );
-    response.status(503).json({ error: "تعذر إرسال رمز التفعيل حالياً. تحقق من البريد وحاول مرة أخرى." });
-    return;
+  } else if (result.kind === "pending" && result.code) {
+    void deliverEmailVerificationCode({
+      email: result.email,
+      name: result.name,
+      code: result.code,
+      userId: result.userId,
+      operation: "registration_pending_verification_delivery",
+    });
   }
 
+  const remainingDelay = REGISTRATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+  if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
   response.status(202).json({
     verificationRequired: true,
     email: validation.data.email,

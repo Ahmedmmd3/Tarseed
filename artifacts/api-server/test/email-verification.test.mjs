@@ -45,7 +45,8 @@ function sessionCookie(response) {
 }
 
 async function registration(email, phone, customPassword = password) {
-  return request("/auth/register", {
+  const startedAt = performance.now();
+  const result = await request("/auth/register", {
     body: {
       projectName: `منشأة تحقق ${suffix}`,
       name: "مالك التحقق",
@@ -54,6 +55,7 @@ async function registration(email, phone, customPassword = password) {
       password: customPassword,
     },
   });
+  return { ...result, durationMs: performance.now() - startedAt };
 }
 
 async function trackOrganization(email) {
@@ -118,7 +120,7 @@ test("ينشئ الحساب معلّقاً ولا يصدر جلسة قبل رم�
   assert.equal(emailLogin.response.status, 200, JSON.stringify(emailLogin.payload));
 });
 
-test("يرفض كلمة المرور الضعيفة والجوال المكرر", async () => {
+test("يرفض كلمة المرور الضعيفة ويقبل الجوال المكرر برسالة عامة", async () => {
   const weak = await registration(`weak-${suffix}@example.test`, mobile(), "weakpassword");
   assert.equal(weak.response.status, 400, JSON.stringify(weak.payload));
   assert.match(weak.payload.error, /حرف كبير/);
@@ -128,9 +130,110 @@ test("يرفض كلمة المرور الضعيفة والجوال المكرر"
   const phone = mobile();
   const first = await registration(firstEmail, phone);
   assert.equal(first.response.status, 202, JSON.stringify(first.payload));
-  await trackOrganization(firstEmail);
+  const firstUser = await trackOrganization(firstEmail);
+  const oldLastSentAt = new Date(Date.now() - 120_000);
+  await db.update(emailVerificationCodesTable)
+    .set({ lastSentAt: oldLastSentAt })
+    .where(eq(emailVerificationCodesTable.userId, firstUser.id));
+  const pendingDuplicate = await registration(firstEmail, phone);
+  assert.equal(pendingDuplicate.response.status, 202, JSON.stringify(pendingDuplicate.payload));
+  assert.deepEqual(pendingDuplicate.payload, first.payload);
+  const [reissuedCode] = await db.select().from(emailVerificationCodesTable)
+    .where(eq(emailVerificationCodesTable.userId, firstUser.id));
+  assert.ok(reissuedCode.lastSentAt > oldLastSentAt);
+
   const duplicate = await registration(duplicateEmail, phone);
-  assert.equal(duplicate.response.status, 409, JSON.stringify(duplicate.payload));
+  assert.equal(duplicate.response.status, 202, JSON.stringify(duplicate.payload));
+  assert.deepEqual(duplicate.payload, {
+    verificationRequired: true,
+    email: duplicateEmail,
+    expiresInSeconds: 600,
+  });
+  assert.equal(sessionCookie(duplicate.response), null);
+  const [unchangedUser] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, firstUser.id));
+  assert.equal(unchangedUser.email, firstEmail);
+  assert.equal(unchangedUser.phone, `+966${phone.slice(1)}`);
+  assert.equal(unchangedUser.name, firstUser.name);
+});
+
+test("يوحّد رد التسجيل للحساب النشط دون تعديل بياناته أو إصدار جلسة", async () => {
+  const email = `active-duplicate-${suffix}@example.test`;
+  const phone = mobile();
+  const created = await registration(email, phone);
+  assert.equal(created.response.status, 202, JSON.stringify(created.payload));
+  const user = await trackOrganization(email);
+  await db.update(emailVerificationCodesTable)
+    .set({ lastSentAt: new Date(Date.now() - 120_000) })
+    .where(eq(emailVerificationCodesTable.userId, user.id));
+  const verified = await request("/auth/email-verification/verify", {
+    body: { email, code: verificationCode },
+  });
+  assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
+  const [activeSnapshot] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, user.id));
+  const duplicate = await registration(email, phone);
+  assert.equal(duplicate.response.status, 202, JSON.stringify(duplicate.payload));
+  assert.deepEqual(duplicate.payload, created.payload);
+  assert.equal(sessionCookie(duplicate.response), null);
+  const [unchangedUser] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, user.id));
+  assert.deepEqual(unchangedUser, activeSnapshot);
+});
+
+test("لا يكشف الحساب النشط عند تأخر مزود البريد أو فشل الإرسال", async () => {
+  const activeEmail = `provider-active-${suffix}@example.test`;
+  const activePhone = mobile();
+  const createdActive = await registration(activeEmail, activePhone);
+  const activeUser = await trackOrganization(activeEmail);
+  const verified = await request("/auth/email-verification/verify", {
+    body: { email: activeEmail, code: verificationCode },
+  });
+  assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
+  const [activeSnapshot] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, activeUser.id));
+
+  process.env.EMAIL_DELIVERY_TEST_DELAY_MS = "900";
+  process.env.EMAIL_DELIVERY_TEST_FAIL = "1";
+  try {
+    const newEmail = `provider-new-${suffix}@example.test`;
+    const createdNew = await registration(newEmail, mobile());
+    const existingActive = await registration(activeEmail, activePhone);
+    await trackOrganization(newEmail);
+
+    assert.equal(createdNew.response.status, 202, JSON.stringify(createdNew.payload));
+    assert.equal(existingActive.response.status, 202, JSON.stringify(existingActive.payload));
+    assert.deepEqual(
+      { ...createdNew.payload, email: "<submitted-email>" },
+      { ...existingActive.payload, email: "<submitted-email>" },
+    );
+    assert.equal(sessionCookie(createdNew.response), null);
+    assert.equal(sessionCookie(existingActive.response), null);
+    assert.ok(createdNew.durationMs < 700, `new registration took ${createdNew.durationMs}ms`);
+    assert.ok(existingActive.durationMs < 700, `existing registration took ${existingActive.durationMs}ms`);
+    assert.ok(
+      Math.abs(createdNew.durationMs - existingActive.durationMs) < 200,
+      `registration timing differed by ${Math.abs(createdNew.durationMs - existingActive.durationMs)}ms`,
+    );
+    const [unchangedActive] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, activeUser.id));
+    assert.deepEqual(unchangedActive, activeSnapshot);
+  } finally {
+    delete process.env.EMAIL_DELIVERY_TEST_DELAY_MS;
+    delete process.env.EMAIL_DELIVERY_TEST_FAIL;
+  }
+});
+
+test("يقبل سباقي تسجيل للهوية نفسها دون إنشاء حسابين", async () => {
+  const email = `concurrent-${suffix}@example.test`;
+  const phone = mobile();
+  const [first, second] = await Promise.all([
+    registration(email, phone),
+    registration(email, phone),
+  ]);
+  assert.equal(first.response.status, 202, JSON.stringify(first.payload));
+  assert.equal(second.response.status, 202, JSON.stringify(second.payload));
+  assert.deepEqual(first.payload, second.payload);
+  assert.equal(sessionCookie(first.response), null);
+  assert.equal(sessionCookie(second.response), null);
+  const users = await db.select().from(teamUsersTable).where(eq(teamUsersTable.email, email));
+  assert.equal(users.length, 1);
+  organizationIds.push(users[0].organizationId);
 });
 
 test("يرفض الرمز المنتهي ويعيد الإصدار دون كشف حالة الحساب", async () => {

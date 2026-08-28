@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import router from "./routes";
 import { dispatchStripeWebhookSecurityAlert, logger, recordExpiredStripeWebhookSignature } from "./lib/logger";
 import { isExpiredStripeSignatureError, processStripeWebhook } from "./lib/stripe-webhooks";
+import { normalizeSaudiPhone } from "./lib/team-auth";
 
 const app: Express = express();
 // The API service is reached by Replit's shared proxy over the local loopback
@@ -64,20 +65,20 @@ const trustedOrigins = new Set(
     .map((domain) => `https://${domain.trim()}`),
 );
 type RateLimitRule = { limit: number; windowMs: number };
-type PublicAuthRateLimitRule = { byIp: RateLimitRule; byEmail: RateLimitRule };
+type PublicAuthRateLimitRule = { byIp: RateLimitRule; byIdentity: RateLimitRule };
 type RateLimitBucket = { count: number; resetAt: number };
 const rateLimitBuckets = new Map<string, RateLimitBucket>();
 const loginRule: PublicAuthRateLimitRule = {
   byIp: { limit: 10, windowMs: 15 * 60 * 1000 },
-  byEmail: { limit: 5, windowMs: 15 * 60 * 1000 },
+  byIdentity: { limit: 5, windowMs: 15 * 60 * 1000 },
 };
 const passwordResetRule: PublicAuthRateLimitRule = {
   byIp: { limit: 5, windowMs: 15 * 60 * 1000 },
-  byEmail: { limit: 3, windowMs: 15 * 60 * 1000 },
+  byIdentity: { limit: 3, windowMs: 15 * 60 * 1000 },
 };
 const verificationRule: PublicAuthRateLimitRule = {
   byIp: { limit: 10, windowMs: 15 * 60 * 1000 },
-  byEmail: { limit: 5, windowMs: 15 * 60 * 1000 },
+  byIdentity: { limit: 5, windowMs: 15 * 60 * 1000 },
 };
 const preSessionAuthPaths = new Set([
   "/api/auth/login",
@@ -125,23 +126,29 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     next();
     return;
   }
-  const identity = typeof request.body?.email === "string"
-    ? request.body.email.trim().toLowerCase()
-    : typeof request.body?.identifier === "string"
-      ? request.body.identifier.trim().toLowerCase()
-    : typeof request.body?.username === "string"
-      ? request.body.username.trim().toLowerCase()
-      : "";
+  const identityValues = [
+    typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "",
+    typeof request.body?.phone === "string" ? normalizeSaudiPhone(request.body.phone) ?? "" : "",
+    typeof request.body?.identifier === "string" ? request.body.identifier.trim().toLowerCase() : "",
+    typeof request.body?.username === "string" ? request.body.username.trim().toLowerCase() : "",
+  ];
   const byIp = consumeRateLimit(`${request.path}:ip:${request.ip}`, rule.byIp);
-  const identityHint = identity ? createHash("sha256").update(identity).digest("hex").slice(0, 16) : null;
-  const byEmail = identityHint
-    ? consumeRateLimit(`${request.path}:identity:${identityHint}`, rule.byEmail)
-    : { limited: false, retryAfterSeconds: 0 };
-  if (!byIp.limited && !byEmail.limited) {
+  const identityLimits = [...new Set(identityValues.filter(Boolean))].map((identity) => {
+    const identityHint = createHash("sha256").update(identity).digest("hex").slice(0, 16);
+    return consumeRateLimit(`${request.path}:identity:${identityHint}`, rule.byIdentity);
+  });
+  const byIdentity = identityLimits.reduce(
+    (current, next) => ({
+      limited: current.limited || next.limited,
+      retryAfterSeconds: Math.max(current.retryAfterSeconds, next.retryAfterSeconds),
+    }),
+    { limited: false, retryAfterSeconds: 0 },
+  );
+  if (!byIp.limited && !byIdentity.limited) {
     next();
     return;
   }
-  response.setHeader("Retry-After", String(Math.max(byIp.retryAfterSeconds, byEmail.retryAfterSeconds)));
+  response.setHeader("Retry-After", String(Math.max(byIp.retryAfterSeconds, byIdentity.retryAfterSeconds)));
   response.status(429).json({ error: "تم تجاوز عدد المحاولات المسموح. انتظر قليلاً ثم أعد المحاولة." });
 }
 
