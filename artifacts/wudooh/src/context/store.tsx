@@ -134,6 +134,28 @@ const initialAccounts: Account[] = [
   { id: '8', code: '5100', name: 'مصروفات الرواتب', type: 'expense', parent: null, balance: 2000, status: 'active' },
 ];
 
+const defaultChartOfAccounts: Array<Omit<Account, 'id'>> = [
+  { code: '1000', name: 'الصندوق والنقدية', type: 'asset', parent: null, balance: 0, status: 'active' },
+  { code: '1100', name: 'البنك', type: 'asset', parent: null, balance: 0, status: 'active' },
+  { code: '1200', name: 'العملاء', type: 'asset', parent: null, balance: 0, status: 'active' },
+  { code: '1300', name: 'المخزون', type: 'asset', parent: null, balance: 0, status: 'active' },
+  { code: '1400', name: 'مصروفات مقدمة', type: 'asset', parent: null, balance: 0, status: 'active' },
+  { code: '2000', name: 'الموردون', type: 'liability', parent: null, balance: 0, status: 'active' },
+  { code: '2100', name: 'مصروفات مستحقة', type: 'liability', parent: null, balance: 0, status: 'active' },
+  { code: '2200', name: 'قروض والتزامات تمويلية', type: 'liability', parent: null, balance: 0, status: 'active' },
+  { code: '3000', name: 'رأس المال', type: 'equity', parent: null, balance: 0, status: 'active' },
+  { code: '3100', name: 'الأرباح المحتجزة', type: 'equity', parent: null, balance: 0, status: 'active' },
+  { code: '4000', name: 'المبيعات', type: 'revenue', parent: null, balance: 0, status: 'active' },
+  { code: '4100', name: 'إيرادات أخرى', type: 'revenue', parent: null, balance: 0, status: 'active' },
+  { code: '5000', name: 'المشتريات', type: 'expense', parent: null, balance: 0, status: 'active' },
+  { code: '5100', name: 'الرواتب والأجور', type: 'expense', parent: null, balance: 0, status: 'active' },
+  { code: '5200', name: 'الإيجار', type: 'expense', parent: null, balance: 0, status: 'active' },
+  { code: '5300', name: 'الخدمات', type: 'expense', parent: null, balance: 0, status: 'active' },
+  { code: '5400', name: 'التسويق والإعلان', type: 'expense', parent: null, balance: 0, status: 'active' },
+  { code: '5500', name: 'مصروفات أخرى', type: 'expense', parent: null, balance: 0, status: 'active' },
+];
+const defaultAccountsSeedStoragePrefix = 'wudooh-default-accounts-seeded-';
+
 const initialJournals: Journal[] = [
   {
     id: '1',
@@ -424,15 +446,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setSyncQueue(queue);
       await flushSyncQueue(sessionKey, queue);
       const canReadAccounting = sharedUser.roleId === 'owner' || sharedUser.permissions.accounting === true;
-      const [accountResult, journalResult, receivableResult, closureResult] = await Promise.all([
+       const [accountResult, journalResult, receivableResult, closureResult] = await Promise.all([
         canReadAccounting ? getRecords<Account>('accounts') : Promise.resolve([]),
         canReadAccounting ? getRecords<Journal>('journalEntries') : Promise.resolve([]),
         canReadAccounting ? getRecords<Receivable>('receivables') : Promise.resolve([]),
         canReadAccounting ? getRecords<FinancialClosure>('financialClosures') : Promise.resolve([]),
       ]);
       if (!isActive()) return;
+       let sharedAccounts = accountResult.map(normalizeAccount);
+       const seedStorageKey = `${defaultAccountsSeedStoragePrefix}${sharedUser.organizationId}`;
+       const seedState = localStorage.getItem(seedStorageKey);
+       if (canReadAccounting && (sharedAccounts.length === 0 || seedState === 'pending')) {
+         if (seedState !== 'complete') {
+           localStorage.setItem(seedStorageKey, 'pending');
+           const existingCodes = new Set(sharedAccounts.map((account) => account.code));
+           for (const defaultAccount of defaultChartOfAccounts) {
+             if (existingCodes.has(defaultAccount.code)) continue;
+             try {
+               const created = await createRecord<Account>('accounts', defaultAccount, sharedUser.dataGeneration);
+               sharedAccounts.push(normalizeAccount(created));
+               existingCodes.add(defaultAccount.code);
+             } catch {
+               break;
+             }
+           }
+           if (defaultChartOfAccounts.every((account) => existingCodes.has(account.code))) {
+             localStorage.setItem(seedStorageKey, 'complete');
+           }
+         }
+       }
       const queueAfterSync = syncQueueRef.current;
-      setAccounts((current) => mergeQueuedRecords(accountResult.map(normalizeAccount), current, queueAfterSync, 'accounts'));
+       setAccounts((current) => mergeQueuedRecords(sharedAccounts, current, queueAfterSync, 'accounts'));
       setJournals((current) => mergeQueuedRecords(journalResult.map(normalizeJournal), current, queueAfterSync, 'journalEntries'));
       setReceivables((current) => mergeQueuedRecords(receivableResult.map(normalizeReceivable), current, queueAfterSync, 'receivables'));
       setClosures(closureResult.map(normalizeClosure));
