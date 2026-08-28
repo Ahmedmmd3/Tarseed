@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
-import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, CheckCircle2, PackageOpen, ReceiptText, ShoppingCart, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, Copy, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
 import { Link } from 'wouter';
 import { useStore } from '@/context/store';
+import { Button } from '@/components/ui/button';
 
 type Module = { title: string; description: string; href: string; icon: LucideIcon; tone: string; permission: string; ready: boolean; id: string };
 
@@ -16,8 +17,22 @@ const modules: Module[] = [
   { title: 'العمليات والمشاريع', description: 'تابع أعمالك ومشاريعك من البداية حتى الإنجاز.', href: '/operations', icon: BriefcaseBusiness, tone: 'bg-orange-50 text-orange-700', permission: 'operations', ready: true, id: 'operations' },
 ];
 
+type StoredWeeklySummary = {
+  summary: string;
+  generatedAt: string;
+};
+
+const weeklySummaryStoragePrefix = 'wudooh-weekly-summary-v1';
+
 export default function Overview() {
   const { accounts, receivables, journals, currentUser } = useStore();
+  const [weeklySummary, setWeeklySummary] = useState('');
+  const [weeklySummaryGeneratedAt, setWeeklySummaryGeneratedAt] = useState('');
+  const [isGeneratingWeeklySummary, setIsGeneratingWeeklySummary] = useState(false);
+  const [weeklySummaryError, setWeeklySummaryError] = useState('');
+  const [weeklySummaryStorageWarning, setWeeklySummaryStorageWarning] = useState('');
+  const [copyConfirmed, setCopyConfirmed] = useState(false);
+  const weeklySummaryIdentityRef = useRef('');
   const totalRevenue = accounts.filter((account) => account.type === 'revenue').reduce((sum, account) => sum + account.balance, 0);
   const totalExpense = accounts.filter((account) => account.type === 'expense').reduce((sum, account) => sum + account.balance, 0);
   const netProfit = totalRevenue - totalExpense;
@@ -26,6 +41,82 @@ export default function Overview() {
   const pendingReceivables = receivables.filter((record) => record.status !== 'paid').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 4);
   const topExpenses = accounts.filter((account) => account.type === 'expense').sort((a, b) => b.balance - a.balance).slice(0, 4);
   const visibleModules = modules.filter((module) => !currentUser || currentUser.roleId === 'owner' || currentUser.permissions[module.permission] === true);
+  const canUseWeeklySummary = Boolean(
+    currentUser
+    && (currentUser.roleId === 'owner' || (currentUser.permissions.sales === true && currentUser.permissions.accounting === true)),
+  );
+  weeklySummaryIdentityRef.current = currentUser && canUseWeeklySummary
+    ? `${currentUser.organizationId}:${currentUser.id}`
+    : '';
+
+  useEffect(() => {
+    setWeeklySummary('');
+    setWeeklySummaryGeneratedAt('');
+    setWeeklySummaryError('');
+    setWeeklySummaryStorageWarning('');
+    setCopyConfirmed(false);
+    setIsGeneratingWeeklySummary(false);
+    if (!currentUser || !canUseWeeklySummary) return;
+    const stored = readStoredWeeklySummary(currentUser.organizationId, currentUser.id);
+    if (!stored) return;
+    setWeeklySummary(stored.summary);
+    setWeeklySummaryGeneratedAt(stored.generatedAt);
+  }, [canUseWeeklySummary, currentUser?.id, currentUser?.organizationId]);
+
+  const generateWeeklySummary = async () => {
+    if (isGeneratingWeeklySummary) return;
+    const requestIdentity = weeklySummaryIdentityRef.current;
+    if (!requestIdentity) return;
+    setIsGeneratingWeeklySummary(true);
+    setWeeklySummaryError('');
+    setWeeklySummaryStorageWarning('');
+    setCopyConfirmed(false);
+    try {
+      const response = await fetch('/api/assistant/weekly-summary', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        summary?: string;
+        generatedAt?: string;
+        error?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر توليد الملخص الأسبوعي.');
+      const summary = typeof payload.summary === 'string' ? payload.summary.trim() : '';
+      const generatedAt = typeof payload.generatedAt === 'string' ? payload.generatedAt : new Date().toISOString();
+      if (!summary) throw new Error('لم يتمكن المساعد من إنشاء الملخص الأسبوعي.');
+      if (weeklySummaryIdentityRef.current !== requestIdentity) return;
+      setWeeklySummary(summary);
+      setWeeklySummaryGeneratedAt(generatedAt);
+      if (currentUser) {
+        try {
+          localStorage.setItem(
+            weeklySummaryStorageKey(currentUser.organizationId, currentUser.id),
+            JSON.stringify({ summary, generatedAt } satisfies StoredWeeklySummary),
+          );
+        } catch {
+          setWeeklySummaryStorageWarning('تم توليد الملخص، لكن تعذر حفظه على هذا الجهاز.');
+        }
+      }
+    } catch (error) {
+      if (weeklySummaryIdentityRef.current === requestIdentity) {
+        setWeeklySummaryError(error instanceof Error ? error.message : 'تعذر توليد الملخص الأسبوعي.');
+      }
+    } finally {
+      if (weeklySummaryIdentityRef.current === requestIdentity) setIsGeneratingWeeklySummary(false);
+    }
+  };
+
+  const copyWeeklySummary = async () => {
+    if (!weeklySummary) return;
+    try {
+      await copyPlainText(weeklySummary);
+      setCopyConfirmed(true);
+      window.setTimeout(() => setCopyConfirmed(false), 2_000);
+    } catch {
+      setWeeklySummaryError('تعذر نسخ الملخص. يمكنك تحديد النص ونسخه يدوياً.');
+    }
+  };
 
   return (
     <div className="space-y-6" data-testid="page-overview">
@@ -62,6 +153,69 @@ export default function Overview() {
           <MetricCard title="الذمم الدائنة (علينا)" value={formatCurrency(totalPayables)} note="مبالغ مستحقة للموردين" icon={ArrowDownRight} tone="rose" testId="text-total-payables" />
         </div>
       </section>
+
+      {canUseWeeklySummary && <section
+        className="overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50 via-white to-teal-50 p-5 shadow-xl shadow-slate-950/10 sm:p-6"
+        aria-labelledby="weekly-summary-heading"
+        data-testid="card-weekly-summary"
+      >
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-indigo-700">
+              <Sparkles className="h-5 w-5" aria-hidden="true" />
+            </span>
+            <div>
+              <h2 id="weekly-summary-heading" className="text-lg font-black text-slate-900">ملخصك الأسبوعي</h2>
+              <p className="mt-1 text-xs text-slate-500" data-testid="text-weekly-summary-updated">
+                {weeklySummaryGeneratedAt
+                  ? `آخر تحديث: ${formatGeneratedAt(weeklySummaryGeneratedAt)}`
+                  : 'آخر تحديث: لم يتم التوليد بعد'}
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            onClick={() => void generateWeeklySummary()}
+            disabled={isGeneratingWeeklySummary}
+            className="gap-2 bg-indigo-700 hover:bg-indigo-800"
+            data-testid="button-generate-weekly-summary"
+          >
+            {isGeneratingWeeklySummary
+              ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+              : <Sparkles className="h-4 w-4" aria-hidden="true" />}
+            {isGeneratingWeeklySummary ? 'جارٍ توليد الملخص...' : 'توليد الملخص الآن'}
+          </Button>
+        </div>
+
+        <div className="mt-5 rounded-xl border border-indigo-100 bg-white/75 p-4">
+          {weeklySummary ? (
+            <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700" data-testid="text-weekly-summary">{weeklySummary}</p>
+          ) : (
+            <p className="text-sm leading-7 text-slate-500">ولّد ملخصاً سريعاً لأداء مشروعك خلال الأيام السبعة الماضية.</p>
+          )}
+        </div>
+
+        {weeklySummaryError && (
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert" data-testid="error-weekly-summary">
+            {weeklySummaryError}
+          </div>
+        )}
+
+        {weeklySummaryStorageWarning && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status" data-testid="warning-weekly-summary-storage">
+            {weeklySummaryStorageWarning}
+          </div>
+        )}
+
+        {weeklySummary && (
+          <div className="mt-4 flex justify-end">
+            <Button type="button" variant="outline" size="sm" onClick={() => void copyWeeklySummary()} className="gap-2 bg-white/80" data-testid="button-copy-weekly-summary">
+              {copyConfirmed ? <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+              {copyConfirmed ? 'تم النسخ' : 'نسخ'}
+            </Button>
+          </div>
+        )}
+      </section>}
 
       <section aria-labelledby="modules-heading">
         <div className="mb-4 flex items-end justify-between gap-4 text-white">
@@ -107,4 +261,47 @@ function EmptyState({ text }: { text: string }) {
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
+}
+
+function weeklySummaryStorageKey(organizationId: number, userId: number): string {
+  return `${weeklySummaryStoragePrefix}-${organizationId}-${userId}`;
+}
+
+function readStoredWeeklySummary(organizationId: number, userId: number): StoredWeeklySummary | null {
+  try {
+    const raw = localStorage.getItem(weeklySummaryStorageKey(organizationId, userId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredWeeklySummary>;
+    if (typeof parsed.summary !== 'string' || !parsed.summary.trim() || typeof parsed.generatedAt !== 'string') return null;
+    if (Number.isNaN(new Date(parsed.generatedAt).getTime())) return null;
+    return { summary: parsed.summary.trim(), generatedAt: parsed.generatedAt };
+  } catch {
+    return null;
+  }
+}
+
+function formatGeneratedAt(generatedAt: string): string {
+  const date = new Date(generatedAt);
+  if (Number.isNaN(date.getTime())) return 'غير معروف';
+  return new Intl.DateTimeFormat('ar-SA', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Riyadh',
+  }).format(date);
+}
+
+async function copyPlainText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.style.position = 'fixed';
+  textArea.style.opacity = '0';
+  document.body.appendChild(textArea);
+  textArea.select();
+  const copied = document.execCommand('copy');
+  textArea.remove();
+  if (!copied) throw new Error('copy_failed');
 }
