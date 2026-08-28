@@ -36,6 +36,7 @@ export const teamUsersTable = pgTable(
     email: text("email").notNull(),
     phone: text("phone"),
     emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+    phoneVerifiedAt: timestamp("phone_verified_at", { withTimezone: true }),
     name: text("name").notNull(),
     passwordHash: text("password_hash").notNull(),
     roleId: text("role_id").notNull().default("sales"),
@@ -108,6 +109,28 @@ export const emailVerificationCodesTable = pgTable(
   (table) => [
     uniqueIndex("email_verification_codes_user_unique").on(table.userId),
     index("email_verification_codes_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export const phoneVerificationCodesTable = pgTable(
+  "phone_verification_codes",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => teamUsersTable.id, { onDelete: "cascade" }),
+    phone: text("phone").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("phone_verification_codes_user_unique").on(table.userId),
+    index("phone_verification_codes_phone_idx").on(table.phone),
+    index("phone_verification_codes_expires_idx").on(table.expiresAt),
   ],
 );
 

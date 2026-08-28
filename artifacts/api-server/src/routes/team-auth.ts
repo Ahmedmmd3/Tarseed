@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, or, sql } from "drizzle-orm";
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import {
   authSessionsTable,
@@ -8,24 +8,29 @@ import {
   erpRecordsTable,
   organizationsTable,
   passwordResetTokensTable,
+  phoneVerificationCodesTable,
   teamAuditLogsTable,
   teamUsersTable,
   type TeamUser,
 } from "@workspace/db";
 import {
   createEmailVerificationCode,
+  createPhoneVerificationCode,
   createPasswordResetToken,
   createSessionToken,
   hashEmailVerificationCode,
+  hashPhoneVerificationCode,
   hashPassword,
   hashSessionToken,
   isEmail,
   normalizeSaudiPhone,
   validatePassword,
   verifyCodeHash,
+  verifyPhoneCodeHash,
   verifyPassword,
 } from "../lib/team-auth";
 import { logger } from "../lib/logger";
+import { isSmsDeliveryConfigured, sendSmsWithTwilio } from "../lib/sms";
 import { getAuthContext, hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, subscriptionState, type AuthContext, type SubscriptionFields } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -40,6 +45,10 @@ const EMAIL_VERIFICATION_MINUTES = 10;
 const EMAIL_VERIFICATION_RESEND_SECONDS = 60;
 const EMAIL_VERIFICATION_MAX_ATTEMPTS = 5;
 const EMAIL_VERIFICATION_RESPONSE_FLOOR_MS = 300;
+const PHONE_VERIFICATION_MINUTES = 10;
+const PHONE_VERIFICATION_RESEND_SECONDS = 60;
+const PHONE_VERIFICATION_MAX_ATTEMPTS = 5;
+const PHONE_VERIFICATION_RESPONSE_FLOOR_MS = 300;
 const REGISTRATION_RESPONSE_FLOOR_MS = 300;
 const connectors = new ReplitConnectors();
 
@@ -62,6 +71,7 @@ function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" 
     email: user.email,
     phone: user.phone,
     emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
+    phoneVerifiedAt: user.phoneVerifiedAt?.toISOString() ?? null,
     name: user.name,
     roleId: user.roleId,
     permissions: user.permissions,
@@ -79,6 +89,16 @@ function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" 
       subscriptionEndsAt: subscription.subscriptionEndsAt?.toISOString() ?? null,
     },
   };
+}
+
+function maskedPhone(phone: string): string {
+  return `${phone.slice(0, 4)}****${phone.slice(-3)}`;
+}
+
+function pendingVerification(user: TeamUser): "email" | "phone" | null {
+  if (!user.emailVerifiedAt && user.status === "pending_email_verification") return "email";
+  if (user.phone && !user.phoneVerifiedAt) return "phone";
+  return null;
 }
 
 function setSession(response: Response, token: string): void {
@@ -214,6 +234,40 @@ async function deliverEmailVerificationCode({
     logger.error(
       { err: error, userId, operation },
       "Unable to deliver email verification code",
+    );
+  }
+}
+
+async function sendPhoneVerificationCode({
+  phone,
+  code,
+}: {
+  phone: string;
+  code: string;
+}): Promise<void> {
+  await sendSmsWithTwilio({
+    to: phone,
+    body: `رمز التحقق من رقم جوالك في ترصيد هو ${code}. ينتهي خلال ${PHONE_VERIFICATION_MINUTES} دقائق. لا تشارك الرمز مع أحد.`,
+  });
+}
+
+async function deliverPhoneVerificationCode({
+  phone,
+  code,
+  userId,
+  operation,
+}: {
+  phone: string;
+  code: string;
+  userId: number;
+  operation: string;
+}): Promise<void> {
+  try {
+    await sendPhoneVerificationCode({ phone, code });
+  } catch (error) {
+    logger.error(
+      { err: error, userId, provider: "twilio", operation },
+      "Unable to deliver phone verification code",
     );
   }
 }
@@ -379,16 +433,31 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
     });
     return;
   }
+  if (!isSmsDeliveryConfigured()) {
+    response.status(503).json({ error: "إرسال رموز الجوال غير مهيأ حالياً. حاول لاحقاً." });
+    return;
+  }
 
   const passwordHash = await hashPassword(validation.data.password);
   const { password: _password, ...ownerData } = validation.data;
   const verificationCode = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.EMAIL_VERIFICATION_TEST_CODE ?? "")
     ? process.env.EMAIL_VERIFICATION_TEST_CODE as string
     : createEmailVerificationCode();
+  const phoneVerificationCode = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.PHONE_VERIFICATION_TEST_CODE ?? "")
+    ? process.env.PHONE_VERIFICATION_TEST_CODE as string
+    : createPhoneVerificationCode();
 
   type RegistrationResult =
-    | { kind: "created"; userId: number }
-    | { kind: "pending"; userId: number; email: string; name: string; code: string | null }
+    | { kind: "created"; userId: number; organizationId: number }
+    | {
+        kind: "pending";
+        userId: number;
+        email: string;
+        name: string;
+        phone: string | null;
+        emailCode: string | null;
+        phoneCode: string | null;
+      }
     | { kind: "existing" };
   let result: RegistrationResult | null = null;
   for (let attempt = 0; attempt < 2 && !result; attempt += 1) {
@@ -399,7 +468,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           eq(teamUsersTable.phone, phone),
         )).for("update");
         if (existing) {
-          if (existing.status !== "pending_email_verification") {
+          if (!pendingVerification(existing)) {
             return { kind: "existing" };
           }
 
@@ -407,23 +476,52 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           const [existingCode] = await tx.select().from(emailVerificationCodesTable)
             .where(eq(emailVerificationCodesTable.userId, existing.id))
             .for("update");
-          if (existingCode && now.getTime() - existingCode.lastSentAt.getTime() < EMAIL_VERIFICATION_RESEND_SECONDS * 1000) {
-            return { kind: "pending", userId: existing.id, email: existing.email, name: existing.name, code: null };
+          const maySendEmail = !existing.emailVerifiedAt
+            && (!existingCode || now.getTime() - existingCode.lastSentAt.getTime() >= EMAIL_VERIFICATION_RESEND_SECONDS * 1000);
+          if (maySendEmail) {
+            const values = {
+              codeHash: hashEmailVerificationCode(verificationCode),
+              expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
+              usedAt: null,
+              attemptCount: 0,
+              lastSentAt: now,
+            };
+            if (existingCode) {
+              await tx.update(emailVerificationCodesTable).set(values).where(eq(emailVerificationCodesTable.id, existingCode.id));
+            } else {
+              await tx.insert(emailVerificationCodesTable).values({ userId: existing.id, ...values });
+            }
           }
 
-          const values = {
-            codeHash: hashEmailVerificationCode(verificationCode),
-            expiresAt: new Date(now.getTime() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
-            usedAt: null,
-            attemptCount: 0,
-            lastSentAt: now,
-          };
-          if (existingCode) {
-            await tx.update(emailVerificationCodesTable).set(values).where(eq(emailVerificationCodesTable.id, existingCode.id));
-          } else {
-            await tx.insert(emailVerificationCodesTable).values({ userId: existing.id, ...values });
+          const [existingPhoneCode] = await tx.select().from(phoneVerificationCodesTable)
+            .where(eq(phoneVerificationCodesTable.userId, existing.id))
+            .for("update");
+          const maySendPhone = Boolean(existing.phone && !existing.phoneVerifiedAt)
+            && (!existingPhoneCode || now.getTime() - existingPhoneCode.lastSentAt.getTime() >= PHONE_VERIFICATION_RESEND_SECONDS * 1000);
+          if (maySendPhone && existing.phone) {
+            const values = {
+              phone: existing.phone,
+              codeHash: hashPhoneVerificationCode(phoneVerificationCode),
+              expiresAt: new Date(now.getTime() + PHONE_VERIFICATION_MINUTES * 60 * 1000),
+              usedAt: null,
+              attemptCount: 0,
+              lastSentAt: now,
+            };
+            if (existingPhoneCode) {
+              await tx.update(phoneVerificationCodesTable).set(values).where(eq(phoneVerificationCodesTable.id, existingPhoneCode.id));
+            } else {
+              await tx.insert(phoneVerificationCodesTable).values({ userId: existing.id, ...values });
+            }
           }
-          return { kind: "pending", userId: existing.id, email: existing.email, name: existing.name, code: verificationCode };
+          return {
+            kind: "pending",
+            userId: existing.id,
+            email: existing.email,
+            name: existing.name,
+            phone: existing.phone,
+            emailCode: maySendEmail ? verificationCode : null,
+            phoneCode: maySendPhone ? phoneVerificationCode : null,
+          };
         }
 
         const trialStartedAt = new Date();
@@ -440,6 +538,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           ...ownerData,
           phone,
           emailVerifiedAt: null,
+          phoneVerifiedAt: null,
           passwordHash,
           status: "pending_email_verification",
           roleId: "owner",
@@ -451,6 +550,12 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           userId: user.id,
           codeHash: hashEmailVerificationCode(verificationCode),
           expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
+        });
+        await tx.insert(phoneVerificationCodesTable).values({
+          userId: user.id,
+          phone,
+          codeHash: hashPhoneVerificationCode(phoneVerificationCode),
+          expiresAt: new Date(Date.now() + PHONE_VERIFICATION_MINUTES * 60 * 1000),
         });
         await tx.insert(erpRecordsTable).values([
           {
@@ -464,10 +569,12 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
             data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
           },
         ]);
-        return { kind: "created", userId: user.id };
+        return { kind: "created", userId: user.id, organizationId: organization.id };
       });
     } catch (error) {
-      if ((error as { code?: string }).code !== "23505" || attempt > 0) throw error;
+      const errorCode = (error as { code?: string; cause?: { code?: string } }).code
+        ?? (error as { cause?: { code?: string } }).cause?.code;
+      if (errorCode !== "23505" || attempt > 0) throw error;
     }
   }
 
@@ -481,14 +588,40 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
       userId: result.userId,
       operation: "email_verification_delivery",
     });
-  } else if (result.kind === "pending" && result.code) {
+  } else if (result.kind === "pending" && result.emailCode) {
     void deliverEmailVerificationCode({
       email: result.email,
       name: result.name,
-      code: result.code,
+      code: result.emailCode,
       userId: result.userId,
       operation: "registration_pending_verification_delivery",
     });
+  }
+  try {
+    if (result.kind === "created") {
+      await sendPhoneVerificationCode({ phone, code: phoneVerificationCode });
+    } else if (result.kind === "pending" && result.phone && result.phoneCode) {
+      await sendPhoneVerificationCode({ phone: result.phone, code: result.phoneCode });
+    }
+  } catch (error) {
+    if (result.kind === "created") {
+      await db.delete(organizationsTable).where(eq(organizationsTable.id, result.organizationId));
+    } else if (result.kind === "pending") {
+      await db.delete(phoneVerificationCodesTable).where(eq(phoneVerificationCodesTable.userId, result.userId));
+    }
+    request.log.error(
+      {
+        err: error,
+        userId: result.kind === "existing" ? null : result.userId,
+        provider: "twilio",
+        operation: "registration_phone_verification_delivery",
+      },
+      "Unable to deliver registration phone verification code",
+    );
+    const remainingDelay = REGISTRATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+    if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+    response.status(503).json({ error: "تعذر إرسال رمز الجوال حالياً. حاول لاحقاً." });
+    return;
   }
 
   const remainingDelay = REGISTRATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
@@ -496,6 +629,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
   response.status(202).json({
     verificationRequired: true,
     email: validation.data.email,
+    phone: maskedPhone(phone),
     expiresInSeconds: EMAIL_VERIFICATION_MINUTES * 60,
   });
 });
@@ -515,6 +649,10 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
     : phone
       ? eq(teamUsersTable.phone, phone)
       : null;
+  if (phone && !isSmsDeliveryConfigured()) {
+    response.status(503).json({ error: "الدخول برقم الجوال غير متاح حتى تفعيل خدمة التحقق. استخدم البريد الإلكتروني." });
+    return;
+  }
   if (!identityCondition) {
     response.status(401).json({ error: "البريد الإلكتروني أو رقم الجوال أو كلمة المرور غير صحيحة." });
     return;
@@ -545,8 +683,13 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
       return null;
     }
-    if (user.status === "pending_email_verification") {
-      return { kind: "unverified" as const, email: user.email };
+    const verification = pendingVerification(user);
+    const allowLegacyEmailAccess = verification === "phone"
+      && user.status === "active"
+      && isEmail(email)
+      && !isSmsDeliveryConfigured();
+    if (verification && !allowLegacyEmailAccess) {
+      return { kind: "unverified" as const, verification, email: user.email, phone: user.phone };
     }
     if (user.status !== "active") return null;
     const token = createSessionToken();
@@ -563,10 +706,14 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
     return;
   }
   if (result.kind === "unverified") {
+    const isEmailVerification = result.verification === "email";
     response.status(403).json({
-      error: "يجب تفعيل البريد الإلكتروني قبل تسجيل الدخول.",
-      code: "email_verification_required",
+      error: isEmailVerification
+        ? "يجب تفعيل البريد الإلكتروني قبل تسجيل الدخول."
+        : "يجب التحقق من ملكية رقم الجوال قبل تسجيل الدخول.",
+      code: isEmailVerification ? "email_verification_required" : "phone_verification_required",
       email: result.email,
+      ...(result.phone ? { phone: maskedPhone(result.phone) } : {}),
     });
     return;
   }
@@ -602,7 +749,7 @@ router.post("/auth/email-verification/verify", async (request: Request, response
     const [user] = await tx.select().from(teamUsersTable)
       .where(eq(teamUsersTable.email, email))
       .for("update");
-    if (!user || user.status !== "pending_email_verification") return { kind: "invalid" as const };
+    if (!user || user.emailVerifiedAt) return { kind: "invalid" as const };
 
     const [verification] = await tx.select().from(emailVerificationCodesTable)
       .where(eq(emailVerificationCodesTable.userId, user.id))
@@ -627,13 +774,21 @@ router.post("/auth/email-verification/verify", async (request: Request, response
       .where(eq(organizationsTable.id, user.organizationId))
       .for("update");
     if (!organization) return { kind: "invalid" as const };
+    const needsPhoneVerification = Boolean(user.phone && !user.phoneVerifiedAt);
     const [activatedUser] = await tx.update(teamUsersTable)
-      .set({ status: "active", emailVerifiedAt: now, updatedAt: now })
+      .set({
+        status: needsPhoneVerification ? "pending_phone_verification" : "active",
+        emailVerifiedAt: now,
+        updatedAt: now,
+      })
       .where(eq(teamUsersTable.id, user.id))
       .returning();
     await tx.update(emailVerificationCodesTable)
       .set({ usedAt: now })
       .where(eq(emailVerificationCodesTable.id, verification.id));
+    if (needsPhoneVerification) {
+      return { kind: "phone_pending" as const, user: activatedUser };
+    }
     const token = createSessionToken();
     await tx.insert(authSessionsTable).values({
       userId: user.id,
@@ -651,6 +806,14 @@ router.post("/auth/email-verification/verify", async (request: Request, response
   }
   if (result.kind === "invalid") {
     response.status(400).json({ error: "رمز التفعيل غير صحيح أو انتهت صلاحيته." });
+    return;
+  }
+  if (result.kind === "phone_pending") {
+    response.json({
+      phoneVerificationRequired: true,
+      email,
+      phone: result.user.phone ? maskedPhone(result.user.phone) : null,
+    });
     return;
   }
 
@@ -682,7 +845,7 @@ router.post("/auth/email-verification/resend", async (request: Request, response
   const now = new Date();
   const issue = await db.transaction(async (tx) => {
     const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.email, email)).for("update");
-    if (!user || user.status !== "pending_email_verification") return null;
+    if (!user || user.emailVerifiedAt) return null;
     const [existingCode] = await tx.select().from(emailVerificationCodesTable)
       .where(eq(emailVerificationCodesTable.userId, user.id))
       .for("update");
@@ -716,6 +879,221 @@ router.post("/auth/email-verification/resend", async (request: Request, response
   const remainingDelay = EMAIL_VERIFICATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
   if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
   response.status(202).json({ message });
+});
+
+router.post("/auth/phone-verification/verify", async (request: Request, response: Response): Promise<void> => {
+  const startedAt = Date.now();
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const code = typeof request.body?.code === "string" ? request.body.code.replace(/\D/g, "") : "";
+  if (!isEmail(email) || !/^\d{6}$/.test(code)) {
+    response.status(400).json({ error: "أدخل البريد ورمز الجوال المكوّن من 6 أرقام." });
+    return;
+  }
+  const now = new Date();
+  const result = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.email, email)).for("update");
+    if (!user || !user.phone || user.phoneVerifiedAt) return { kind: "invalid" as const };
+    const [verification] = await tx.select().from(phoneVerificationCodesTable)
+      .where(eq(phoneVerificationCodesTable.userId, user.id))
+      .for("update");
+    if (!verification || verification.phone !== user.phone || verification.usedAt || verification.expiresAt <= now) {
+      return { kind: "invalid" as const };
+    }
+    if (verification.attemptCount >= PHONE_VERIFICATION_MAX_ATTEMPTS) return { kind: "limited" as const };
+    if (!verifyPhoneCodeHash(code, verification.codeHash)) {
+      const attemptCount = verification.attemptCount + 1;
+      await tx.update(phoneVerificationCodesTable).set({ attemptCount }).where(eq(phoneVerificationCodesTable.id, verification.id));
+      return attemptCount >= PHONE_VERIFICATION_MAX_ATTEMPTS ? { kind: "limited" as const } : { kind: "invalid" as const };
+    }
+    const emailPending = !user.emailVerifiedAt;
+    const [verifiedUser] = await tx.update(teamUsersTable).set({
+      phoneVerifiedAt: now,
+      status: emailPending ? "pending_email_verification" : "active",
+      updatedAt: now,
+    }).where(eq(teamUsersTable.id, user.id)).returning();
+    await tx.update(phoneVerificationCodesTable).set({ usedAt: now }).where(eq(phoneVerificationCodesTable.id, verification.id));
+    if (emailPending) return { kind: "email_pending" as const, user: verifiedUser };
+    const [organization] = await tx.select().from(organizationsTable).where(eq(organizationsTable.id, user.organizationId)).for("update");
+    if (!organization) return { kind: "invalid" as const };
+    const token = createSessionToken();
+    await tx.insert(authSessionsTable).values({
+      userId: user.id,
+      tokenHash: hashSessionToken(token),
+      expiresAt: new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000),
+    });
+    return { kind: "verified" as const, user: verifiedUser, organization, token };
+  });
+  const remainingDelay = PHONE_VERIFICATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+  if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+  if (result.kind === "limited") {
+    response.status(429).json({ error: "تم تجاوز محاولات رمز الجوال. اطلب رمزاً جديداً." });
+    return;
+  }
+  if (result.kind === "invalid") {
+    response.status(400).json({ error: "رمز الجوال غير صحيح أو انتهت صلاحيته." });
+    return;
+  }
+  if (result.kind === "email_pending") {
+    response.json({ emailVerificationRequired: true, email });
+    return;
+  }
+  setSession(response, result.token);
+  response.json({ user: safeUser(result.user, {
+    projectName: result.organization.name,
+    dataGeneration: result.organization.dataGeneration,
+    planId: result.organization.planId,
+    subscriptionStatus: result.organization.subscriptionStatus,
+    trialStartedAt: result.organization.trialStartedAt,
+    trialEndsAt: result.organization.trialEndsAt,
+    subscriptionStartedAt: result.organization.subscriptionStartedAt,
+    subscriptionEndsAt: result.organization.subscriptionEndsAt,
+    platformAccessSuspendedAt: result.organization.platformAccessSuspendedAt,
+  }) });
+});
+
+router.post("/auth/phone-verification/resend", async (request: Request, response: Response): Promise<void> => {
+  const startedAt = Date.now();
+  const email = typeof request.body?.email === "string" ? request.body.email.trim().toLowerCase() : "";
+  const message = "إذا كان الحساب بانتظار توثيق الجوال، فسيصلك رمز جديد عبر SMS.";
+  if (!isEmail(email)) {
+    response.status(400).json({ error: "أدخل بريداً إلكترونياً صحيحاً." });
+    return;
+  }
+  if (!isSmsDeliveryConfigured()) {
+    response.status(503).json({ error: "إرسال رموز الجوال غير مهيأ حالياً. حاول لاحقاً." });
+    return;
+  }
+  const code = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.PHONE_VERIFICATION_TEST_CODE ?? "")
+    ? process.env.PHONE_VERIFICATION_TEST_CODE as string
+    : createPhoneVerificationCode();
+  const now = new Date();
+  const issue = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.email, email)).for("update");
+    if (!user || !user.phone || user.phoneVerifiedAt) return null;
+    const [existing] = await tx.select().from(phoneVerificationCodesTable)
+      .where(eq(phoneVerificationCodesTable.userId, user.id))
+      .for("update");
+    if (existing && now.getTime() - existing.lastSentAt.getTime() < PHONE_VERIFICATION_RESEND_SECONDS * 1000) return null;
+    const values = {
+      phone: user.phone,
+      codeHash: hashPhoneVerificationCode(code),
+      expiresAt: new Date(now.getTime() + PHONE_VERIFICATION_MINUTES * 60 * 1000),
+      usedAt: null,
+      attemptCount: 0,
+      lastSentAt: now,
+    };
+    if (existing) await tx.update(phoneVerificationCodesTable).set(values).where(eq(phoneVerificationCodesTable.id, existing.id));
+    else await tx.insert(phoneVerificationCodesTable).values({ userId: user.id, ...values });
+    return { user, verificationId: existing?.id ?? null };
+  });
+  if (issue) {
+    try {
+      await sendPhoneVerificationCode({ phone: issue.user.phone as string, code });
+    } catch (error) {
+      await db.delete(phoneVerificationCodesTable).where(eq(phoneVerificationCodesTable.userId, issue.user.id));
+      request.log.error(
+        { err: error, userId: issue.user.id, provider: "twilio", operation: "phone_verification_resend" },
+        "Unable to resend phone verification code",
+      );
+      response.status(503).json({ error: "تعذر إرسال رمز الجوال حالياً. حاول لاحقاً." });
+      return;
+    }
+  }
+  const remainingDelay = PHONE_VERIFICATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
+  if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+  response.status(202).json({ message });
+});
+
+router.post("/auth/phone-change/request", requireAuth, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const phone = typeof request.body?.phone === "string" ? normalizeSaudiPhone(request.body.phone) : null;
+  if (!phone) {
+    response.status(400).json({ error: "أدخل رقم جوال صحيحاً، مثل 05xxxxxxxx." });
+    return;
+  }
+  const code = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.PHONE_VERIFICATION_TEST_CODE ?? "")
+    ? process.env.PHONE_VERIFICATION_TEST_CODE as string
+    : createPhoneVerificationCode();
+  const now = new Date();
+  const result = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.id, auth.id)).for("update");
+    if (!user || user.status !== "active") return { kind: "missing" as const };
+    if (user.phone === phone && user.phoneVerifiedAt) return { kind: "same" as const };
+    const [conflict] = await tx.select({ id: teamUsersTable.id }).from(teamUsersTable)
+      .where(and(eq(teamUsersTable.phone, phone), sql`${teamUsersTable.id} <> ${user.id}`)).limit(1);
+    if (conflict) return { kind: "conflict" as const };
+    const [existing] = await tx.select().from(phoneVerificationCodesTable)
+      .where(eq(phoneVerificationCodesTable.userId, user.id)).for("update");
+    if (existing && !existing.usedAt && now.getTime() - existing.lastSentAt.getTime() < PHONE_VERIFICATION_RESEND_SECONDS * 1000) {
+      return { kind: "limited" as const };
+    }
+    const values = {
+      phone,
+      codeHash: hashPhoneVerificationCode(code),
+      expiresAt: new Date(now.getTime() + PHONE_VERIFICATION_MINUTES * 60 * 1000),
+      usedAt: null,
+      attemptCount: 0,
+      lastSentAt: now,
+    };
+    if (existing) await tx.update(phoneVerificationCodesTable).set(values).where(eq(phoneVerificationCodesTable.id, existing.id));
+    else await tx.insert(phoneVerificationCodesTable).values({ userId: user.id, ...values });
+    return { kind: "issued" as const, user };
+  });
+  if (result.kind === "missing") { response.status(401).json({ error: "غير مصرح لك بالوصول." }); return; }
+  if (result.kind === "same") { response.status(409).json({ error: "هذا هو رقم الجوال الموثق حالياً." }); return; }
+  if (result.kind === "conflict") { response.status(409).json({ error: "تعذر استخدام رقم الجوال هذا." }); return; }
+  if (result.kind === "limited") { response.status(429).json({ error: "انتظر دقيقة قبل إعادة إرسال الرمز." }); return; }
+  try {
+    await sendPhoneVerificationCode({ phone, code });
+  } catch (error) {
+    await db.delete(phoneVerificationCodesTable).where(eq(phoneVerificationCodesTable.userId, auth.id));
+    request.log.error({ err: error, userId: auth.id, provider: "twilio" }, "Unable to deliver phone change verification code");
+    response.status(503).json({ error: "تعذر إرسال رمز الجوال حالياً. حاول لاحقاً." });
+    return;
+  }
+  response.status(202).json({ message: "أرسلنا رمز التحقق إلى رقم الجوال الجديد.", phone: maskedPhone(phone) });
+});
+
+router.post("/auth/phone-change/verify", requireAuth, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const code = typeof request.body?.code === "string" ? request.body.code.replace(/\D/g, "") : "";
+  if (!/^\d{6}$/.test(code)) {
+    response.status(400).json({ error: "أدخل رمز الجوال المكوّن من 6 أرقام." });
+    return;
+  }
+  const now = new Date();
+  const result = await db.transaction(async (tx) => {
+    const [user] = await tx.select().from(teamUsersTable).where(eq(teamUsersTable.id, auth.id)).for("update");
+    const [verification] = await tx.select().from(phoneVerificationCodesTable)
+      .where(eq(phoneVerificationCodesTable.userId, auth.id)).for("update");
+    if (!user || !verification || verification.usedAt || verification.expiresAt <= now) return { kind: "invalid" as const };
+    if (verification.attemptCount >= PHONE_VERIFICATION_MAX_ATTEMPTS) return { kind: "limited" as const };
+    if (!verifyPhoneCodeHash(code, verification.codeHash)) {
+      const attemptCount = verification.attemptCount + 1;
+      await tx.update(phoneVerificationCodesTable).set({ attemptCount }).where(eq(phoneVerificationCodesTable.id, verification.id));
+      return attemptCount >= PHONE_VERIFICATION_MAX_ATTEMPTS ? { kind: "limited" as const } : { kind: "invalid" as const };
+    }
+    const [conflict] = await tx.select({ id: teamUsersTable.id }).from(teamUsersTable)
+      .where(and(eq(teamUsersTable.phone, verification.phone), sql`${teamUsersTable.id} <> ${user.id}`)).limit(1);
+    if (conflict) return { kind: "conflict" as const };
+    await tx.update(teamUsersTable).set({ phone: verification.phone, phoneVerifiedAt: now, updatedAt: now }).where(eq(teamUsersTable.id, user.id));
+    await tx.update(phoneVerificationCodesTable).set({ usedAt: now }).where(eq(phoneVerificationCodesTable.id, verification.id));
+    await tx.update(authSessionsTable).set({ revokedAt: now }).where(eq(authSessionsTable.userId, user.id));
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: user.organizationId,
+      actorId: user.id,
+      actorName: user.name,
+      action: "phone_changed",
+      entity: maskedPhone(verification.phone),
+    });
+    return { kind: "updated" as const };
+  });
+  if (result.kind === "limited") { response.status(429).json({ error: "تم تجاوز محاولات رمز الجوال. اطلب رمزاً جديداً." }); return; }
+  if (result.kind === "conflict") { response.status(409).json({ error: "تعذر استخدام رقم الجوال هذا." }); return; }
+  if (result.kind === "invalid") { response.status(400).json({ error: "رمز الجوال غير صحيح أو انتهت صلاحيته." }); return; }
+  response.clearCookie("wudooh_session", { path: "/" });
+  response.clearCookie(REMOTE_SESSION_HINT_COOKIE, { path: "/" });
+  response.json({ message: "تم توثيق رقم الجوال الجديد. سجّل الدخول مرة أخرى.", reauthenticationRequired: true });
 });
 
 router.post("/auth/password-reset/request", async (request: Request, response: Response): Promise<void> => {
@@ -828,6 +1206,13 @@ router.get("/auth/me", async (request: Request, response: Response): Promise<voi
 router.get("/auth/password-reset/status", requireAuth, requireSubscriptionAccess, requireOwner, (_request: Request, response: Response): void => {
   const sender = process.env.RESEND_FROM_EMAIL?.trim() || null;
   response.json({ emailDeliveryConfigured: Boolean(sender), sender });
+});
+
+router.get("/auth/phone-verification/status", requireAuth, requireSubscriptionAccess, requireOwner, (_request: Request, response: Response): void => {
+  response.json({
+    smsDeliveryConfigured: isSmsDeliveryConfigured(),
+    provider: "twilio",
+  });
 });
 
 router.get("/team/members", requireAuth, requireSubscriptionAccess, requireOwner, async (_request: Request, response: Response): Promise<void> => {

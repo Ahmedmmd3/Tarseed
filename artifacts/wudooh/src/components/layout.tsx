@@ -1,7 +1,10 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, RefreshCw, ShoppingCart, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useStore } from '@/context/store';
 
@@ -44,6 +47,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const { currentUser, signOut, connectionMode, canRetrySharedConnection, syncQueue, retrySharedConnection } = useStore();
   const [isSigningOut, setIsSigningOut] = React.useState(false);
+  const [phoneDialogOpen, setPhoneDialogOpen] = React.useState(false);
   const subscriptionRequired = isSubscriptionProtectedRoute(location);
   const authenticationBlocked = subscriptionRequired && !currentUser;
   const subscriptionBlocked = Boolean(currentUser && subscriptionRequired && !currentUser.subscription?.accessActive);
@@ -127,16 +131,115 @@ export function AppLayout({ children }: { children: ReactNode }) {
                   <div className="min-w-0"><p className="truncate text-sm font-bold">{currentUser.projectName}</p><p className="truncate text-xs text-slate-300">{currentUser.name} · {currentUser.email}</p></div>
                   <ConnectionStatus mode={connectionMode} canRetrySharedConnection={canRetrySharedConnection} syncQueue={syncQueue} onRetry={() => void retrySharedConnection()} />
                 </div>
-                <Button type="button" variant="outline" size="sm" className="shrink-0 border-white/20 bg-white/5 text-white hover:bg-white/15 hover:text-white" disabled={isSigningOut} onClick={async () => { setIsSigningOut(true); try { await signOut(); } finally { setIsSigningOut(false); } }} data-testid="button-sign-out">
-                  {isSigningOut ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <LogOut aria-hidden="true" />}{isSigningOut ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}
-                </Button>
+                <div className="flex shrink-0 gap-2">
+                  <Button type="button" variant="outline" size="sm" className="border-white/20 bg-white/5 text-white hover:bg-white/15 hover:text-white" onClick={() => setPhoneDialogOpen(true)} data-testid="button-change-phone">
+                    <Smartphone aria-hidden="true" />تغيير الجوال
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="border-white/20 bg-white/5 text-white hover:bg-white/15 hover:text-white" disabled={isSigningOut} onClick={async () => { setIsSigningOut(true); try { await signOut(); } finally { setIsSigningOut(false); } }} data-testid="button-sign-out">
+                    {isSigningOut ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <LogOut aria-hidden="true" />}{isSigningOut ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}
+                  </Button>
+                </div>
               </div>
             )}
             {canViewCurrentRoute ? children : <RestrictedRoute />}
           </div>
         </main>
       </div>
+      <PhoneChangeDialog
+        open={phoneDialogOpen}
+        currentPhone={currentUser?.phone ?? null}
+        onOpenChange={setPhoneDialogOpen}
+        onCompleted={() => void signOut()}
+      />
     </div>
+  );
+}
+
+function PhoneChangeDialog({
+  open,
+  currentPhone,
+  onOpenChange,
+  onCompleted,
+}: {
+  open: boolean;
+  currentPhone: string | null;
+  onOpenChange: (open: boolean) => void;
+  onCompleted: () => void;
+}) {
+  const [step, setStep] = React.useState<'phone' | 'code'>('phone');
+  const [phone, setPhone] = React.useState('');
+  const [code, setCode] = React.useState('');
+  const [maskedPhone, setMaskedPhone] = React.useState('');
+  const [error, setError] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setStep('phone');
+    setPhone('');
+    setCode('');
+    setMaskedPhone('');
+    setError('');
+  }, [open]);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch(step === 'phone' ? '/api/auth/phone-change/request' : '/api/auth/phone-change/verify', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(step === 'phone' ? { phone } : { code }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string; phone?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر تحديث رقم الجوال.');
+      if (step === 'phone') {
+        setMaskedPhone(payload.phone ?? phone);
+        setStep('code');
+        return;
+      }
+      onOpenChange(false);
+      onCompleted();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'تعذر تحديث رقم الجوال.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent dir="rtl" className="max-w-md">
+        <DialogHeader className="text-right sm:text-right">
+          <DialogTitle>تغيير رقم الجوال</DialogTitle>
+          <DialogDescription>
+            {step === 'phone'
+              ? `رقمك الحالي ${currentPhone ?? 'غير مسجل'}. سيبقى صالحاً حتى توثيق الرقم الجديد.`
+              : `أدخل الرمز المرسل إلى ${maskedPhone}. بعد النجاح ستحتاج إلى تسجيل الدخول مجدداً.`}
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="space-y-4">
+          {step === 'phone' ? (
+            <div className="space-y-2">
+              <Label htmlFor="new-phone">رقم الجوال الجديد</Label>
+              <Input id="new-phone" type="tel" dir="ltr" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="05xxxxxxxx" autoComplete="tel" data-testid="input-new-phone" />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor="new-phone-code">رمز التحقق</Label>
+              <Input id="new-phone-code" inputMode="numeric" autoComplete="one-time-code" dir="ltr" maxLength={6} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} className="text-center text-xl tracking-[0.35em]" data-testid="input-new-phone-code" />
+            </div>
+          )}
+          {error && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
+          <Button type="submit" className="w-full" disabled={loading || (step === 'phone' ? !phone.trim() : code.length !== 6)} data-testid="button-submit-phone-change">
+            {loading ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}
+            {loading ? 'جارٍ التحقق...' : step === 'phone' ? 'إرسال رمز التحقق' : 'توثيق الرقم الجديد'}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

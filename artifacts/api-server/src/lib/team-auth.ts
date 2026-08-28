@@ -19,6 +19,8 @@ export function createEmailVerificationCode(): string {
   return String(randomInt(100000, 1000000));
 }
 
+export const createPhoneVerificationCode = createEmailVerificationCode;
+
 export const PASSWORD_POLICY_MESSAGE =
   "كلمة المرور يجب أن تكون 8 أحرف على الأقل، وتحتوي على حرف كبير وحرف صغير ورقم ورمز خاص.";
 
@@ -59,10 +61,24 @@ export function hashEmailVerificationCode(code: string): string {
   return createHmac("sha256", secret).update(`email-verification:${code}`).digest("hex");
 }
 
-export function verifyCodeHash(code: string, expectedHash: string): boolean {
-  const actual = Buffer.from(hashEmailVerificationCode(code), "hex");
+export function hashPhoneVerificationCode(code: string): string {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error("SESSION_SECRET is required to protect phone verification codes.");
+  return createHmac("sha256", secret).update(`phone-verification:${code}`).digest("hex");
+}
+
+function verifyHash(actualHash: string, expectedHash: string): boolean {
+  const actual = Buffer.from(actualHash, "hex");
   const expected = Buffer.from(expectedHash, "hex");
   return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+export function verifyCodeHash(code: string, expectedHash: string): boolean {
+  return verifyHash(hashEmailVerificationCode(code), expectedHash);
+}
+
+export function verifyPhoneCodeHash(code: string, expectedHash: string): boolean {
+  return verifyHash(hashPhoneVerificationCode(code), expectedHash);
 }
 
 export async function hashPassword(password: string): Promise<string> {

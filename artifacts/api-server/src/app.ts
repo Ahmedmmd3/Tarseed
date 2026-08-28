@@ -86,6 +86,8 @@ const preSessionAuthPaths = new Set([
   "/api/auth/register",
   "/api/auth/email-verification/verify",
   "/api/auth/email-verification/resend",
+  "/api/auth/phone-verification/verify",
+  "/api/auth/phone-verification/resend",
   "/api/platform-auth/login",
 ]);
 
@@ -118,9 +120,14 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     ? loginRule
     : request.path === "/auth/register"
       ? verificationRule
+    : request.path === "/auth/phone-change/request"
+      ? verificationRule
     : request.path === "/auth/password-reset/request"
       ? passwordResetRule
-      : request.path === "/auth/email-verification/verify" || request.path === "/auth/email-verification/resend"
+    : request.path === "/auth/email-verification/verify"
+        || request.path === "/auth/email-verification/resend"
+        || request.path === "/auth/phone-verification/verify"
+        || request.path === "/auth/phone-verification/resend"
         ? verificationRule
       : null;
   if (!rule) {

@@ -62,6 +62,8 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [verificationEmail, setVerificationEmail] = useState('');
+  const [verificationPhone, setVerificationPhone] = useState('');
+  const [verificationChannel, setVerificationChannel] = useState<'email' | 'phone'>('email');
   const [verificationCode, setVerificationCode] = useState('');
   const [verificationMessage, setVerificationMessage] = useState('');
 
@@ -74,6 +76,8 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
     setRecoveryEmail('');
     setRecoveryMessage('');
     setVerificationEmail('');
+    setVerificationPhone('');
+    setVerificationChannel('email');
     setVerificationCode('');
     setVerificationMessage('');
   }, [initialMode, open]);
@@ -163,9 +167,14 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
         code?: string;
         email?: string;
         verificationRequired?: boolean;
+        phoneVerificationRequired?: boolean;
+        emailVerificationRequired?: boolean;
+        phone?: string | null;
       };
       if (mode === 'register' && response.ok && payload.verificationRequired) {
         setVerificationEmail(payload.email ?? form.email.trim().toLowerCase());
+        setVerificationPhone(payload.phone ?? form.phone.trim());
+        setVerificationChannel('email');
         setVerificationCode('');
         setVerificationMessage('أرسلنا رمزاً من 6 أرقام إلى بريدك. أدخله لإكمال إنشاء الحساب.');
         setScreen('verification');
@@ -175,6 +184,16 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
         setVerificationEmail(payload.email ?? form.email.trim().toLowerCase());
         setVerificationCode('');
         setVerificationMessage('حسابك بانتظار تفعيل البريد الإلكتروني.');
+        setVerificationChannel('email');
+        setScreen('verification');
+        return;
+      }
+      if (mode === 'login' && response.status === 403 && payload.code === 'phone_verification_required') {
+        setVerificationEmail(payload.email ?? form.email.trim().toLowerCase());
+        setVerificationPhone(payload.phone ?? '');
+        setVerificationCode('');
+        setVerificationChannel('phone');
+        setVerificationMessage('حسابك بانتظار التحقق من ملكية رقم الجوال.');
         setScreen('verification');
         return;
       }
@@ -204,14 +223,36 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
     setError('');
     setIsSubmitting(true);
     try {
-      const response = await fetch('/api/auth/email-verification/verify', {
+      const response = await fetch(`/api/auth/${verificationChannel}-verification/verify`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: verificationEmail, code: verificationCode }),
       });
-      const payload = await response.json().catch(() => ({})) as { user?: unknown; error?: string };
-      if (!response.ok || !payload.user) throw new Error(payload.error ?? 'تعذر تفعيل الحساب.');
+      const payload = await response.json().catch(() => ({})) as {
+        user?: unknown;
+        error?: string;
+        phoneVerificationRequired?: boolean;
+        emailVerificationRequired?: boolean;
+        phone?: string | null;
+        email?: string;
+      };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر تفعيل الحساب.');
+      if (payload.phoneVerificationRequired) {
+        setVerificationChannel('phone');
+        setVerificationPhone(payload.phone ?? verificationPhone);
+        setVerificationCode('');
+        setVerificationMessage('تم تفعيل البريد. أدخل الآن الرمز المرسل إلى جوالك.');
+        return;
+      }
+      if (payload.emailVerificationRequired) {
+        setVerificationChannel('email');
+        setVerificationEmail(payload.email ?? verificationEmail);
+        setVerificationCode('');
+        setVerificationMessage('تم توثيق الجوال. أدخل الآن الرمز المرسل إلى بريدك.');
+        return;
+      }
+      if (!payload.user) throw new Error('تعذر تفعيل الحساب.');
       document.cookie = `${remoteSessionHintCookie}=1; Max-Age=${14 * 24 * 60 * 60}; Path=/; SameSite=Lax`;
       setForm(emptyForm);
       setVerificationCode('');
@@ -229,7 +270,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
     setVerificationMessage('');
     setIsSubmitting(true);
     try {
-      const response = await fetch('/api/auth/email-verification/resend', {
+      const response = await fetch(`/api/auth/${verificationChannel}-verification/resend`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: verificationEmail }),
@@ -282,7 +323,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                {screen === 'recovery'
                  ? 'استعادة كلمة المرور'
                   : screen === 'verification'
-                    ? 'تفعيل البريد الإلكتروني'
+                    ? verificationChannel === 'email' ? 'تفعيل البريد الإلكتروني' : 'توثيق رقم الجوال'
                  : mode === 'register'
                    ? 'أنشئ سجل منشأتك'
                    : mode === 'admin'
@@ -293,7 +334,9 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                {screen === 'recovery'
                 ? 'أدخل بريد حسابك وسنرسل لك رابطاً آمناً لاختيار كلمة مرور جديدة.'
                  : screen === 'verification'
-                   ? `أدخل الرمز المرسل إلى ${verificationEmail || 'بريدك الإلكتروني'}.`
+                    ? `أدخل الرمز المرسل إلى ${verificationChannel === 'email'
+                      ? verificationEmail || 'بريدك الإلكتروني'
+                      : verificationPhone || 'رقم جوالك'}.`
                  : mode === 'register'
                    ? 'ابدأ بسجل محاسبي مشترك لفريقك، ويمكنك دعوة الأعضاء لاحقاً.'
                    : mode === 'admin'
@@ -374,7 +417,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                   placeholder="000000"
                   autoFocus
                   aria-invalid={Boolean(error)}
-                  data-testid="input-email-verification-code"
+                  data-testid={`input-${verificationChannel}-verification-code`}
                 />
                 <p className="text-center text-xs text-slate-500">الرمز صالح لمدة 10 دقائق ويُستخدم مرة واحدة.</p>
               </div>
@@ -388,7 +431,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                   {error}
                 </div>
               )}
-              <Button type="submit" className="h-11 w-full bg-primary text-base hover:bg-teal-500" disabled={isSubmitting} data-testid="button-verify-email">
+              <Button type="submit" className="h-11 w-full bg-primary text-base hover:bg-teal-500" disabled={isSubmitting} data-testid={`button-verify-${verificationChannel}`}>
                 {isSubmitting ? <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" /> : <ShieldCheck className="h-4 w-4" aria-hidden="true" />}
                 {isSubmitting ? 'جارٍ التحقق...' : 'تفعيل الحساب والدخول'}
               </Button>
