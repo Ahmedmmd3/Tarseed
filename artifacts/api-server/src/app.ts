@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import helmet from "helmet";
 import pinoHttp from "pino-http";
 import { createHash } from "node:crypto";
 import router from "./routes";
@@ -171,19 +172,26 @@ app.use(
     },
   }),
 );
+app.use(
+  helmet({
+    // The API does not serve executable browser resources. Keep the existing
+    // restrictive API CSP below instead of Helmet's browser-oriented defaults.
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    crossOriginResourcePolicy: { policy: "same-origin" },
+    frameguard: { action: "deny" },
+    hsts: process.env.NODE_ENV === "production"
+      ? { maxAge: 31536000, includeSubDomains: true }
+      : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    permittedCrossDomainPolicies: { permittedPolicies: "none" },
+  }),
+);
 app.use((_request, response, next) => {
-  response.setHeader("X-Content-Type-Options", "nosniff");
-  response.setHeader("X-Frame-Options", "DENY");
-  response.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   response.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
   response.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
-  response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-  response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-  response.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   response.setHeader("Cache-Control", "no-store");
-  if (process.env.NODE_ENV === "production") {
-    response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
-  }
   next();
 });
 app.use(cors({
