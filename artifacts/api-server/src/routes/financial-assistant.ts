@@ -6,6 +6,8 @@ const router: IRouter = Router();
 const MAX_QUESTION_LENGTH = 2_000;
 const MAX_CONTEXT_LENGTH = 12_000;
 const MAX_ACCOUNT_LIST_LENGTH = 200;
+const MAX_RECEIPT_IMAGE_LENGTH = 12_000_000;
+const supportedReceiptMediaTypes = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 const assistantSystemPrompt = `أنت مساعد مالي ذكي داخل نظام ترصيد للمحاسبة.
 حلّل الأسئلة المالية والمحاسبية فقط اعتماداً على السياق المرسل.
@@ -112,6 +114,57 @@ router.post(
     } catch (error) {
       request.log?.error?.({ err: error }, "Journal suggestion request failed");
       response.status(502).json({ error: "تعذر اقتراح القيد حالياً. حاول مرة أخرى." });
+    }
+  },
+);
+
+router.post(
+  "/assistant/receipt-expense",
+  requireAuth,
+  requireSubscriptionAccess,
+  async (request: Request, response: Response): Promise<void> => {
+    const image = typeof request.body?.image === "string" ? request.body.image.trim() : "";
+    const mediaType = typeof request.body?.mediaType === "string" ? request.body.mediaType.trim().toLowerCase() : "";
+
+    if (!image || image.length > MAX_RECEIPT_IMAGE_LENGTH || !supportedReceiptMediaTypes.has(mediaType)) {
+      response.status(400).json({ error: "يرجى رفع صورة إيصال بصيغة مدعومة." });
+      return;
+    }
+
+    try {
+      const completion = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1000,
+        system: `استخرج من هذه الصورة بيانات الإيصال. أعد JSON فقط:
+{description: string, amount: number, date: string (YYYY-MM-DD), category: string (اختر من: إيجار|رواتب|مشتريات|مرافق|تسويق|نقل|صيانة|أخرى),
+vendor: string}
+إذا لم تجد قيمة اكتب null. لا تضف أي نص خارج الـ JSON.`,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: mediaType, data: image },
+              },
+              {
+                type: "text",
+                text: "استخرج بيانات هذا الإيصال لتهيئة نموذج مصروف جديد.",
+              },
+            ],
+          },
+        ],
+      });
+      const extracted = completion.content
+        .map((block) => block.type === "text" ? block.text : "")
+        .filter(Boolean)
+        .join("\n")
+        .trim();
+
+      response.json({ extracted });
+    } catch (error) {
+      request.log?.error?.({ err: error }, "Receipt expense extraction failed");
+      response.status(502).json({ error: "تعذر استخراج بيانات الإيصال حالياً. حاول مرة أخرى." });
     }
   },
 );

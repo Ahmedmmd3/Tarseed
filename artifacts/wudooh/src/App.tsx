@@ -30,6 +30,7 @@ import Purchases from '@/pages/purchases';
 import Inventory from '@/pages/inventory';
 import HR from '@/pages/hr';
 import Operations from '@/pages/operations';
+import Expenses from '@/pages/expenses';
 import ManagerPortal from '@/pages/manager-portal';
 import SuperAdminPortal from '@/pages/super-admin-portal';
 import {
@@ -84,6 +85,7 @@ function Router() {
         <Route path="/inventory" component={() => <DashboardLayout><Inventory /></DashboardLayout>} />
         <Route path="/hr" component={() => <DashboardLayout><HR /></DashboardLayout>} />
         <Route path="/operations" component={() => <DashboardLayout><Operations /></DashboardLayout>} />
+        <Route path="/expenses" component={() => <DashboardLayout><Expenses /></DashboardLayout>} />
         <Route path="/accounts" component={() => <DashboardLayout><Accounts /></DashboardLayout>} />
         <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />
         <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />
