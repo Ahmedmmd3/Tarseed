@@ -34,6 +34,8 @@ export const teamUsersTable = pgTable(
       .notNull()
       .references(() => organizationsTable.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
+    phone: text("phone"),
+    emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
     name: text("name").notNull(),
     passwordHash: text("password_hash").notNull(),
     roleId: text("role_id").notNull().default("sales"),
@@ -46,6 +48,7 @@ export const teamUsersTable = pgTable(
   },
   (table) => [
     uniqueIndex("team_users_email_unique").on(table.email),
+    uniqueIndex("team_users_phone_unique").on(table.phone),
     index("team_users_organization_idx").on(table.organizationId),
   ],
 );
@@ -85,6 +88,26 @@ export const passwordResetTokensTable = pgTable(
     uniqueIndex("password_reset_tokens_hash_unique").on(table.tokenHash),
     index("password_reset_tokens_user_idx").on(table.userId),
     index("password_reset_tokens_expires_idx").on(table.expiresAt),
+  ],
+);
+
+export const emailVerificationCodesTable = pgTable(
+  "email_verification_codes",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => teamUsersTable.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("email_verification_codes_user_unique").on(table.userId),
+    index("email_verification_codes_expires_idx").on(table.expiresAt),
   ],
 );
 

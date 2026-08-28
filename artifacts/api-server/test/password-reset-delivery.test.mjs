@@ -7,6 +7,7 @@ const server = createServer(app);
 let origin;
 let originalFetch;
 let resetEmailBody;
+let verificationEmailBody;
 
 function unique(value) {
   return `${value}-${crypto.randomUUID().slice(0, 8)}`;
@@ -45,6 +46,13 @@ test.before(async () => {
     }
 
     const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
+    if (body?.subject === "رمز تفعيل حساب ترصيد") {
+      verificationEmailBody = body;
+      return new Response(JSON.stringify({ id: "verification-test-email" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     if (body?.subject === "استعادة كلمة مرور ترصيد") {
       resetEmailBody = body;
     }
@@ -69,11 +77,19 @@ test("يُبقي الرد عاماً ويسجل سبب فشل البريد وي�
       projectName: unique("منشأة اختبار الاستعادة"),
       name: "مالك الاختبار",
       email: ownerEmail,
+      phone: `05${String(crypto.getRandomValues(new Uint32Array(1))[0]).padStart(8, "0").slice(0, 8)}`,
       password: ownerPassword,
     },
   });
-  assert.equal(registered.response.status, 201, JSON.stringify(registered.payload));
-  const ownerCookie = cookieFrom(registered.response);
+  assert.equal(registered.response.status, 202, JSON.stringify(registered.payload));
+  const verificationCode = verificationEmailBody?.html.match(/>(\d{6})<\/p>/)?.[1];
+  assert.ok(verificationCode, "يجب أن تحتوي رسالة التسجيل على رمز التفعيل");
+  const verified = await request("/api/auth/email-verification/verify", {
+    method: "POST",
+    body: { email: ownerEmail, code: verificationCode },
+  });
+  assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
+  const ownerCookie = cookieFrom(verified.response);
 
   const memberEmail = `${unique("reset-member")}@example.test`;
   const createdMember = await request("/api/team/members", {

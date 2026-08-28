@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scryptAsync = promisify(scrypt);
@@ -13,6 +13,56 @@ export function createSessionToken(): string {
 
 export function createPasswordResetToken(): string {
   return randomBytes(32).toString("base64url");
+}
+
+export function createEmailVerificationCode(): string {
+  return String(randomInt(100000, 1000000));
+}
+
+export const PASSWORD_POLICY_MESSAGE =
+  "كلمة المرور يجب أن تكون 8 أحرف على الأقل، وتحتوي على حرف كبير وحرف صغير ورقم ورمز خاص.";
+
+export function validatePassword(password: string): string | null {
+  if (password.length < 8) return PASSWORD_POLICY_MESSAGE;
+  if (!/[A-Z]/.test(password)) return PASSWORD_POLICY_MESSAGE;
+  if (!/[a-z]/.test(password)) return PASSWORD_POLICY_MESSAGE;
+  if (!/[0-9]/.test(password)) return PASSWORD_POLICY_MESSAGE;
+  if (!/[^A-Za-z0-9\s]/.test(password)) return PASSWORD_POLICY_MESSAGE;
+  return null;
+}
+
+export function normalizeSaudiPhone(value: string): string | null {
+  const arabicDigits = "٠١٢٣٤٥٦٧٨٩";
+  const easternArabicDigits = "۰۱۲۳۴۵۶۷۸۹";
+  const normalizedDigits = value
+    .trim()
+    .replace(/[٠-٩]/g, (digit) => String(arabicDigits.indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String(easternArabicDigits.indexOf(digit)))
+    .replace(/[\s().-]/g, "");
+  const international = normalizedDigits.startsWith("00")
+    ? `+${normalizedDigits.slice(2)}`
+    : normalizedDigits;
+  if (/^05\d{8}$/.test(international)) return `+966${international.slice(1)}`;
+  if (/^5\d{8}$/.test(international)) return `+966${international}`;
+  if (/^\+9665\d{8}$/.test(international)) return international;
+  if (/^\+[1-9]\d{7,14}$/.test(international)) return international;
+  return null;
+}
+
+export function isEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+export function hashEmailVerificationCode(code: string): string {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error("SESSION_SECRET is required to protect email verification codes.");
+  return createHmac("sha256", secret).update(`email-verification:${code}`).digest("hex");
+}
+
+export function verifyCodeHash(code: string, expectedHash: string): boolean {
+  const actual = Buffer.from(hashEmailVerificationCode(code), "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 export async function hashPassword(password: string): Promise<string> {

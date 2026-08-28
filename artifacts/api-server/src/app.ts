@@ -75,9 +75,15 @@ const passwordResetRule: PublicAuthRateLimitRule = {
   byIp: { limit: 5, windowMs: 15 * 60 * 1000 },
   byEmail: { limit: 3, windowMs: 15 * 60 * 1000 },
 };
+const verificationRule: PublicAuthRateLimitRule = {
+  byIp: { limit: 10, windowMs: 15 * 60 * 1000 },
+  byEmail: { limit: 5, windowMs: 15 * 60 * 1000 },
+};
 const preSessionAuthPaths = new Set([
   "/api/auth/login",
   "/api/auth/register",
+  "/api/auth/email-verification/verify",
+  "/api/auth/email-verification/resend",
   "/api/platform-auth/login",
 ]);
 
@@ -108,8 +114,12 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
   }
   const rule = request.path === "/auth/login" || request.path === "/platform-auth/login"
     ? loginRule
+    : request.path === "/auth/register"
+      ? verificationRule
     : request.path === "/auth/password-reset/request"
       ? passwordResetRule
+      : request.path === "/auth/email-verification/verify" || request.path === "/auth/email-verification/resend"
+        ? verificationRule
       : null;
   if (!rule) {
     next();
@@ -117,6 +127,8 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
   }
   const identity = typeof request.body?.email === "string"
     ? request.body.email.trim().toLowerCase()
+    : typeof request.body?.identifier === "string"
+      ? request.body.identifier.trim().toLowerCase()
     : typeof request.body?.username === "string"
       ? request.body.username.trim().toLowerCase()
       : "";

@@ -6,6 +6,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 const landingPath = `${import.meta.env.BASE_URL}`;
+const passwordPolicyMessage = 'استخدم 8 أحرف على الأقل تشمل حرفاً كبيراً وصغيراً ورقماً ورمزاً خاصاً.';
+const strongPassword = (value: string) =>
+  value.length >= 8
+  && /[A-Z]/.test(value)
+  && /[a-z]/.test(value)
+  && /[0-9]/.test(value)
+  && /[^A-Za-z0-9\s]/.test(value);
 
 export default function ResetPassword() {
   const token = useMemo(() => new URLSearchParams(window.location.search).get('token')?.trim() ?? '', []);
@@ -22,8 +29,8 @@ export default function ResetPassword() {
       setError('رابط الاستعادة غير مكتمل. اطلب رابطاً جديداً من صفحة تسجيل الدخول.');
       return;
     }
-    if (password.length < 8) {
-      setError('كلمة المرور يجب أن تكون 8 أحرف على الأقل.');
+    if (!strongPassword(password)) {
+      setError(passwordPolicyMessage);
       return;
     }
     if (password !== confirmation) {
@@ -88,7 +95,7 @@ export default function ResetPassword() {
                     onChange={(event) => { setPassword(event.target.value); if (error) setError(''); }}
                     className="px-10 text-left"
                     autoComplete="new-password"
-                    placeholder="٨ أحرف على الأقل"
+                    placeholder="Abcd123!"
                     data-testid="input-reset-password"
                   />
                   <button
@@ -100,6 +107,7 @@ export default function ResetPassword() {
                     {showPassword ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
                   </button>
                 </div>
+                <p className="text-xs text-slate-500">{passwordPolicyMessage}</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="reset-password-confirmation">تأكيد كلمة المرور</Label>

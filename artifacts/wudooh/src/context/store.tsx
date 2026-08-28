@@ -83,6 +83,8 @@ export type SharedUser = {
   projectName: string;
   dataGeneration: number;
   email: string;
+  phone: string | null;
+  emailVerifiedAt: string | null;
   name: string;
   roleId: string;
   permissions: Record<string, boolean>;

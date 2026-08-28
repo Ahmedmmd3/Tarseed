@@ -207,12 +207,17 @@ export default function Team() {
       setFormError('أدخل اسم العضو والبريد الإلكتروني.');
       return;
     }
-    if (!editingMember && form.password.length < 8) {
-      setFormError('كلمة المرور يجب أن تكون 8 أحرف على الأقل.');
+    const passwordIsStrong = form.password.length >= 8
+      && /[A-Z]/.test(form.password)
+      && /[a-z]/.test(form.password)
+      && /[0-9]/.test(form.password)
+      && /[^A-Za-z0-9\s]/.test(form.password);
+    if (!editingMember && !passwordIsStrong) {
+      setFormError('استخدم 8 أحرف على الأقل تشمل حرفاً كبيراً وصغيراً ورقماً ورمزاً خاصاً.');
       return;
     }
-    if (editingMember && form.password && form.password.length < 8) {
-      setFormError('كلمة المرور الجديدة يجب أن تكون 8 أحرف على الأقل.');
+    if (editingMember && form.password && !passwordIsStrong) {
+      setFormError('كلمة المرور الجديدة يجب أن تشمل حرفاً كبيراً وصغيراً ورقماً ورمزاً خاصاً.');
       return;
     }
     if (form.locationScope === 'selected' && form.warehouseIds.length === 0) {
@@ -553,7 +558,7 @@ export default function Team() {
                 <Label htmlFor="team-member-password">{editingMember ? 'كلمة مرور جديدة (اختياري)' : 'كلمة المرور'}</Label>
                 <div className="relative">
                   <KeyRound className="pointer-events-none absolute right-3 top-2.5 h-4 w-4 text-slate-400" aria-hidden="true" />
-                  <Input id="team-member-password" type="password" dir="ltr" className="pr-9 text-left" value={form.password} onChange={(event) => updateForm('password', event.target.value)} placeholder={editingMember ? 'اتركها فارغة دون تغيير' : '٨ أحرف على الأقل'} required={!editingMember} data-testid="input-team-member-password" />
+                  <Input id="team-member-password" type="password" dir="ltr" className="pr-9 text-left" value={form.password} onChange={(event) => updateForm('password', event.target.value)} placeholder={editingMember ? 'اتركها فارغة دون تغيير' : 'Abcd123!'} required={!editingMember} data-testid="input-team-member-password" />
                 </div>
               </div>
               <div className="space-y-2">
