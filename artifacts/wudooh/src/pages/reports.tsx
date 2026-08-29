@@ -47,6 +47,7 @@ export default function Reports() {
   const [closures, setClosures] = useState<Array<{ id: string | number; from: string; to: string; closedAt?: string; netIncome?: number }>>([]);
   const [closureLoadError, setClosureLoadError] = useState('');
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
+  const [closeConfirmation, setCloseConfirmation] = useState('');
 
   const handleClose = async () => {
     setCloseError(null);
@@ -274,13 +275,16 @@ export default function Reports() {
 
               <div className="flex flex-col gap-3 lg:min-w-[280px]">
                 <Button
-                  onClick={() => setConfirmCloseOpen(true)}
+                  onClick={() => {
+                    setCloseConfirmation('');
+                    setConfirmCloseOpen(true);
+                  }}
                   disabled={isClosing || connectionMode !== 'remote'}
                   className="w-full shadow-sm bg-slate-900 hover:bg-slate-800 text-white py-6"
                   data-testid="button-close-period"
                 >
                   <LockKeyhole className="ml-2 h-5 w-5" />
-                  <span className="text-base">{isClosing ? 'جارٍ اعتماد الإقفال...' : 'إقفال الفترة واعتماد الأرصدة'}</span>
+                  <span className="text-base">{isClosing ? 'جارٍ اعتماد الإقفال...' : 'مراجعة الإقفال الشهري'}</span>
                 </Button>
                 {closedPeriod && (
                   <div className="flex items-start gap-2 bg-emerald-50 text-emerald-800 p-3 rounded border border-emerald-100 text-sm font-medium">
@@ -308,11 +312,46 @@ export default function Reports() {
                 : <div className="space-y-2">{closures.map(closure => <div key={closure.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><span className="font-medium">من {closure.from} إلى {closure.to}</span><span className="text-slate-500">هذه الفترة مقفلة؛ تُمنع الكتابة والتعديلات عليها.</span></div>)}</div>}
         </CardContent>
       </Card>
-      <Dialog open={confirmCloseOpen} onOpenChange={setConfirmCloseOpen}>
+      <Dialog open={confirmCloseOpen} onOpenChange={(open) => {
+        setConfirmCloseOpen(open);
+        if (!open) setCloseConfirmation('');
+      }}>
         <DialogContent dir="rtl">
-          <DialogHeader><DialogTitle>تأكيد إقفال الفترة</DialogTitle><DialogDescription>سيُعتمد الإقفال للفترة من {fromDate} إلى {toDate} وتُحجب الكتابة على القيود الواقعة فيها. راجع ملخص ما قبل الإقفال قبل المتابعة.</DialogDescription></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>اعتماد الإقفال النهائي</DialogTitle>
+            <DialogDescription>
+              هذه العملية نهائية. سيُعتمد الإقفال للفترة من {fromDate} إلى {toDate} وتُحجب الكتابة على القيود الواقعة فيها.
+              راجع الملخص، ثم اكتب كلمة «إقفال» للمتابعة.
+            </DialogDescription>
+          </DialogHeader>
           {serverSummary && <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">الإيرادات: {formatCurrency(serverSummary.totals.revenue)} · المصروفات: {formatCurrency(serverSummary.totals.expense)} · صافي الدخل: {formatCurrency(serverSummary.totals.netIncome)}</div>}
-          <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setConfirmCloseOpen(false)}>رجوع</Button><Button type="button" disabled={isClosing || connectionMode !== 'remote'} onClick={() => { setConfirmCloseOpen(false); void handleClose(); }} className="bg-slate-900 hover:bg-slate-800">تأكيد الإقفال</Button></div>
+          <div className="space-y-2">
+            <label htmlFor="close-confirmation" className="text-sm font-semibold text-slate-800">اكتب «إقفال» للتأكيد</label>
+            <Input
+              id="close-confirmation"
+              value={closeConfirmation}
+              onChange={(event) => setCloseConfirmation(event.target.value.trim())}
+              placeholder="إقفال"
+              autoComplete="off"
+              data-testid="input-close-confirmation"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setConfirmCloseOpen(false)}>إلغاء</Button>
+            <Button
+              type="button"
+              disabled={isClosing || connectionMode !== 'remote' || closeConfirmation !== 'إقفال'}
+              onClick={() => {
+                if (closeConfirmation !== 'إقفال') return;
+                setConfirmCloseOpen(false);
+                void handleClose();
+              }}
+              className="bg-red-700 hover:bg-red-800"
+              data-testid="button-confirm-close-period"
+            >
+              اعتماد الإقفال نهائياً
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
 

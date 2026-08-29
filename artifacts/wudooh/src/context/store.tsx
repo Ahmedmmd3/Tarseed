@@ -717,7 +717,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           'Content-Type': 'application/json',
           'X-Wudooh-Data-Generation': String(currentDataGeneration()),
         },
-        body: JSON.stringify({ from, to }),
+        body: JSON.stringify({ from, to, confirmation: 'CLOSE_PERIOD' }),
       });
       const payload = await response.json() as { closure?: FinancialClosure; error?: string };
       if (!response.ok || !payload.closure) {

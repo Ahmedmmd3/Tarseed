@@ -1727,8 +1727,16 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
   const body = request.body as Record<string, unknown>;
   const from = typeof body.from === "string" ? body.from : "";
   const to = typeof body.to === "string" ? body.to : "";
+  const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
   if (!isValidIsoDate(from) || !isValidIsoDate(to) || from > to) {
     response.status(400).json({ error: "يجب تحديد فترة مالية صحيحة." });
+    return;
+  }
+  if (confirmation !== "CLOSE_PERIOD") {
+    response.status(400).json({
+      error: "الإقفال المالي إجراء نهائي. راجع الملخص وأرسل تأكيد الإقفال الصريح.",
+      code: "closure_confirmation_required",
+    });
     return;
   }
   const closure = await db.transaction(async (tx) => {

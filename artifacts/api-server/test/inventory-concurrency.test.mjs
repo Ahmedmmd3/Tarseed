@@ -47,14 +47,8 @@ async function registerOwner() {
     body: { email, code: process.env.EMAIL_VERIFICATION_TEST_CODE },
   });
   assert.equal(emailVerification.response.status, 200, JSON.stringify(emailVerification.payload));
-  const phoneVerification = await request("/auth/phone-verification/verify", {
-    method: "POST",
-    headers: authHeaders,
-    body: { email, code: process.env.PHONE_VERIFICATION_TEST_CODE },
-  });
-  assert.equal(phoneVerification.response.status, 200, JSON.stringify(phoneVerification.payload));
-  const cookie = cookieFrom(phoneVerification.response);
-  generationByCookie.set(cookie, phoneVerification.payload.user.dataGeneration);
+  const cookie = cookieFrom(emailVerification.response);
+  generationByCookie.set(cookie, emailVerification.payload.user.dataGeneration);
   return { email, password, cookie };
 }
 
@@ -576,7 +570,10 @@ test("استلام دفعتين يحسب VAT ويستهلك FIFO ويؤرشف ا
     body: { reason: "يجب رفض دفعة مستهلكة", effectiveDate: "2026-10-04" },
   });
   assert.equal(consumedCancellation.response.status, 409, JSON.stringify(consumedCancellation.payload));
-  const closure = await post(owner.cookie, "/accounting/close", { from: "2026-10-01", to: "2026-10-31" });
+  const unconfirmedClosure = await post(owner.cookie, "/accounting/close", { from: "2026-10-01", to: "2026-10-31" });
+  assert.equal(unconfirmedClosure.response.status, 400, JSON.stringify(unconfirmedClosure.payload));
+  assert.equal(unconfirmedClosure.payload.code, "closure_confirmation_required");
+  const closure = await post(owner.cookie, "/accounting/close", { from: "2026-10-01", to: "2026-10-31", confirmation: "CLOSE_PERIOD" });
   assert.equal(closure.response.status, 201, JSON.stringify(closure.payload));
   const closedPurchase = await post(owner.cookie, "/inventory/purchase-receipts", {
     orderNumber: unique("PO-closed"), supplierName: "مورد الاختبار", date: "2026-10-10", warehouseId: warehouse.id,

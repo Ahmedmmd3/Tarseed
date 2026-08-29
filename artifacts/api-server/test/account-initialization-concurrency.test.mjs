@@ -54,13 +54,8 @@ async function registerOwner() {
     body: { email, code: process.env.EMAIL_VERIFICATION_TEST_CODE },
   });
   assert.equal(emailVerification.response.status, 200, JSON.stringify(emailVerification.payload));
-  const phoneVerification = await request("/auth/phone-verification/verify", {
-    method: "POST",
-    body: { email, code: process.env.PHONE_VERIFICATION_TEST_CODE },
-  });
-  assert.equal(phoneVerification.response.status, 200, JSON.stringify(phoneVerification.payload));
-  const cookie = cookieFrom(phoneVerification.response);
-  generationByCookie.set(cookie, phoneVerification.payload.user.dataGeneration);
+  const cookie = cookieFrom(emailVerification.response);
+  generationByCookie.set(cookie, emailVerification.payload.user.dataGeneration);
   return { email, password, cookie };
 }
 

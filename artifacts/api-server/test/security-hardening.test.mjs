@@ -600,7 +600,7 @@ test("يسلسل الإقفال المالي مع ترحيل المصادر وك
       method: "POST",
       cookie: ownerCookie,
       headers: { "X-Wudooh-Data-Generation": "1" },
-      body: { from: "2031-01-01", to: "2031-12-31" },
+      body: { from: "2031-01-01", to: "2031-12-31", confirmation: "CLOSE_PERIOD" },
     });
     await waitForOrganizationLockWaiter();
     syncRequest = request("/accounting/sync-source-journals", {
@@ -652,7 +652,7 @@ test("يسلسل الإقفال المالي مع ترحيل المصادر وك
       method: "POST",
       cookie: ownerCookie,
       headers: { "X-Wudooh-Data-Generation": "1" },
-      body: { from: "2033-01-01", to: "2033-12-31" },
+      body: { from: "2033-01-01", to: "2033-12-31", confirmation: "CLOSE_PERIOD" },
     });
     await new Promise((resolve) => setTimeout(resolve, 200));
   });
@@ -725,7 +725,7 @@ test("يسلسل الإقفال المالي مع ترحيل المصادر وك
       method: "POST",
       cookie: ownerCookie,
       headers: { "X-Wudooh-Data-Generation": "1" },
-      body: { from: "2032-01-01", to: "2032-12-31" },
+      body: { from: "2032-01-01", to: "2032-12-31", confirmation: "CLOSE_PERIOD" },
     });
     await waitForOrganizationLockWaiter();
     sourceCreateRequest = request("/data/expenses", {

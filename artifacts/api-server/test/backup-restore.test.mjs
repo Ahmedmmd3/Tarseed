@@ -53,12 +53,8 @@ async function registerOwner() {
     method: "POST", headers: authHeaders, body: { email, code: process.env.EMAIL_VERIFICATION_TEST_CODE },
   });
   assert.equal(emailVerification.response.status, 200, JSON.stringify(emailVerification.payload));
-  const phoneVerification = await request("/auth/phone-verification/verify", {
-    method: "POST", headers: authHeaders, body: { email, code: process.env.PHONE_VERIFICATION_TEST_CODE },
-  });
-  assert.equal(phoneVerification.response.status, 200, JSON.stringify(phoneVerification.payload));
-  const cookie = cookieFrom(phoneVerification.response);
-  generationByCookie.set(cookie, phoneVerification.payload.user.dataGeneration);
+  const cookie = cookieFrom(emailVerification.response);
+  generationByCookie.set(cookie, emailVerification.payload.user.dataGeneration);
   return { cookie, email, password };
 }
 
@@ -119,7 +115,7 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   const originalClosure = await request("/accounting/close", {
     method: "POST",
     cookie,
-    body: { from: "2026-01-01", to: "2026-01-31" },
+    body: { from: "2026-01-01", to: "2026-01-31", confirmation: "CLOSE_PERIOD" },
   });
   assert.equal(originalClosure.response.status, 201, JSON.stringify(originalClosure.payload));
   const summaryBeforeRestore = await request("/accounting/summary?from=2026-01-01&to=2026-01-31", { cookie });

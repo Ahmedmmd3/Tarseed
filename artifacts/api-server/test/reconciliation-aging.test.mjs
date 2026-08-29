@@ -29,8 +29,6 @@ async function owner() {
   assert.equal(result.response.status, 202, JSON.stringify(result.payload));
   result = await request("/auth/email-verification/verify", { method: "POST", headers: forwarded, body: { email, code: process.env.EMAIL_VERIFICATION_TEST_CODE } });
   assert.equal(result.response.status, 200, JSON.stringify(result.payload));
-  result = await request("/auth/phone-verification/verify", { method: "POST", headers: forwarded, body: { email, code: process.env.PHONE_VERIFICATION_TEST_CODE } });
-  assert.equal(result.response.status, 200, JSON.stringify(result.payload));
   const cookie = result.response.headers.get("set-cookie")?.split(";")[0];
   assert.ok(cookie);
   generations.set(cookie, result.payload.user.dataGeneration);
@@ -160,7 +158,7 @@ test("المطابقة والاعتماد والتعديلات متزنة ومع
     result = await request(`/accounting/reconciliations/${id}/adjustments`, { method: "POST", cookie: fixture.cookie, headers: { "Idempotency-Key": unique(type) }, body: { type, amount, date: "2026-05-15", offsetAccountId: fixture.offset.id } });
     assert.equal(result.response.status, 201); assert.equal(result.payload.journal.lines.reduce((sum, line) => sum + line.debit - line.credit, 0), 0);
   }
-  result = await request("/accounting/close", { method: "POST", cookie: fixture.cookie, body: { from: "2026-05-15", to: "2026-05-15" } });
+  result = await request("/accounting/close", { method: "POST", cookie: fixture.cookie, body: { from: "2026-05-15", to: "2026-05-15", confirmation: "CLOSE_PERIOD" } });
   assert.equal(result.response.status, 201, JSON.stringify(result.payload));
   result = await request(`/accounting/reconciliations/${id}/adjustments`, { method: "POST", cookie: fixture.cookie, headers: { "Idempotency-Key": unique("closed-adjustment") }, body: { type: "bankFee", amount: 1, date: "2026-05-15", offsetAccountId: fixture.offset.id } });
   assert.equal(result.response.status, 409, "يرفض قيد التسوية في فترة مقفلة");
