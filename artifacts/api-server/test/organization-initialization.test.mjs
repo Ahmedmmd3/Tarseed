@@ -208,3 +208,28 @@ test("توحد التسجيل والدعوة وسكربت المتصفح بيا�
   await runBrowserSetup();
   await assertInitializedOrganization(browserOrganization.id, "إعادة تشغيل تجهيز حساب المتصفح");
 });
+
+test("تمنع تهيئة البيانات التجريبية المتزامنة التكرار", async () => {
+  const now = new Date();
+  const [organization] = await db.insert(organizationsTable).values({
+    name: `منشأة تهيئة متزامنة ${suffix}`,
+    dataGeneration: 1,
+    planId: "pro",
+    subscriptionStatus: "active",
+    trialStartedAt: now,
+    trialEndsAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    subscriptionStartedAt: now,
+    subscriptionEndsAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    isTestWorkspace: true,
+  }).returning();
+  organizationIds.push(organization.id);
+
+  const results = await Promise.all([
+    seedDemoData(organization.id, organization.dataGeneration),
+    seedDemoData(organization.id, organization.dataGeneration),
+  ]);
+
+  assert.deepEqual(results.filter(({ created }) => created === 0).length, 1);
+  assert.equal(results.filter(({ created }) => created > 0).length, 1);
+  await assertInitializedOrganization(organization.id, "التهيئة المتزامنة");
+});

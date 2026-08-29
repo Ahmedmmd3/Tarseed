@@ -6,6 +6,7 @@ type DatabaseExecutor = typeof db | DatabaseTransaction;
 type DemoRecordData = Record<string, unknown>;
 
 export const DEMO_SEED_KEY = "new-organization-v1";
+const DEMO_SEED_LOCK_NAMESPACE = 8_421_307;
 
 export const DEFAULT_WAREHOUSE_DEFINITIONS = [
   { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
@@ -107,9 +108,23 @@ async function ensureDefaultWarehouses(
 export async function seedDemoData(
   organizationId: number,
   dataGeneration: number,
-  executor: DatabaseExecutor = db,
+  executor?: DatabaseExecutor,
   now = new Date(),
 ): Promise<{ created: number }> {
+  if (!executor || executor === db) {
+    return db.transaction((tx) => seedDemoDataInTransaction(organizationId, dataGeneration, tx, now));
+  }
+  return seedDemoDataInTransaction(organizationId, dataGeneration, executor, now);
+}
+
+async function seedDemoDataInTransaction(
+  organizationId: number,
+  dataGeneration: number,
+  executor: DatabaseExecutor,
+  now: Date,
+): Promise<{ created: number }> {
+  await executor.execute(sql`SELECT pg_advisory_xact_lock(${DEMO_SEED_LOCK_NAMESPACE}, ${organizationId})`);
+
   await ensureDefaultWarehouses(organizationId, executor);
 
   const existing = await executor.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
