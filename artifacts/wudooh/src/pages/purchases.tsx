@@ -1,5 +1,5 @@
 import { useState, useMemo, type FormEvent, useEffect, useCallback } from 'react';
-import { Truck, ChevronRight, Plus, LoaderCircle, Trash2, CalendarClock } from 'lucide-react';
+import { Truck, ChevronRight, Plus, LoaderCircle, Trash2, CalendarClock, Paperclip } from 'lucide-react';
 import { Link } from 'wouter';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -11,6 +11,8 @@ import { useCrud } from '@/hooks/use-crud';
 import { useStore } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 import { CrudTable } from '@/components/crud-table';
+import { AttachmentsPanel } from '@/components/attachments-panel';
+import { TransferDialog } from '@/components/transfer-dialog';
 
 type Product = { id: number | string; name: string };
 type Warehouse = { id: number | string; name: string; status?: string };
@@ -32,6 +34,7 @@ function PurchaseReceiptsWorkspace() {
 
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [attachmentOrder, setAttachmentOrder] = useState<PurchaseOrder | null>(null);
 
   const [vatRate, setVatRate] = useState(0.15);
   const [clientOperationId, setClientOperationId] = useState('');
@@ -158,7 +161,8 @@ function PurchaseReceiptsWorkspace() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex flex-wrap justify-end gap-2">
+        <TransferDialog tableName="purchaseOrders" title="أوامر الشراء" importEnabled={false} />
         <Dialog open={open} onOpenChange={(isOpen) => { setOpen(isOpen); if (!isOpen) setClientOperationId(''); }}>
           <DialogTrigger asChild>
             <Button className="gap-2 bg-teal-600 hover:bg-teal-700" data-testid="btn-create-purchase-receipt">
@@ -285,6 +289,7 @@ function PurchaseReceiptsWorkspace() {
                 <TableHead>التاريخ</TableHead>
                 <TableHead>الإجمالي</TableHead>
                 <TableHead>الحالة</TableHead>
+                <TableHead className="w-16">مرفقات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -306,11 +311,16 @@ function PurchaseReceiptsWorkspace() {
                        order.status === 'cancelled' ? 'ملغي' : order.status}
                     </span>
                   </TableCell>
+                  <TableCell>
+                    <Button type="button" variant="ghost" size="icon" onClick={() => setAttachmentOrder(order)} aria-label="مرفقات أمر الشراء" data-testid={`button-attachments-purchase-order-${order.id}`}>
+                      <Paperclip className="h-4 w-4 text-teal-700" />
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
               {!purchaseOrdersCrud.data.length && (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-24 text-center text-slate-500">
+                    <TableCell colSpan={6} className="h-24 text-center text-slate-500">
                     لا توجد أوامر شراء مسجلة.
                   </TableCell>
                 </TableRow>
@@ -319,6 +329,12 @@ function PurchaseReceiptsWorkspace() {
           </Table>
         </div>
       )}
+      <Dialog open={Boolean(attachmentOrder)} onOpenChange={(nextOpen) => { if (!nextOpen) setAttachmentOrder(null); }}>
+        <DialogContent dir="rtl" className="sm:max-w-xl">
+          <DialogHeader><DialogTitle>مرفقات أمر الشراء {attachmentOrder?.orderNumber}</DialogTitle></DialogHeader>
+          <AttachmentsPanel tableName="purchaseOrders" recordId={attachmentOrder?.id} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogTrigger,
   DialogFooter,
   DialogClose,
@@ -20,6 +21,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Plus, Search, Trash2, Calendar, FileText, CheckCircle2, AlertCircle, Sparkles, LoaderCircle, RotateCcw, FilePenLine, Link2 } from 'lucide-react';
 import { JournalAdjustmentDialog, type JournalAdjustmentInput } from '@/components/accounting/journal-adjustment-dialog';
 import type { Journal } from '@/context/store';
+import { AttachmentsPanel } from '@/components/attachments-panel';
+import { TransferDialog } from '@/components/transfer-dialog';
 
 type JournalStatusFilter = 'all' | 'draft' | 'posted';
 
@@ -99,6 +102,7 @@ export default function Journals() {
   const [adjustmentMode, setAdjustmentMode] = useState<'reverse' | 'correct'>('reverse');
   const [isAdjusting, setIsAdjusting] = useState(false);
   const [adjustmentOperationId, setAdjustmentOperationId] = useState('');
+  const [attachmentJournal, setAttachmentJournal] = useState<Journal | null>(null);
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.status === 'active').sort((left, right) => left.code.localeCompare(right.code, 'en')), [accounts]);
   const filteredJournals = useMemo(() => journals
@@ -229,6 +233,7 @@ export default function Journals() {
           <p className="mt-1 text-sm text-slate-500">تسجيل وتوثيق الحركات المالية بنظام القيد المزدوج.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <TransferDialog tableName="journalEntries" title="القيود اليومية" onImported={() => window.location.reload()} />
           <Dialog open={isSuggestionOpen} onOpenChange={(open) => { setIsSuggestionOpen(open); if (!open) setSuggestionError(''); }}>
             <DialogTrigger asChild>
               <Button type="button" variant="outline" onClick={openSuggestionDialog} className="border-blue-200 bg-blue-50 text-blue-700 shadow-sm hover:bg-blue-100 hover:text-blue-800" data-testid="button-ai-journal-suggestion">
@@ -462,6 +467,9 @@ export default function Journals() {
                     </Button>
                   </>
                 )}
+                <Button type="button" size="icon" variant="ghost" onClick={() => setAttachmentJournal(journal)} aria-label="مرفقات القيد" data-testid={`button-attachments-journal-${journal.id}`}>
+                  <Link2 className="h-4 w-4 text-teal-700" />
+                </Button>
               </div>
             </div>
             {(journal.adjustsJournalId || journal.adjustmentReason) && (
@@ -535,6 +543,15 @@ export default function Journals() {
         }}
         onSubmit={(input) => { void handleAdjustment(input); }}
       />
+      <Dialog open={Boolean(attachmentJournal)} onOpenChange={(open) => { if (!open) setAttachmentJournal(null); }}>
+        <DialogContent dir="rtl" className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>مرفقات القيد {attachmentJournal?.number}</DialogTitle>
+            <DialogDescription>إدارة المستندات المؤيدة لهذا القيد.</DialogDescription>
+          </DialogHeader>
+          <AttachmentsPanel tableName="journalEntries" recordId={attachmentJournal?.id} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

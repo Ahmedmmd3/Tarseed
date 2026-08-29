@@ -9,6 +9,8 @@ import eInvoicingRouter from "./e-invoicing";
 import billingRouter from "./billing";
 import platformAdminRouter from "./platform-admin";
 import financialAssistantRouter from "./financial-assistant";
+import attachmentsRouter from "./attachments";
+import dataTransferRouter from "./data-transfer";
 
 const router: IRouter = Router();
 
@@ -22,5 +24,7 @@ router.use(eInvoicingRouter);
 router.use(billingRouter);
 router.use(platformAdminRouter);
 router.use(financialAssistantRouter);
+router.use(attachmentsRouter);
+router.use(dataTransferRouter);
 
 export default router;

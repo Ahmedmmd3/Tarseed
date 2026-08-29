@@ -477,6 +477,12 @@ router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requir
   });
 });
 
+router.get("/accounting/closures", requireAuth, requireSubscriptionAccess, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const closures = await recordsFor(auth, "financialClosures");
+  response.json({ closures: closures.sort((left, right) => String(right.to).localeCompare(String(left.to)) || right.id - left.id) });
+});
+
 router.get("/accounting/ledger", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const accountId = typeof request.query.accountId === "string" ? request.query.accountId.trim() : "";
   const from = typeof request.query.from === "string" ? request.query.from.trim() : "";
@@ -1721,7 +1727,7 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
   const body = request.body as Record<string, unknown>;
   const from = typeof body.from === "string" ? body.from : "";
   const to = typeof body.to === "string" ? body.to : "";
-  if (!from || !to || from > to) {
+  if (!isValidIsoDate(from) || !isValidIsoDate(to) || from > to) {
     response.status(400).json({ error: "يجب تحديد فترة مالية صحيحة." });
     return;
   }

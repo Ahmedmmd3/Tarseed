@@ -33,6 +33,42 @@ function fileForObjectPath(objectPath: string): File {
   return storage.bucket(bucketName).file(objectParts.join("/"));
 }
 
+function fileForKey(key: string): File {
+  const fullPath = `${privateDirectory()}/${key}`.replace(/^\/+/, "");
+  const [bucketName, ...objectParts] = fullPath.split("/");
+  if (!bucketName || !objectParts.length) throw new Error("لم تُجهّز مساحة التخزين الخاصة بعد.");
+  return storage.bucket(bucketName).file(objectParts.join("/"));
+}
+
+export function isPrivateAttachmentPathForOrganization(objectPath: string, organizationId: number): boolean {
+  return new RegExp(`^/objects/attachments/${organizationId}/[0-9a-f-]{36}$`, "i").test(objectPath);
+}
+
+/** Store a non-public ERP attachment. The returned path is deliberately opaque. */
+export async function savePrivateAttachment(
+  organizationId: number,
+  content: Buffer,
+  contentType: string,
+): Promise<string> {
+  const key = `attachments/${organizationId}/${randomUUID()}`;
+  await fileForKey(key).save(content, {
+    contentType,
+    resumable: false,
+    metadata: { cacheControl: "private, no-store" },
+  });
+  return `/objects/${key}`;
+}
+
+export async function readPrivateObject(objectPath: string): Promise<{ content: Buffer; contentType?: string }> {
+  const file = fileForObjectPath(objectPath);
+  const [[metadata], [content]] = await Promise.all([file.getMetadata(), file.download()]);
+  return { content, contentType: metadata.contentType };
+}
+
+export async function deletePrivateObject(objectPath: string): Promise<void> {
+  await fileForObjectPath(objectPath).delete({ ignoreNotFound: true });
+}
+
 export async function savePrivateInvoiceXml(
   organizationId: number,
   documentId: number,
@@ -40,10 +76,7 @@ export async function savePrivateInvoiceXml(
   kind: "issued" | "authority" = "issued",
 ): Promise<string> {
   const key = `e-invoices/${organizationId}/${documentId}-${kind}-${randomUUID()}.xml`;
-  const fullPath = `${privateDirectory()}/${key}`.replace(/^\/+/, "");
-  const [bucketName, ...objectParts] = fullPath.split("/");
-  if (!bucketName || !objectParts.length) throw new Error("لم تُجهّز مساحة التخزين الخاصة بعد.");
-  await storage.bucket(bucketName).file(objectParts.join("/")).save(xml, {
+  await fileForKey(key).save(xml, {
     contentType: "application/xml; charset=utf-8",
     resumable: false,
     metadata: { cacheControl: "private, no-store" },

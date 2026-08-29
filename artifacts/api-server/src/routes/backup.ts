@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
 import { hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { isPrivateAttachmentPathForOrganization } from "../lib/private-object-store";
 
 const router: IRouter = Router();
 const BACKUP_VERSION = 1;
@@ -11,6 +12,7 @@ const BACKUP_TABLE_NAMES = [
   "purchaseOrders", "warehouses", "employees", "projects", "inventoryBalances", "inventoryLayers",
   "stockTransfers", "stockAdjustments", "accounts", "journalEntries", "receivables",
   "financialClosures", "bankReconciliationSessions", "bankStatementLines", "reconciliationAdjustmentEvents",
+  "attachmentRecords",
 ] as const;
 const TABLE_NAMES = new Set<string>(BACKUP_TABLE_NAMES);
 
@@ -258,7 +260,7 @@ function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set
     && matchesExpectedParties(data.payables, expected.payables);
 }
 
-function validateBackupRecords(records: BackupRecord[]): string | null {
+function validateBackupRecords(records: BackupRecord[], organizationId: number): string | null {
   const idsByTable = new Map<string, Set<number>>();
   for (const record of records) {
     const ids = idsByTable.get(record.tableName) ?? new Set<number>();
@@ -379,6 +381,16 @@ function validateBackupRecords(records: BackupRecord[]): string | null {
       && (!hasReference("bankReconciliationSessions", data.sessionId) || !hasReference("journalEntries", data.journalId) || !isNonEmptyString(data.fingerprint))) {
       return "يحتوي الملف على حدث قيد تسوية غير صالح.";
     }
+    if (record.tableName === "attachmentRecords"
+      && (!isNonEmptyString(data.parentTable) || !isPositiveId(data.parentRecordId)
+        || !isNonEmptyString(data.fileName) || !isNonEmptyString(data.contentType)
+        || !isNonNegativeNumber(data.size) || !isNonEmptyString(data.objectPath)
+        || !isNonEmptyString(data.digest) || !/^[0-9a-f]{64}$/i.test(String(data.digest))
+        || !isPrivateAttachmentPathForOrganization(String(data.objectPath), organizationId)
+        || !TABLE_NAMES.has(String(data.parentTable))
+        || !hasReference(String(data.parentTable), data.parentRecordId))) {
+      return "يحتوي الملف على بيانات مرفق غير صالحة.";
+    }
   }
 
   for (const record of records.filter((item) => item.tableName === "products")) {
@@ -430,7 +442,7 @@ function parseBackup(value: unknown): { records?: BackupRecord[]; organizationId
     });
   }
 
-  const semanticError = validateBackupRecords(records);
+  const semanticError = validateBackupRecords(records, Number(value.organizationId));
   return semanticError ? { error: semanticError } : { records, organizationId: Number(value.organizationId) };
 }
 

@@ -10,6 +10,7 @@ import { LedgerReport } from '@/components/accounting/ledger-report';
 import { ReconciliationReport } from '@/components/accounting/reconciliation-report';
 import { AgingReport } from '@/components/accounting/aging-report';
 import { CheckSquare, Clock } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 type ReportType = 'trial' | 'income' | 'balance' | 'ledger' | 'reconciliation' | 'aging';
 type ServerSummary = {
@@ -34,7 +35,7 @@ type ServerSummary = {
 };
 
 export default function Reports() {
-  const { accounts, journals, closePeriod, connectionMode } = useStore();
+  const { accounts, journals, closePeriod, connectionMode, currentUser } = useStore();
   const [reportType, setReportType] = useState<ReportType>('trial');
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
@@ -43,6 +44,9 @@ export default function Reports() {
   const [closeError, setCloseError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
   const [serverSummary, setServerSummary] = useState<ServerSummary | null>(null);
+  const [closures, setClosures] = useState<Array<{ id: string | number; from: string; to: string; closedAt?: string; netIncome?: number }>>([]);
+  const [closureLoadError, setClosureLoadError] = useState('');
+  const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
 
   const handleClose = async () => {
     setCloseError(null);
@@ -50,6 +54,9 @@ export default function Reports() {
     try {
       const closure = await closePeriod(fromDate, toDate);
       setClosedPeriod(`تم اعتماد إقفال الفترة من ${closure.from} إلى ${closure.to} بنجاح. صافي الربح المحتجز: ${formatCurrency(closure.netIncome)}.`);
+      setClosures((current) => current.some((item) => String(item.id) === String(closure.id))
+        ? current
+        : [{ id: closure.id, from: closure.from, to: closure.to, closedAt: closure.closedAt, netIncome: closure.netIncome }, ...current]);
     } catch (error) {
       setCloseError(error instanceof Error ? error.message : 'تعذر إقفال الفترة.');
     } finally {
@@ -75,6 +82,21 @@ export default function Reports() {
     })();
     return () => { active = false; };
   }, [connectionMode, fromDate, toDate]);
+
+  useEffect(() => {
+    if (connectionMode !== 'remote') { setClosures([]); return; }
+    let active = true;
+    void (async () => {
+      setClosureLoadError('');
+      try {
+        const response = await fetch('/api/accounting/closures', { credentials: 'include', headers: currentUser ? { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) } : undefined });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(payload.error ?? 'تعذر تحميل الفترات المقفلة.');
+        if (active) setClosures(Array.isArray(payload) ? payload : payload.closures ?? payload.records ?? []);
+      } catch (error) { if (active) setClosureLoadError(error instanceof Error ? error.message : 'تعذر تحميل الفترات المقفلة.'); }
+    })();
+    return () => { active = false; };
+  }, [connectionMode, currentUser]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('ar-SA', { minimumFractionDigits: 2 }).format(amount);
@@ -252,8 +274,8 @@ export default function Reports() {
 
               <div className="flex flex-col gap-3 lg:min-w-[280px]">
                 <Button
-                  onClick={() => void handleClose()}
-                  disabled={isClosing || connectionMode === 'loading'}
+                  onClick={() => setConfirmCloseOpen(true)}
+                  disabled={isClosing || connectionMode !== 'remote'}
                   className="w-full shadow-sm bg-slate-900 hover:bg-slate-800 text-white py-6"
                   data-testid="button-close-period"
                 >
@@ -277,6 +299,22 @@ export default function Reports() {
           </CardContent>
         </Card>
       )}
+      <Card className="border-slate-200 shadow-sm">
+        <CardContent className="p-5">
+          <div className="mb-3 flex items-center gap-2"><LockKeyhole className="h-4 w-4 text-slate-700" /><h3 className="font-bold text-slate-900">الفترات المالية المقفلة</h3></div>
+          {connectionMode !== 'remote' ? <p className="text-sm text-amber-700">اتصل بسجل المنشأة لعرض الفترات المقفلة وحماية القيود من التعديل.</p>
+            : closureLoadError ? <p role="alert" className="text-sm text-rose-700">{closureLoadError}</p>
+              : closures.length === 0 ? <p className="text-sm text-slate-500">لا توجد فترات مقفلة حتى الآن.</p>
+                : <div className="space-y-2">{closures.map(closure => <div key={closure.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><span className="font-medium">من {closure.from} إلى {closure.to}</span><span className="text-slate-500">هذه الفترة مقفلة؛ تُمنع الكتابة والتعديلات عليها.</span></div>)}</div>}
+        </CardContent>
+      </Card>
+      <Dialog open={confirmCloseOpen} onOpenChange={setConfirmCloseOpen}>
+        <DialogContent dir="rtl">
+          <DialogHeader><DialogTitle>تأكيد إقفال الفترة</DialogTitle><DialogDescription>سيُعتمد الإقفال للفترة من {fromDate} إلى {toDate} وتُحجب الكتابة على القيود الواقعة فيها. راجع ملخص ما قبل الإقفال قبل المتابعة.</DialogDescription></DialogHeader>
+          {serverSummary && <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">الإيرادات: {formatCurrency(serverSummary.totals.revenue)} · المصروفات: {formatCurrency(serverSummary.totals.expense)} · صافي الدخل: {formatCurrency(serverSummary.totals.netIncome)}</div>}
+          <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setConfirmCloseOpen(false)}>رجوع</Button><Button type="button" disabled={isClosing || connectionMode !== 'remote'} onClick={() => { setConfirmCloseOpen(false); void handleClose(); }} className="bg-slate-900 hover:bg-slate-800">تأكيد الإقفال</Button></div>
+        </DialogContent>
+      </Dialog>
 
       {reportType === 'trial' && (
         <Card className="border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">

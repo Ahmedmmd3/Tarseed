@@ -5,8 +5,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles, RotateCcw, FilePenLine } from 'lucide-react';
+import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles, RotateCcw, FilePenLine, Paperclip } from 'lucide-react';
 import { SourceDocumentAdjustmentDialog } from '@/components/accounting/source-document-adjustment-dialog';
+import { AttachmentsPanel } from '@/components/attachments-panel';
+import { TransferDialog } from '@/components/transfer-dialog';
 
 export type FieldDef = {
   key: string;
@@ -195,7 +197,9 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
   const isExpenseTable = table === 'expenses';
   const isAccountingSource = table === 'invoices' || table === 'purchaseOrders' || table === 'expenses';
+  const supportsTransfer = ['accounts', 'customers', 'suppliers', 'products', 'employees', 'projects', 'expenses', 'journalEntries', 'invoices', 'purchaseOrders'].includes(table);
   const [sourceAdjustment, setSourceAdjustment] = useState<{ item: Record<string, unknown>; action: 'cancel' | 'correct' } | null>(null);
+  const [attachmentRecord, setAttachmentRecord] = useState<any>(null);
 
   const handleOpen = (item?: any) => {
     if (item) {
@@ -261,7 +265,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
       )}
       <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
         <h2 className="text-xl font-bold text-slate-900">{title}</h2>
-        {!readOnly && (
+        {(!readOnly || supportsTransfer) && (
           <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
             {isExpenseTable && (
               <ReceiptExtractionDialog
@@ -275,7 +279,8 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
                 <ImagePlus className="h-4 w-4" /> إضافة بصورة الإيصال
               </Button>
             )}
-            <Dialog open={open} onOpenChange={setOpen}>
+            {supportsTransfer && <TransferDialog tableName={table} title={title} importEnabled={table !== 'invoices' && table !== 'purchaseOrders'} onImported={load} />}
+            {!readOnly && <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
                 <Button onClick={() => handleOpen()} className="h-11 w-full gap-2 bg-teal-600 hover:bg-teal-700 sm:w-auto" data-testid={`button-add-${table}`}>
                   <Plus className="h-4 w-4" /> إضافة
@@ -330,7 +335,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
                   </div>
                 </form>
               </DialogContent>
-            </Dialog>
+            </Dialog>}
           </div>
         )}
       </div>
@@ -388,6 +393,11 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
                           </Button>
                         </>
                       )}
+                       {isAccountingSource && (
+                         <Button type="button" variant="ghost" size="icon" onClick={() => setAttachmentRecord(item)} aria-label="مرفقات" data-testid={`button-attachments-${table}-${item.id}`}>
+                           <Paperclip className="h-4 w-4 text-teal-700" />
+                         </Button>
+                       )}
                     </div>
                   </TableCell>
                 )}
@@ -403,6 +413,15 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
           </TableBody>
         </Table>
       </div>
+      <Dialog open={Boolean(attachmentRecord)} onOpenChange={(nextOpen) => { if (!nextOpen) setAttachmentRecord(null); }}>
+        <DialogContent className="sm:max-w-xl" dir="rtl">
+          <DialogHeader>
+            <DialogTitle>مرفقات {title}</DialogTitle>
+            <DialogDescription>رفع وتنزيل وحذف الملفات المرتبطة بالسجل المحدد.</DialogDescription>
+          </DialogHeader>
+          <AttachmentsPanel tableName={table} recordId={attachmentRecord?.id} />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
