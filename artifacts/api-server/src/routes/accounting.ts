@@ -393,7 +393,7 @@ function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: str
 function derivePartyBalances(records: AnyRecord[], type: "receivable" | "payable", to: string) {
   return records
     .filter((record) => {
-      if (record.status === "cancelled" || record.status === "canceled" || record.status === "voided") return false;
+      if (record.status === "cancelled" || record.status === "canceled" || record.status === "voided" || record.status === "draft") return false;
       const transactionDate = asDate(record.date ?? record.issueDate ?? record.createdAt);
       return (record.type === type || (type === "receivable" && record.customerId) || (type === "payable" && record.supplierId))
         && (!transactionDate || transactionDate <= to);
@@ -413,6 +413,31 @@ function derivePartyBalances(records: AnyRecord[], type: "receivable" | "payable
         status: amount <= paid ? "paid" : paid > 0 ? "partial" : "unpaid",
       };
     });
+}
+
+const money = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
+
+function accountBalanceAt(accountId: number, account: AnyRecord, journals: AnyRecord[], to: string): number {
+  const opening = asNumber(account.openingBalance ?? account.balance);
+  return money(opening + journals
+    .filter((journal) => journal.status === "posted" && asDate(journal.date) <= to)
+    .reduce((total, journal) => total + normalizeLines(journal.lines)
+      .filter((line) => line.accountId === String(accountId))
+      .reduce((sum, line) => sum + line.debit - line.credit, 0), 0));
+}
+
+function agingBucket(dueDate: string, asOf: string): "notDue" | "1-30" | "31-60" | "61-90" | "over90" {
+  if (!dueDate || dueDate >= asOf) return "notDue";
+  const days = Math.floor((Date.parse(`${asOf}T00:00:00Z`) - Date.parse(`${dueDate}T00:00:00Z`)) / 86_400_000);
+  if (days <= 30) return "1-30";
+  if (days <= 60) return "31-60";
+  if (days <= 90) return "61-90";
+  return "over90";
+}
+
+function reconciliationLines(journal: AnyRecord, accountId: number): number {
+  return money(normalizeLines(journal.lines).filter((line) => line.accountId === String(accountId))
+    .reduce((sum, line) => sum + line.debit - line.credit, 0));
 }
 
 router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
@@ -472,6 +497,315 @@ router.get("/accounting/ledger", requireAuth, requireSubscriptionAccess, require
     return;
   }
   response.json(report);
+});
+
+router.get("/accounting/aging", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const asOf = typeof request.query.asOf === "string" ? request.query.asOf : new Date().toISOString().slice(0, 10);
+  const type = request.query.type === "payable" ? "payable" : request.query.type === "receivable" ? "receivable" : "all";
+  if (!isValidIsoDate(asOf)) {
+    response.status(400).json({ error: "تاريخ المرجع غير صحيح." });
+    return;
+  }
+  const auth = response.locals.auth as AuthContext;
+  const [receivables, invoices, purchases] = await Promise.all([
+    recordsFor(auth, "receivables"), recordsFor(auth, "invoices"), recordsFor(auth, "purchaseOrders"),
+  ]);
+  // Only a receivable/payable of the matching kind suppresses its source document.
+  // A supplier payable must never hide an unrelated customer invoice (and vice versa).
+  const receivableInvoiceIds = new Set(receivables
+    .filter((record) => record.type === "receivable")
+    .map((record) => Number(record.invoiceId)).filter(Number.isInteger));
+  const payablePurchaseIds = new Set(receivables
+    .filter((record) => record.type === "payable")
+    .map((record) => Number(record.purchaseId ?? record.purchaseOrderId)).filter(Number.isInteger));
+  const sourceReceivables = [
+    ...receivables.filter((record) => record.type === "receivable"),
+    ...invoices.filter((record) => !receivableInvoiceIds.has(record.id)
+      && record.paymentMethod !== "cash"
+      && (Boolean(record.customerId) || sourceHasCredit(record, "invoices"))
+      && asNumber(record.paid) < sourceAmount(record)),
+  ];
+  const sourcePayables = [
+    ...receivables.filter((record) => record.type === "payable"),
+    ...purchases.filter((record) => !payablePurchaseIds.has(record.id)
+      && record.paymentMethod !== "cash"
+      && (Boolean(record.supplierId) || record.paymentMethod === "credit")
+      && asNumber(record.paid) < sourceAmount(record)),
+  ];
+  const items = [
+    ...derivePartyBalances(sourceReceivables, "receivable", asOf),
+    ...derivePartyBalances(sourcePayables, "payable", asOf),
+  ].filter((item) => item.remaining > 0 && (type === "all" || item.type === type))
+    .map((item) => ({ ...item, bucket: agingBucket(item.dueDate, asOf) }));
+  const buckets = ["notDue", "1-30", "31-60", "61-90", "over90"] as const;
+  const totals = Object.fromEntries(buckets.map((bucket) => [bucket, money(items
+    .filter((item) => item.bucket === bucket).reduce((sum, item) => sum + item.remaining, 0))]));
+  response.json({ asOf, type, items, totals, total: money(items.reduce((sum, item) => sum + item.remaining, 0)) });
+});
+
+router.get("/accounting/reconciliations", requireAuth, requireSubscriptionAccess, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const sessions = await recordsFor(auth, "bankReconciliationSessions");
+  response.json({ sessions: sessions.sort((left, right) => String(right.statementDate).localeCompare(String(left.statementDate)) || right.id - left.id) });
+});
+
+router.get("/accounting/reconciliations/:id", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const sessionId = Number(request.params.id);
+  const from = typeof request.query.from === "string" ? request.query.from : "";
+  if (!Number.isInteger(sessionId) || (from && !isValidIsoDate(from))) {
+    response.status(400).json({ error: "معرّف الجلسة أو بداية الفترة غير صحيحة." }); return;
+  }
+  const auth = response.locals.auth as AuthContext;
+  const sessions = await recordsFor(auth, "bankReconciliationSessions");
+  const session = sessions.find((item) => item.id === sessionId);
+  if (!session) { response.status(404).json({ error: "جلسة التسوية غير متاحة." }); return; }
+  const [lines, journals, accounts] = await Promise.all([
+    organizationRecordsFor(auth, "bankStatementLines"),
+    recordsFor(auth, "journalEntries"),
+    recordsFor(auth, "accounts"),
+  ]);
+  const to = String(session.statementDate);
+  const sessionLines = lines.filter((line) => Number(line.sessionId) === sessionId);
+  const matchedStatementLineByJournal = new Map(sessionLines
+    .filter((line) => line.status === "matched" && Number.isInteger(Number(line.journalId)))
+    .map((line) => [Number(line.journalId), line.id]));
+  const movements = journals.filter((journal) => journal.status === "posted" && asDate(journal.date) <= to
+    && (!from || asDate(journal.date) >= from) && reconciliationLines(journal, Number(session.accountId)) !== 0)
+    .map((journal) => ({ id: journal.id, date: asDate(journal.date), reference: String(journal.reference ?? journal.number ?? ""), description: String(journal.description ?? ""), amount: reconciliationLines(journal, Number(session.accountId)), matchedStatementLineId: matchedStatementLineByJournal.get(journal.id) ?? null }));
+  const account = accounts.find((item) => item.id === Number(session.accountId));
+  const bookBalance = account ? accountBalanceAt(account.id, account, journals, to) : null;
+  response.json({ session, statementLines: sessionLines, ledgerMovements: movements, bookBalance, period: { from: from || null, to } });
+});
+
+router.post("/accounting/reconciliations", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const body = request.body as Record<string, unknown>;
+  const accountId = Number(body?.accountId);
+  const statementDate = typeof body?.statementDate === "string" ? body.statementDate : "";
+  const statementBalance = Number(body?.statementBalance);
+  const operationId = request.get("Idempotency-Key")?.trim() ?? "";
+  const rawLines = Array.isArray(body?.lines) ? body.lines : [];
+  if (!Number.isInteger(accountId) || !isValidIsoDate(statementDate) || !Number.isFinite(statementBalance)
+    || !operationId || operationId.length > 180 || rawLines.some((line) => !line || typeof line !== "object" || !isValidIsoDate(String((line as Record<string, unknown>).date ?? "")) || !Number.isFinite(Number((line as Record<string, unknown>).amount)) || !String((line as Record<string, unknown>).description ?? "").trim())) {
+    response.status(400).json({ error: "بيانات جلسة التسوية أو أسطر الكشف غير صحيحة." });
+    return;
+  }
+  if (auth.roleId !== "owner" && auth.locationScope !== "all" && !Number.isInteger(Number(body.warehouseId))) {
+    response.status(403).json({ error: "جلسة التسوية ضمن نطاق مواقع محددة تتطلب warehouseId." });
+    return;
+  }
+  const requestFingerprint = createHash("sha256").update(JSON.stringify({ accountId, statementDate, statementBalance, lines: rawLines, warehouseId: body.warehouseId })).digest("hex");
+  try {
+    const result = await db.transaction(async (tx) => {
+      // This locks the organization row before any reconciliation write, so concurrent
+      // idempotent creates serialize with subscription/data-generation changes.
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const accounts = await recordsFor(currentAuth, "accounts", tx);
+      const account = accounts.find((item) => item.id === accountId && ["1000", "1100"].includes(String(item.code)) && item.status !== "inactive");
+      if (!account) throw new AccountingMutationError(400, "يلزم اختيار حساب الصندوق 1000 أو البنك 1100 النشط.");
+      if ((currentAuth.roleId !== "owner" && currentAuth.locationScope !== "all" && !Number.isInteger(Number(body.warehouseId))) || !isLocationAllowed(currentAuth, "bankReconciliationSessions", body)) throw new AccountingMutationError(403, "ليس لديك صلاحية للمواقع المحددة.");
+      const [existing] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "bankReconciliationSessions"), eq(erpRecordsTable.clientOperationId, operationId))).limit(1);
+      if (existing) {
+        if (existing.data.requestFingerprint !== requestFingerprint) throw new AccountingMutationError(409, "معرّف العملية مستخدم لطلب مختلف.");
+        return { session: { ...existing.data, id: existing.id }, replayed: true };
+      }
+      const sessionData = { accountId, accountCode: String(account.code), statementDate, statementBalance: money(statementBalance), status: "open", createdBy: currentAuth.id, requestFingerprint, ...(body.warehouseId != null ? { warehouseId: body.warehouseId } : {}) };
+      const [session] = await tx.insert(erpRecordsTable).values({ organizationId: currentAuth.organizationId, tableName: "bankReconciliationSessions", clientOperationId: operationId, data: sessionData }).returning();
+      const insertedLines = rawLines.length ? await tx.insert(erpRecordsTable).values(rawLines.map((raw, index) => {
+        const line = raw as Record<string, unknown>;
+        return { organizationId: currentAuth.organizationId, tableName: "bankStatementLines", data: { sessionId: session.id, date: String(line.date), amount: money(Number(line.amount)), description: String(line.description).trim(), reference: typeof line.reference === "string" ? line.reference : "", sequence: index, status: "unmatched" } };
+      })).returning() : [];
+      await tx.insert(teamAuditLogsTable).values({ organizationId: currentAuth.organizationId, actorId: currentAuth.id, actorName: currentAuth.name || currentAuth.email, action: "reconciliation_created", entity: String(session.id), details: `حساب ${account.code}` });
+      return { session: { ...sessionData, id: session.id }, lines: insertedLines.map((line) => ({ ...line.data, id: line.id })), replayed: false };
+    });
+    response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (error instanceof AccountingMutationError) { response.status(error.status).json({ error: error.message }); return; }
+    throw error;
+  }
+});
+
+router.post("/accounting/reconciliations/:id/auto-match", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const sessionId = Number(request.params.id);
+  if (!Number.isInteger(sessionId)) { response.status(400).json({ error: "معرّف جلسة التسوية غير صالح." }); return; }
+  const auth = response.locals.auth as AuthContext;
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const [session] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, sessionId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "bankReconciliationSessions"))).for("update");
+      if (!session || !isLocationAllowed(currentAuth, session.tableName, session.data, session.id)) throw new AccountingMutationError(404, "جلسة التسوية غير متاحة.");
+      if (session.data.status !== "open") throw new AccountingMutationError(409, "لا يمكن مطابقة جلسة معتمدة.");
+      const accountId = Number(session.data.accountId);
+      const lines = await organizationRecordsFor(currentAuth, "bankStatementLines", tx);
+      const journals = await recordsFor(currentAuth, "journalEntries", tx);
+      const sessionLines = lines.filter((item) => Number(item.sessionId) === sessionId);
+      const usedJournalIds = new Set(lines.filter((item) => item.status === "matched").map((item) => Number(item.journalId)));
+      let count = 0;
+      const outcomes: Array<{ statementLineId: number; status: "matched" | "unmatched"; reason: string; journalId?: number }> = [];
+      for (const line of sessionLines.filter((item) => item.status === "unmatched")) {
+        const lineDate = asDate(line.date);
+        const reference = typeof line.reference === "string" ? line.reference.trim() : "";
+        const candidates = journals.filter((journal) => {
+          const journalDate = asDate(journal.date);
+          const dateDistance = Math.abs(Date.parse(`${journalDate}T00:00:00Z`) - Date.parse(`${lineDate}T00:00:00Z`)) / 86_400_000;
+          const journalReference = String(journal.reference ?? journal.number ?? "").trim();
+          return journal.status === "posted" && journalDate <= String(session.data.statementDate) && !usedJournalIds.has(journal.id)
+            && dateDistance <= 3 && reconciliationLines(journal, accountId) === money(asNumber(line.amount))
+            && (!reference || reference === journalReference);
+        });
+        if (candidates.length === 1) {
+          await tx.update(erpRecordsTable).set({ data: { ...line, status: "matched", journalId: candidates[0].id, matchMethod: "automatic", matchReason: "تطابق المبلغ والتاريخ والمرجع عند توفره.", matchedBy: currentAuth.id, matchedAt: new Date().toISOString() }, updatedAt: new Date() }).where(eq(erpRecordsTable.id, line.id));
+          usedJournalIds.add(candidates[0].id);
+          outcomes.push({ statementLineId: line.id, status: "matched", journalId: candidates[0].id, reason: "تطابق المبلغ والتاريخ والمرجع عند توفره." });
+          count += 1;
+        } else {
+          const reason = candidates.length === 0
+            ? "لا يوجد قيد مرحّل غير مستخدم يطابق المبلغ والتاريخ ضمن نافذة ثلاثة أيام والمرجع عند توفره."
+            : "يوجد أكثر من قيد مطابق؛ يلزم اختيار يدوي.";
+          await tx.update(erpRecordsTable).set({ data: { ...line, autoMatchReason: reason }, updatedAt: new Date() }).where(eq(erpRecordsTable.id, line.id));
+          outcomes.push({ statementLineId: line.id, status: "unmatched", reason });
+        }
+      }
+      return { matched: count, outcomes };
+    });
+    response.json(result);
+  } catch (error) {
+    if (error instanceof AccountingMutationError) { response.status(error.status).json({ error: error.message }); return; }
+    throw error;
+  }
+});
+
+router.post("/accounting/reconciliations/:id/matches", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const sessionId = Number(request.params.id);
+  const body = request.body as Record<string, unknown>;
+  const lineId = Number(body?.statementLineId);
+  const journalId = Number(body?.journalId);
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  if (!Number.isInteger(sessionId) || !Number.isInteger(lineId) || !Number.isInteger(journalId) || !reason || reason.length > 500) {
+    response.status(400).json({ error: "تتطلب المطابقة اليدوية سطر كشف وقيداً وسبباً واضحاً." }); return;
+  }
+  const auth = response.locals.auth as AuthContext;
+  try {
+    await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const [session, line, journal] = await Promise.all([
+        tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, sessionId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "bankReconciliationSessions"))).for("update").then((rows) => rows[0]),
+        tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, lineId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "bankStatementLines"))).for("update").then((rows) => rows[0]),
+        tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, journalId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "journalEntries"))).for("update").then((rows) => rows[0]),
+      ]);
+      const journalDate = journal ? asDate(journal.data.date) : "";
+      const journalAmount = journal ? reconciliationLines({ ...journal.data, id: journal.id }, Number(session?.data.accountId)) : 0;
+      if (!session || !line || !journal || Number(line.data.sessionId) !== sessionId || session.data.status !== "open" || journal.data.status !== "posted" || !isValidIsoDate(journalDate) || journalDate > String(session.data.statementDate) || money(journalAmount) !== money(asNumber(line.data.amount)) || !isLocationAllowed(currentAuth, session.tableName, session.data, session.id)) throw new AccountingMutationError(409, "يجب أن يطابق القيد المرحّل مبلغ وإشارة سطر الكشف وألا يتجاوز تاريخ الكشف.");
+      const [allLines, visibleJournals] = await Promise.all([
+        organizationRecordsFor(currentAuth, "bankStatementLines", tx),
+        recordsFor(currentAuth, "journalEntries", tx),
+      ]);
+      if (!visibleJournals.some((candidate) => candidate.id === journalId)) throw new AccountingMutationError(404, "القيد غير متاح ضمن نطاق المواقع.");
+      if (line.data.status === "matched") throw new AccountingMutationError(409, "سطر الكشف مطابق مسبقاً ولا يمكن مطابقته مرة أخرى.");
+      if (allLines.some((candidate) => candidate.id !== lineId && candidate.status === "matched" && Number(candidate.journalId) === journalId)) {
+        throw new AccountingMutationError(409, "القيد مستخدم بالفعل في سطر كشف آخر.");
+      }
+      await tx.update(erpRecordsTable).set({ data: { ...line.data, status: "matched", journalId, matchMethod: "manual", manualReason: reason, matchedBy: currentAuth.id, matchedAt: new Date().toISOString() }, updatedAt: new Date() }).where(eq(erpRecordsTable.id, lineId));
+      await tx.insert(teamAuditLogsTable).values({ organizationId: currentAuth.organizationId, actorId: currentAuth.id, actorName: currentAuth.name || currentAuth.email, action: "reconciliation_manual_match", entity: String(sessionId), details: reason });
+    });
+    response.status(201).json({ sessionId, statementLineId: lineId, journalId, matchMethod: "manual", reason });
+  } catch (error) {
+    if (error instanceof AccountingMutationError) { response.status(error.status).json({ error: error.message }); return; }
+    throw error;
+  }
+});
+
+router.post("/accounting/reconciliations/:id/approve", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const sessionId = Number(request.params.id);
+  if (!Number.isInteger(sessionId)) { response.status(400).json({ error: "معرّف جلسة التسوية غير صالح." }); return; }
+  const auth = response.locals.auth as AuthContext;
+  try {
+    const approved = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const [session] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, sessionId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "bankReconciliationSessions"))).for("update");
+      if (!session || !isLocationAllowed(currentAuth, session.tableName, session.data, session.id)) throw new AccountingMutationError(404, "جلسة التسوية غير متاحة.");
+      if (session.data.status === "approved") return { ...session.data, id: session.id };
+      const accountId = Number(session.data.accountId);
+      const [accounts, journals, lines] = await Promise.all([recordsFor(currentAuth, "accounts", tx), recordsFor(currentAuth, "journalEntries", tx), organizationRecordsFor(currentAuth, "bankStatementLines", tx)]);
+      const account = accounts.find((item) => item.id === accountId);
+      if (!account) throw new AccountingMutationError(409, "حساب التسوية لم يعد متاحاً.");
+      const unmatchedLines = lines.filter((line) => Number(line.sessionId) === sessionId && line.status !== "matched");
+      if (unmatchedLines.length > 0) throw new AccountingMutationError(409, "لا يمكن اعتماد جلسة تسوية تحتوي أسطر كشف غير مطابقة.");
+      const statementBalance = money(asNumber(session.data.statementBalance));
+      const bookBalance = accountBalanceAt(accountId, account, journals, String(session.data.statementDate));
+      const outstandingStatementAmount = money(unmatchedLines.reduce((sum, line) => sum + asNumber(line.amount), 0));
+      const difference = money(statementBalance - bookBalance);
+      if (Math.abs(difference) > 0.005) {
+        throw new AccountingMutationError(409, "لا يمكن اعتماد الجلسة مع فرق غير مسوّى؛ سجّل قيد تسوية صريحاً ثم طابق سطر الكشف الخاص به.");
+      }
+      const data = { ...session.data, status: "approved", approvedAt: new Date().toISOString(), approvedBy: currentAuth.id, statementBalance, bookBalance, difference, outstandingStatementAmount };
+      await tx.update(erpRecordsTable).set({ data, updatedAt: new Date() }).where(eq(erpRecordsTable.id, sessionId));
+      await tx.insert(teamAuditLogsTable).values({ organizationId: currentAuth.organizationId, actorId: currentAuth.id, actorName: currentAuth.name || currentAuth.email, action: "reconciliation_approved", entity: String(sessionId), details: `كشف ${statementBalance}، دفاتر ${bookBalance}، فرق ${difference}` });
+      return { ...data, id: sessionId };
+    });
+    response.json({ session: approved });
+  } catch (error) {
+    if (error instanceof AccountingMutationError) { response.status(error.status).json({ error: error.message }); return; }
+    throw error;
+  }
+});
+
+router.post("/accounting/reconciliations/:id/adjustments", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const sessionId = Number(request.params.id);
+  const body = request.body as Record<string, unknown>;
+  const type = body?.type;
+  const amount = Number(body?.amount);
+  const date = typeof body?.date === "string" ? body.date : "";
+  const offsetAccountId = Number(body?.offsetAccountId);
+  const operationId = request.get("Idempotency-Key")?.trim() ?? "";
+  if (!Number.isInteger(sessionId) || !["bankFee", "interest", "cashVariance"].includes(String(type)) || !Number.isFinite(amount) || amount === 0 || !Number.isInteger(offsetAccountId) || !isValidIsoDate(date) || !operationId || operationId.length > 180) {
+    response.status(400).json({ error: "بيانات قيد التسوية غير صحيحة." }); return;
+  }
+  const fingerprint = createHash("sha256").update(JSON.stringify({ sessionId, type, amount, date, offsetAccountId })).digest("hex");
+  const auth = response.locals.auth as AuthContext;
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const [event] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "reconciliationAdjustmentEvents"), eq(erpRecordsTable.clientOperationId, operationId))).limit(1);
+      if (event) {
+        if (event.data.fingerprint !== fingerprint) throw new AccountingMutationError(409, "معرّف العملية مستخدم لطلب مختلف.");
+        return { journalId: Number(event.data.journalId), replayed: true };
+      }
+      const [session] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, sessionId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "bankReconciliationSessions"))).for("update");
+      if (!session || !isLocationAllowed(currentAuth, session.tableName, session.data, session.id)) throw new AccountingMutationError(404, "جلسة التسوية غير متاحة.");
+      if (session.data.status !== "open") throw new AccountingMutationError(409, "لا يمكن إضافة قيد إلى جلسة معتمدة.");
+      const closures = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      if (closures.some((closure) => closure.status === "closed" && date >= String(closure.from) && date <= String(closure.to))) throw new AccountingMutationError(409, "الفترة المالية مقفلة ولا يمكن إنشاء قيد تسوية فيها.");
+      const accounts = await recordsFor(currentAuth, "accounts", tx);
+      const settlement = accounts.find((account) => account.id === Number(session.data.accountId));
+      const offset = accounts.find((account) => account.id === offsetAccountId && account.status !== "inactive");
+      if (!settlement || !offset || settlement.id === offset.id) throw new AccountingMutationError(409, "حساب التسوية أو الحساب المقابل غير صالح.");
+      const absolute = money(Math.abs(amount));
+      const debitSettlement = type === "interest" || (type === "cashVariance" && amount > 0);
+      const lines = debitSettlement
+        ? [{ accountId: String(settlement.id), debit: absolute, credit: 0 }, { accountId: String(offset.id), debit: 0, credit: absolute }]
+        : [{ accountId: String(offset.id), debit: absolute, credit: 0 }, { accountId: String(settlement.id), debit: 0, credit: absolute }];
+      const labels: Record<string, string> = { bankFee: "رسوم بنكية", interest: "فائدة بنكية", cashVariance: "فرق جرد الصندوق" };
+      const [journal] = await tx.insert(erpRecordsTable).values({ organizationId: currentAuth.organizationId, tableName: "journalEntries", clientOperationId: `RECON-ADJ-${operationId}`, data: { number: `RECON-${sessionId}-${operationId.slice(0, 16)}`, date, description: labels[String(type)], status: "posted", reconciliationSessionId: sessionId, adjustmentType: type, lines, ...(session.data.warehouseId != null ? { warehouseId: session.data.warehouseId } : {}) } }).returning();
+      await tx.insert(erpRecordsTable).values({ organizationId: currentAuth.organizationId, tableName: "reconciliationAdjustmentEvents", clientOperationId: operationId, data: { sessionId, journalId: journal.id, fingerprint, type, amount, actorId: currentAuth.id } });
+      await tx.insert(teamAuditLogsTable).values({ organizationId: currentAuth.organizationId, actorId: currentAuth.id, actorName: currentAuth.name || currentAuth.email, action: "reconciliation_adjustment_created", entity: String(sessionId), details: `${String(type)}: ${amount}` });
+      return { journalId: journal.id, journal: { ...journal.data, id: journal.id }, replayed: false };
+    });
+    response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (error instanceof AccountingMutationError) { response.status(error.status).json({ error: error.message }); return; }
+    throw error;
+  }
 });
 
 router.post("/accounting/journals/:id/:action", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {

@@ -7,8 +7,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { LockKeyhole, FileSpreadsheet, TrendingUp, Landmark, Calculator, AlertTriangle, ShieldCheck, BookOpen } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { LedgerReport } from '@/components/accounting/ledger-report';
+import { ReconciliationReport } from '@/components/accounting/reconciliation-report';
+import { AgingReport } from '@/components/accounting/aging-report';
+import { CheckSquare, Clock } from 'lucide-react';
 
-type ReportType = 'trial' | 'income' | 'balance' | 'ledger';
+type ReportType = 'trial' | 'income' | 'balance' | 'ledger' | 'reconciliation' | 'aging';
 type ServerSummary = {
   totals: { revenue: number; expense: number; netIncome: number; receivables?: number; payables?: number };
   trialBalance: Array<{ id: string | number; code: string; name: string; type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense'; debit: number; credit: number }>;
@@ -168,9 +171,9 @@ export default function Reports() {
             )}
           </div>
         </div>
-        <div className="flex bg-slate-100/80 p-1.5 rounded-lg border border-slate-200 shadow-inner w-full sm:w-auto">
+        <div className="flex bg-slate-100/80 p-1.5 rounded-lg border border-slate-200 shadow-inner w-full sm:w-auto overflow-x-auto hide-scrollbar">
           <button
-            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'trial' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            className={`shrink-0 flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'trial' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
             onClick={() => setReportType('trial')}
             data-testid="tab-report-trial"
           >
@@ -179,7 +182,7 @@ export default function Reports() {
             <span className="sm:hidden">ميزان</span>
           </button>
           <button
-            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'income' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            className={`shrink-0 flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'income' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
             onClick={() => setReportType('income')}
             data-testid="tab-report-income"
           >
@@ -188,7 +191,7 @@ export default function Reports() {
             <span className="sm:hidden">الدخل</span>
           </button>
           <button
-            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'balance' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            className={`shrink-0 flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'balance' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
             onClick={() => setReportType('balance')}
             data-testid="tab-report-balance"
           >
@@ -197,7 +200,7 @@ export default function Reports() {
             <span className="sm:hidden">الميزانية</span>
           </button>
           <button
-            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'ledger' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            className={`shrink-0 flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'ledger' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
             onClick={() => setReportType('ledger')}
             data-testid="tab-report-ledger"
           >
@@ -205,55 +208,75 @@ export default function Reports() {
             <span className="hidden sm:inline">دفتر الأستاذ</span>
             <span className="sm:hidden">الأستاذ</span>
           </button>
+          <button
+            className={`shrink-0 flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'reconciliation' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            onClick={() => setReportType('reconciliation')}
+            data-testid="tab-report-reconciliation"
+          >
+            <CheckSquare className="h-4 w-4" />
+            <span className="hidden sm:inline">تسوية الحسابات</span>
+            <span className="sm:hidden">التسوية</span>
+          </button>
+          <button
+            className={`shrink-0 flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'aging' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            onClick={() => setReportType('aging')}
+            data-testid="tab-report-aging"
+          >
+            <Clock className="h-4 w-4" />
+            <span className="hidden sm:inline">أعمار الذمم</span>
+            <span className="sm:hidden">الأعمار</span>
+          </button>
         </div>
       </div>
       
-      <Card className="border-slate-200 shadow-sm">
-        <CardContent className="py-5">
-          <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
-            <div className="flex-1 max-w-2xl bg-slate-50 p-4 rounded-lg border border-slate-100">
-              <div className="flex items-center gap-2 mb-3">
-                <Calculator className="h-4 w-4 text-slate-500" />
-                <h3 className="text-sm font-bold text-slate-700">تحديد الفترة المالية</h3>
+      {reportType !== 'reconciliation' && reportType !== 'aging' && (
+        <Card className="border-slate-200 shadow-sm">
+          <CardContent className="py-5">
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
+              <div className="flex-1 max-w-2xl bg-slate-50 p-4 rounded-lg border border-slate-100">
+                <div className="flex items-center gap-2 mb-3">
+                  <Calculator className="h-4 w-4 text-slate-500" />
+                  <h3 className="text-sm font-bold text-slate-700">تحديد الفترة المالية</h3>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600">من تاريخ</label>
+                    <Input type="date" value={fromDate} max={toDate} onChange={(event) => setFromDate(event.target.value)} className="bg-white" data-testid="input-report-from" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600">إلى تاريخ</label>
+                    <Input type="date" value={toDate} min={fromDate} onChange={(event) => setToDate(event.target.value)} className="bg-white" data-testid="input-report-to" />
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-600">من تاريخ</label>
-                  <Input type="date" value={fromDate} max={toDate} onChange={(event) => setFromDate(event.target.value)} className="bg-white" data-testid="input-report-from" />
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-slate-600">إلى تاريخ</label>
-                  <Input type="date" value={toDate} min={fromDate} onChange={(event) => setToDate(event.target.value)} className="bg-white" data-testid="input-report-to" />
-                </div>
+
+              <div className="flex flex-col gap-3 lg:min-w-[280px]">
+                <Button
+                  onClick={() => void handleClose()}
+                  disabled={isClosing || connectionMode === 'loading'}
+                  className="w-full shadow-sm bg-slate-900 hover:bg-slate-800 text-white py-6"
+                  data-testid="button-close-period"
+                >
+                  <LockKeyhole className="ml-2 h-5 w-5" />
+                  <span className="text-base">{isClosing ? 'جارٍ اعتماد الإقفال...' : 'إقفال الفترة واعتماد الأرصدة'}</span>
+                </Button>
+                {closedPeriod && (
+                  <div className="flex items-start gap-2 bg-emerald-50 text-emerald-800 p-3 rounded border border-emerald-100 text-sm font-medium">
+                    <ShieldCheck className="h-4 w-4 mt-0.5 shrink-0" />
+                    <p data-testid="text-closed-period">{closedPeriod}</p>
+                  </div>
+                )}
+                {closeError && (
+                  <div className="flex items-start gap-2 bg-red-50 text-red-800 p-3 rounded border border-red-100 text-sm font-medium">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+                    <p data-testid="text-close-error">{closeError}</p>
+                  </div>
+                )}
               </div>
             </div>
-            
-            <div className="flex flex-col gap-3 lg:min-w-[280px]">
-              <Button
-                onClick={() => void handleClose()}
-                disabled={isClosing || connectionMode === 'loading'}
-                className="w-full shadow-sm bg-slate-900 hover:bg-slate-800 text-white py-6"
-                data-testid="button-close-period"
-              >
-                <LockKeyhole className="ml-2 h-5 w-5" />
-                <span className="text-base">{isClosing ? 'جارٍ اعتماد الإقفال...' : 'إقفال الفترة واعتماد الأرصدة'}</span>
-              </Button>
-              {closedPeriod && (
-                <div className="flex items-start gap-2 bg-emerald-50 text-emerald-800 p-3 rounded border border-emerald-100 text-sm font-medium">
-                  <ShieldCheck className="h-4 w-4 mt-0.5 shrink-0" />
-                  <p data-testid="text-closed-period">{closedPeriod}</p>
-                </div>
-              )}
-              {closeError && (
-                <div className="flex items-start gap-2 bg-red-50 text-red-800 p-3 rounded border border-red-100 text-sm font-medium">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                  <p data-testid="text-close-error">{closeError}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
 
       {reportType === 'trial' && (
         <Card className="border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -295,6 +318,8 @@ export default function Reports() {
       )}
 
       {reportType === 'ledger' && <LedgerReport />}
+      {reportType === 'reconciliation' && <ReconciliationReport />}
+      {reportType === 'aging' && <AgingReport />}
 
       {reportType === 'income' && (
         <Card className="max-w-3xl mx-auto border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">

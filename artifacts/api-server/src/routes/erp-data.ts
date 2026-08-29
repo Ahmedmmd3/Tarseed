@@ -7,14 +7,14 @@ import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOr
 const router: IRouter = Router();
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
-const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices"]);
+const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
   employees: "hr", projects: "operations", inventoryBalances: ["inventory", "sales"], stockTransfers: "inventory",
   stockAdjustments: "inventory",
   accounts: "accounting", journalEntries: "accounting", receivables: "accounting",
-  financialClosures: "accounting",
+  financialClosures: "accounting", bankReconciliationSessions: "accounting", bankStatementLines: "accounting",
 };
 
 const DEFAULT_ACCOUNT_DEFINITIONS = [

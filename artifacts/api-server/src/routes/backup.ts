@@ -10,7 +10,7 @@ const BACKUP_TABLE_NAMES = [
   "products", "invoices", "expenses", "customers", "sales", "returns_", "suppliers",
   "purchaseOrders", "warehouses", "employees", "projects", "inventoryBalances", "inventoryLayers",
   "stockTransfers", "stockAdjustments", "accounts", "journalEntries", "receivables",
-  "financialClosures",
+  "financialClosures", "bankReconciliationSessions", "bankStatementLines", "reconciliationAdjustmentEvents",
 ] as const;
 const TABLE_NAMES = new Set<string>(BACKUP_TABLE_NAMES);
 
@@ -362,6 +362,22 @@ function validateBackupRecords(records: BackupRecord[]): string | null {
           calculateClosureSnapshot(records, String(data.from), String(data.to)),
         ))) {
       return "يحتوي الملف على إقفال مالي غير صالح.";
+    }
+    if (record.tableName === "bankReconciliationSessions") {
+      if (!["1000", "1100"].includes(String(data.accountCode)) || !isDate(data.statementDate)
+        || !isFiniteNumber(data.statementBalance) || !["open", "approved"].includes(String(data.status))) {
+        return "يحتوي الملف على جلسة تسوية بنك أو صندوق غير صالحة.";
+      }
+    }
+    if (record.tableName === "bankStatementLines") {
+      if (!hasReference("bankReconciliationSessions", data.sessionId) || !isDate(data.date) || !isFiniteNumber(data.amount)
+        || !isNonEmptyString(data.description) || !["unmatched", "matched"].includes(String(data.status))) {
+        return "يحتوي الملف على سطر كشف حساب غير صالح.";
+      }
+    }
+    if (record.tableName === "reconciliationAdjustmentEvents"
+      && (!hasReference("bankReconciliationSessions", data.sessionId) || !hasReference("journalEntries", data.journalId) || !isNonEmptyString(data.fingerprint))) {
+      return "يحتوي الملف على حدث قيد تسوية غير صالح.";
     }
   }
 
