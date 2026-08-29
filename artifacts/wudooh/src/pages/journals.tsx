@@ -17,7 +17,9 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Plus, Search, Trash2, Calendar, FileText, CheckCircle2, AlertCircle, Sparkles, LoaderCircle } from 'lucide-react';
+import { Plus, Search, Trash2, Calendar, FileText, CheckCircle2, AlertCircle, Sparkles, LoaderCircle, RotateCcw, FilePenLine, Link2 } from 'lucide-react';
+import { JournalAdjustmentDialog, type JournalAdjustmentInput } from '@/components/accounting/journal-adjustment-dialog';
+import type { Journal } from '@/context/store';
 
 type JournalStatusFilter = 'all' | 'draft' | 'posted';
 
@@ -75,7 +77,7 @@ function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: str
 }
 
 export default function Journals() {
-  const { journals, accounts, addJournal, postJournal } = useStore();
+  const { journals, accounts, addJournal, postJournal, adjustJournal, connectionMode } = useStore();
   const { toast } = useToast();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [fromDate, setFromDate] = useState('');
@@ -93,6 +95,10 @@ export default function Journals() {
   const [suggestionError, setSuggestionError] = useState('');
   const [isSuggesting, setIsSuggesting] = useState(false);
   const [isAiSuggested, setIsAiSuggested] = useState(false);
+  const [adjustmentJournal, setAdjustmentJournal] = useState<Journal | null>(null);
+  const [adjustmentMode, setAdjustmentMode] = useState<'reverse' | 'correct'>('reverse');
+  const [isAdjusting, setIsAdjusting] = useState(false);
+  const [adjustmentOperationId, setAdjustmentOperationId] = useState('');
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.status === 'active').sort((left, right) => left.code.localeCompare(right.code, 'en')), [accounts]);
   const filteredJournals = useMemo(() => journals
@@ -182,6 +188,36 @@ export default function Journals() {
       toast({ title: 'تم ترحيل القيد', description: 'أصبح القيد معتمداً ضمن السجل المحاسبي.' });
     } catch (error) {
       toast({ title: 'تعذر ترحيل القيد', description: error instanceof Error ? error.message : 'تعذر ترحيل القيد. أعد المحاولة.', variant: 'destructive' });
+    }
+  };
+
+  const openAdjustment = (journal: Journal, mode: 'reverse' | 'correct') => {
+    setAdjustmentJournal(journal);
+    setAdjustmentMode(mode);
+    setAdjustmentOperationId(crypto.randomUUID());
+  };
+
+  const handleAdjustment = async (input: JournalAdjustmentInput) => {
+    if (!adjustmentJournal || !adjustmentOperationId || isAdjusting) return;
+    setIsAdjusting(true);
+    try {
+      const result = await adjustJournal(adjustmentJournal.id, adjustmentMode, input, adjustmentOperationId);
+      toast({
+        title: adjustmentMode === 'reverse' ? 'تم عكس القيد' : 'تم تصحيح القيد',
+        description: adjustmentMode === 'reverse'
+          ? `أُنشئ القيد ${result.reversal.number} وربط بالقيد الأصلي دون تعديله.`
+          : `أُنشئ قيد العكس ${result.reversal.number} والقيد المصحح ${result.correction?.number ?? ''}.`,
+      });
+      setAdjustmentJournal(null);
+      setAdjustmentOperationId('');
+    } catch (error) {
+      toast({
+        title: adjustmentMode === 'reverse' ? 'تعذر عكس القيد' : 'تعذر تصحيح القيد',
+        description: error instanceof Error ? error.message : 'تعذر إتمام العملية. أعد المحاولة.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAdjusting(false);
     }
   };
 
@@ -395,6 +431,17 @@ export default function Journals() {
                 <span className="font-semibold text-slate-900 text-base">{journal.description}</span>
               </div>
               <div className="flex items-center gap-3">
+                {journal.adjustmentType && (
+                  <Badge variant="outline" className={journal.adjustmentType === 'reversal' ? 'border-amber-200 bg-amber-50 text-amber-800' : 'border-blue-200 bg-blue-50 text-blue-800'}>
+                    <Link2 className="ml-1 h-3.5 w-3.5" />
+                    {journal.adjustmentType === 'reversal' ? 'قيد عكس' : 'قيد مصحح'}
+                  </Badge>
+                )}
+                {journalAdjustmentStatus(journals, journal.id) && (
+                  <Badge variant="outline" className="border-slate-300 bg-slate-100 text-slate-700">
+                    {journalAdjustmentStatus(journals, journal.id) === 'reversed' ? 'تم عكسه' : 'تم تصحيحه'}
+                  </Badge>
+                )}
                 <Badge variant={journal.status === 'posted' ? 'success' : 'secondary'} className={journal.status === 'posted' ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-amber-100 text-amber-800 hover:bg-amber-200'}>
                   {journal.status === 'posted' ? 'مرحّل ومعتمد' : 'مسودة غير معتمدة'}
                 </Badge>
@@ -403,8 +450,26 @@ export default function Journals() {
                     اعتماد وترحيل
                   </Button>
                 )}
+                {journal.status === 'posted' && journal.adjustmentType !== 'reversal' && !journalAdjustmentStatus(journals, journal.id) && (
+                  <>
+                    <Button type="button" size="sm" variant="outline" onClick={() => openAdjustment(journal, 'reverse')} disabled={connectionMode !== 'remote'} data-testid={`button-reverse-${journal.id}`}>
+                      <RotateCcw className="ml-1.5 h-4 w-4" />
+                      عكس
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => openAdjustment(journal, 'correct')} disabled={connectionMode !== 'remote'} data-testid={`button-correct-${journal.id}`}>
+                      <FilePenLine className="ml-1.5 h-4 w-4" />
+                      تصحيح
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
+            {(journal.adjustsJournalId || journal.adjustmentReason) && (
+              <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-blue-50/50 px-5 py-2.5 text-xs text-slate-600">
+                {journal.adjustsJournalId && <span>مرتبط بالقيد الأصلي #{journal.adjustsJournalId}</span>}
+                {journal.adjustmentReason && <span className="font-medium">السبب: {journal.adjustmentReason}</span>}
+              </div>
+            )}
             
             <div className="overflow-x-auto p-0">
               <Table>
@@ -456,6 +521,27 @@ export default function Journals() {
           </div>
         )}
       </div>
+      <JournalAdjustmentDialog
+        open={Boolean(adjustmentJournal)}
+        mode={adjustmentMode}
+        journal={adjustmentJournal}
+        accounts={accounts}
+        isSubmitting={isAdjusting}
+        onOpenChange={(open) => {
+          if (!open && !isAdjusting) {
+            setAdjustmentJournal(null);
+            setAdjustmentOperationId('');
+          }
+        }}
+        onSubmit={(input) => { void handleAdjustment(input); }}
+      />
     </div>
   );
+}
+
+function journalAdjustmentStatus(journals: Journal[], journalId: string): 'reversed' | 'corrected' | undefined {
+  const linked = journals.filter((journal) => journal.adjustsJournalId === journalId);
+  if (linked.some((journal) => journal.adjustmentType === 'correction')) return 'corrected';
+  if (linked.some((journal) => journal.adjustmentType === 'reversal')) return 'reversed';
+  return undefined;
 }

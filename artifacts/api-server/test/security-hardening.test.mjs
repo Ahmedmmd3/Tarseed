@@ -1032,3 +1032,91 @@ test("يتجاهل عنوان X-Forwarded-For عند الاتصال المباش
   assert.equal(attempts[10].response.status, 429, JSON.stringify(attempts[10].payload));
   assert.ok(Number(attempts[10].response.headers.get("retry-after")) > 0);
 });
+
+test("يعكس القيد يذرياً ويمنع التكرار والإقفال وتجاوز نطاق الموقع", async () => {
+  const member = ids.users["accounting-member"];
+  const { cookie } = await login(member.email, passwords.accountingMember);
+  const accounts = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, member.organizationId),
+    eq(erpRecordsTable.tableName, "accounts"),
+  )).limit(2);
+  assert.equal(accounts.length, 2);
+  const lines = [
+    { id: "1", accountId: String(accounts[0].id), debit: 125, credit: 0 },
+    { id: "2", accountId: String(accounts[1].id), debit: 0, credit: 125 },
+  ];
+  const originalData = {
+    warehouseId: ids.warehouses.allowed,
+    number: `ADJ-${suffix}`,
+    date: "2026-08-10",
+    description: "قيد يدوي لاختبار العكس",
+    status: "posted",
+    lines,
+  };
+  const original = await createRecord(member.organizationId, "journalEntries", originalData);
+  const restricted = await createRecord(member.organizationId, "journalEntries", { ...originalData, warehouseId: ids.warehouses.restricted, number: `ADJ-RESTRICTED-${suffix}` });
+  const closed = await createRecord(member.organizationId, "journalEntries", { ...originalData, number: `ADJ-CLOSED-${suffix}` });
+  const invalid = await createRecord(member.organizationId, "journalEntries", { ...originalData, number: `ADJ-INVALID-${suffix}` });
+  const operationId = randomUUID();
+  const headers = { "X-Wudooh-Data-Generation": "1", "Idempotency-Key": operationId };
+
+  const first = await request(`/accounting/journals/${original.id}/reverse`, {
+    method: "POST", cookie, headers,
+    body: { date: "2026-08-20", reason: "قيد مكرر يحتاج العكس" },
+  });
+  assert.equal(first.response.status, 201, JSON.stringify(first.payload));
+  assert.equal(first.payload.reversal.adjustsJournalId, original.id);
+  assert.equal(first.payload.reversal.lines[0].credit, 125);
+
+  const [unchangedOriginal] = await db.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, original.id));
+  assert.deepEqual(unchangedOriginal.data, originalData);
+
+  const replay = await request(`/accounting/journals/${original.id}/reverse`, {
+    method: "POST", cookie, headers,
+    body: { date: "2026-08-20", reason: "قيد مكرر يحتاج العكس" },
+  });
+  assert.equal(replay.response.status, 200, JSON.stringify(replay.payload));
+  assert.equal(replay.payload.reversal.id, first.payload.reversal.id);
+
+  const duplicate = await request(`/accounting/journals/${original.id}/reverse`, {
+    method: "POST", cookie, headers: { ...headers, "Idempotency-Key": randomUUID() },
+    body: { date: "2026-08-20", reason: "محاولة عكس ثانية" },
+  });
+  assert.equal(duplicate.response.status, 409, JSON.stringify(duplicate.payload));
+
+  const outsideScope = await request(`/accounting/journals/${restricted.id}/reverse`, {
+    method: "POST", cookie, headers: { ...headers, "Idempotency-Key": randomUUID() },
+    body: { date: "2026-08-20", reason: "محاولة خارج النطاق" },
+  });
+  assert.equal(outsideScope.response.status, 404, JSON.stringify(outsideScope.payload));
+
+  const closedPeriod = await request(`/accounting/journals/${closed.id}/reverse`, {
+    method: "POST", cookie, headers: { ...headers, "Idempotency-Key": randomUUID() },
+    body: { date: "2025-06-01", reason: "تاريخ مقفل" },
+  });
+  assert.equal(closedPeriod.response.status, 409, JSON.stringify(closedPeriod.payload));
+
+  const invalidCorrection = await request(`/accounting/journals/${invalid.id}/correct`, {
+    method: "POST", cookie, headers: { ...headers, "Idempotency-Key": randomUUID() },
+    body: {
+      date: "2026-08-20",
+      reason: "تصحيح غير متزن",
+      description: "قيد مصحح غير صالح",
+      lines: [
+        { accountId: String(accounts[0].id), debit: 100, credit: 0 },
+        { accountId: String(accounts[1].id), debit: 0, credit: 90 },
+      ],
+    },
+  });
+  assert.equal(invalidCorrection.response.status, 400, JSON.stringify(invalidCorrection.payload));
+
+  const [event] = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, member.organizationId),
+    eq(erpRecordsTable.tableName, "journalAdjustmentEvents"),
+    eq(erpRecordsTable.clientOperationId, operationId),
+  ));
+  assert.equal(event.data.originalJournalId, original.id);
+  assert.equal(event.data.auditSnapshot.original.status, "posted");
+  assert.equal(event.data.auditSnapshot.original.warehouseId, ids.warehouses.allowed);
+  assert.equal(event.data.auditSnapshot.relationship.originalRemainsUnchanged, true);
+});

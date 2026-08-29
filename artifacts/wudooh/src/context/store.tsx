@@ -28,6 +28,18 @@ export type Journal = {
   description: string;
   lines: JournalLine[];
   status: 'draft' | 'posted';
+  adjustmentType?: 'reversal' | 'correction';
+  adjustsJournalId?: string;
+  adjustmentStatus?: 'reversed' | 'corrected';
+  adjustedByJournalIds?: string[];
+  adjustmentReason?: string;
+};
+
+export type JournalAdjustmentInput = {
+  date: string;
+  reason: string;
+  description?: string;
+  lines?: Array<Omit<JournalLine, 'id'>>;
 };
 
 export type ReceivableType = 'receivable' | 'payable';
@@ -63,6 +75,7 @@ type StoreContextType = {
   addJournal: (journal: Omit<Journal, 'id' | 'number'>) => Promise<void>;
   updateJournal: (id: string, journal: Partial<Journal>) => Promise<void>;
   postJournal: (id: string) => Promise<void>;
+  adjustJournal: (id: string, action: 'reverse' | 'correct', input: JournalAdjustmentInput, operationId: string) => Promise<{ reversal: Journal; correction?: Journal }>;
   receivables: Receivable[];
   addReceivable: (receivable: Omit<Receivable, 'id'>) => Promise<void>;
   updateReceivable: (id: string, receivable: Partial<Receivable>) => Promise<void>;
@@ -605,6 +618,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const adjustJournal = async (id: string, action: 'reverse' | 'correct', input: JournalAdjustmentInput, operationId: string) => {
+    if (connectionMode !== 'remote') {
+      throw new Error('عكس وتصحيح القيود يتطلب الاتصال بسجل المنشأة لضمان الذرية وسجل التدقيق.');
+    }
+    const response = await fetch(`/api/accounting/journals/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': operationId,
+        'X-Wudooh-Data-Generation': String(currentDataGeneration()),
+      },
+      body: JSON.stringify(input),
+    });
+    const payload = await response.json().catch(() => ({})) as {
+      reversal?: Journal;
+      correction?: Journal;
+      error?: string;
+    };
+    if (!response.ok || !payload.reversal) {
+      notifyStaleDataGeneration(response, payload.error);
+      throw new Error(payload.error ?? 'تعذر عكس أو تصحيح القيد.');
+    }
+    const reversal = normalizeJournal(payload.reversal);
+    const correction = payload.correction ? normalizeJournal(payload.correction) : undefined;
+    setJournals((current) => [
+      ...current,
+      reversal,
+      ...(correction ? [correction] : []),
+    ]);
+    return { reversal, ...(correction ? { correction } : {}) };
+  };
+
   const addReceivable = async (receivable: Omit<Receivable, 'id'>) => {
     if (connectionMode === 'remote') {
       const created = normalizeReceivable(await createRecord<Receivable>('receivables', receivable, currentDataGeneration()));
@@ -706,7 +752,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       currentUser, signOut,
       refreshSession: loadSharedData,
       accounts, addAccount, updateAccount,
-      journals, addJournal, updateJournal, postJournal,
+      journals, addJournal, updateJournal, postJournal, adjustJournal,
       receivables, addReceivable, updateReceivable, payReceivable,
       closures, closePeriod, connectionMode, canRetrySharedConnection,
       syncQueue,
@@ -802,7 +848,13 @@ function normalizeAccount(account: Account): Account {
 }
 
 function normalizeJournal(journal: Journal): Journal {
-  return { ...journal, id: String(journal.id), lines: journal.lines.map((line) => ({ ...line, id: String(line.id), accountId: String(line.accountId), debit: Number(line.debit), credit: Number(line.credit) })) };
+  return {
+    ...journal,
+    id: String(journal.id),
+    ...(journal.adjustsJournalId == null ? {} : { adjustsJournalId: String(journal.adjustsJournalId) }),
+    ...(Array.isArray(journal.adjustedByJournalIds) ? { adjustedByJournalIds: journal.adjustedByJournalIds.map(String) } : {}),
+    lines: journal.lines.map((line) => ({ ...line, id: String(line.id), accountId: String(line.accountId), debit: Number(line.debit), credit: Number(line.credit) })),
+  };
 }
 
 function normalizeReceivable(receivable: Receivable): Receivable {

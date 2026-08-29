@@ -1,15 +1,28 @@
+import { createHash } from "node:crypto";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
 import { buildLedgerReport } from "../lib/accounting-ledger";
+import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type JournalAdjustmentAction, type JournalRecord } from "../lib/journal-adjustments";
 
 const router: IRouter = Router();
 
 type AnyRecord = Record<string, unknown> & { id: number };
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
+
+class AccountingMutationError extends Error {
+  constructor(readonly status: number, message: string, readonly code?: string) {
+    super(message);
+  }
+}
+
+function lockedAccountingMutationError(response: Response): AccountingMutationError {
+  const rejection = lockedWriteRejection(response);
+  return new AccountingMutationError(rejection.status, rejection.error, rejection.code);
+}
 
 const asNumber = (value: unknown): number => {
   const number = typeof value === "number" ? value : Number(value);
@@ -276,6 +289,155 @@ router.get("/accounting/ledger", requireAuth, requireSubscriptionAccess, require
     return;
   }
   response.json(report);
+});
+
+router.post("/accounting/journals/:id/:action", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const journalId = Number(request.params.id);
+  const action = String(request.params.action ?? "") as JournalAdjustmentAction;
+  const operationId = request.get("Idempotency-Key")?.trim() ?? "";
+  const body = request.body;
+  if (!Number.isInteger(journalId) || journalId <= 0 || (action !== "reverse" && action !== "correct")) {
+    response.status(400).json({ error: "طلب عكس أو تصحيح القيد غير صالح." });
+    return;
+  }
+  if (!operationId || operationId.length > 180) {
+    response.status(400).json({ error: "معرّف عملية العكس أو التصحيح مطلوب." });
+    return;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    response.status(400).json({ error: "بيانات العكس أو التصحيح غير صحيحة." });
+    return;
+  }
+  const requestBody = body as Record<string, unknown>;
+  const requestFingerprint = createHash("sha256")
+    .update(JSON.stringify({ action, journalId, body: requestBody }))
+    .digest("hex");
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedAccountingMutationError(response);
+      }
+
+      const visibleJournals = await recordsFor(currentAuth, "journalEntries", tx);
+      const visibleOriginal = visibleJournals.find((journal) => journal.id === journalId);
+      if (!visibleOriginal) throw new AccountingMutationError(404, "القيد غير متاح ضمن نطاقك.");
+      const [lockedOriginal] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, journalId),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "journalEntries"),
+      )).for("update");
+      if (!lockedOriginal) throw new AccountingMutationError(404, "القيد غير متاح.");
+      const original: JournalRecord = { ...lockedOriginal.data, id: lockedOriginal.id };
+
+      const [replayedEvent] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "journalAdjustmentEvents"),
+        eq(erpRecordsTable.clientOperationId, operationId),
+      )).limit(1);
+      if (replayedEvent) {
+        if (
+          replayedEvent.data.requestFingerprint !== requestFingerprint
+          || Number(replayedEvent.data.originalJournalId) !== journalId
+        ) {
+          throw new AccountingMutationError(409, "معرّف العملية مستخدم لطلب مختلف.");
+        }
+        const createdJournalIds = Array.isArray(replayedEvent.data.createdJournalIds)
+          ? replayedEvent.data.createdJournalIds.map(Number)
+          : [];
+        const replayedJournals = visibleJournals.filter((journal) => createdJournalIds.includes(journal.id));
+        const replayedReversal = replayedJournals.find((journal) => journal.adjustmentType === "reversal");
+        const replayedCorrection = replayedJournals.find((journal) => journal.adjustmentType === "correction");
+        if (!replayedReversal || (action === "correct" && !replayedCorrection)) {
+          throw new AccountingMutationError(409, "عملية التصحيح السابقة غير مكتملة وتحتاج مراجعة.");
+        }
+        return {
+          replayed: true,
+          reversal: replayedReversal,
+          correction: replayedCorrection,
+        };
+      }
+
+      const [priorAdjustment] = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "journalAdjustmentEvents"),
+        sql`${erpRecordsTable.data}->>'originalJournalId' = ${String(journalId)}`,
+      )).limit(1);
+      if (priorAdjustment) throw new AccountingMutationError(409, "سبق عكس أو تصحيح هذا القيد.");
+      const prepared = prepareJournalAdjustment(original, action, requestBody);
+      const adjustmentDate = String(prepared.reversal.date);
+      const closures = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      if (closures.some((closure) => closure.status === "closed" && adjustmentDate >= String(closure.from) && adjustmentDate <= String(closure.to))) {
+        throw new AccountingMutationError(409, "الفترة المالية المحددة مقفلة. اختر تاريخاً ضمن فترة مفتوحة.");
+      }
+
+      if (prepared.correction) {
+        const accountIds = new Set((prepared.correction.lines as Array<Record<string, unknown>>).map((line) => String(line.accountId)));
+        const accounts = await recordsFor(currentAuth, "accounts", tx);
+        const activeAccountIds = new Set(accounts.filter((account) => account.status !== "inactive").map((account) => String(account.id)));
+        if ([...accountIds].some((accountId) => !activeAccountIds.has(accountId))) {
+          throw new AccountingMutationError(400, "القيد المصحح يحتوي حساباً غير موجود أو غير نشط.");
+        }
+      }
+
+      const reversalOperationId = `${operationId}:reversal`;
+      const correctionOperationId = `${operationId}:correction`;
+      const [createdReversal] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "journalEntries",
+        clientOperationId: reversalOperationId,
+        data: { ...prepared.reversal, adjustmentRequestFingerprint: requestFingerprint },
+      }).returning();
+      const [createdCorrection] = prepared.correction
+        ? await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "journalEntries",
+          clientOperationId: correctionOperationId,
+          data: { ...prepared.correction, adjustmentRequestFingerprint: requestFingerprint },
+        }).returning()
+        : [];
+      const createdIds = [createdReversal.id, ...(createdCorrection ? [createdCorrection.id] : [])];
+      const details = auditDetails(original, prepared, createdIds);
+      await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "journalAdjustmentEvents",
+        clientOperationId: operationId,
+        data: {
+          action,
+          originalJournalId: journalId,
+          createdJournalIds: createdIds,
+          reason: String(prepared.reversal.adjustmentReason),
+          requestFingerprint,
+          auditSnapshot: JSON.parse(details),
+          actorId: currentAuth.id,
+          occurredAt: new Date().toISOString(),
+        },
+      });
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: currentAuth.organizationId,
+        actorId: currentAuth.id,
+        actorName: currentAuth.name || currentAuth.email,
+        action: action === "reverse" ? "journal_reversed" : "journal_corrected",
+        entity: String(original.number ?? journalId),
+        details,
+      });
+      return {
+        replayed: false,
+        reversal: { ...createdReversal.data, id: createdReversal.id },
+        correction: createdCorrection ? { ...createdCorrection.data, id: createdCorrection.id } : undefined,
+      };
+    });
+    response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (error instanceof JournalAdjustmentError || error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...("code" in error && error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
 });
 
 router.post("/accounting/sync-source-journals", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {

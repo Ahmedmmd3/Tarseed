@@ -39,6 +39,8 @@ const actionLabels: Record<string, string> = {
   journalEntries_created: 'إنشاء قيد يومية',
   journalEntries_updated: 'تحديث قيد يومية',
   journalEntries_deleted: 'حذف قيد يومية',
+  journal_reversed: 'عكس قيد مرحّل',
+  journal_corrected: 'تصحيح قيد مرحّل',
   financial_period_closed: 'إقفال فترة مالية',
   source_journals_synced: 'مزامنة قيود المصادر',
   accounts_created: 'إنشاء حساب',
@@ -81,6 +83,41 @@ function labelForAction(action: string): string {
   return actionLabels[action] ?? action.replaceAll('_', ' ');
 }
 
+type JournalAdjustmentAudit = {
+  reason?: string;
+  original?: AuditJournalSnapshot;
+  created?: AuditJournalSnapshot[];
+  relationship?: { originalJournalId?: number; createdJournalIds?: number[]; originalRemainsUnchanged?: boolean };
+};
+
+type AuditJournalLine = { accountId?: string | number; debit?: number; credit?: number };
+type AuditJournalSnapshot = {
+  id?: number;
+  number?: string;
+  date?: string;
+  description?: string;
+  status?: string;
+  warehouseId?: string | number;
+  fromWarehouseId?: string | number;
+  toWarehouseId?: string | number;
+  sourceType?: string;
+  sourceId?: string | number;
+  adjustmentType?: string;
+  adjustsJournalId?: string | number;
+  adjustmentReason?: string;
+  lines?: AuditJournalLine[];
+};
+
+function parseJournalAdjustmentAudit(log: AuditLog): JournalAdjustmentAudit | null {
+  if (log.action !== 'journal_reversed' && log.action !== 'journal_corrected') return null;
+  try {
+    const parsed = JSON.parse(log.details) as JournalAdjustmentAudit;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function iconForCategory(category: Exclude<LogCategory, 'all'>) {
   if (category === 'sales') return ShoppingCart;
   if (category === 'accounting') return BookOpen;
@@ -94,22 +131,29 @@ export default function ActivityLog() {
   const [category, setCategory] = useState<LogCategory>('all');
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [nextBeforeId, setNextBeforeId] = useState<number | null>(null);
   const [error, setError] = useState('');
 
-  const loadLogs = useCallback(async () => {
-    setIsLoading(true);
+  const loadLogs = useCallback(async (beforeId?: number) => {
+    const append = Boolean(beforeId);
+    if (append) setIsLoadingMore(true);
+    else setIsLoading(true);
     setError('');
     try {
-      const response = await fetch('/api/audit-logs', { credentials: 'include', cache: 'no-store' });
-      const payload = await response.json() as { logs?: AuditLog[]; error?: string };
+      const before = beforeId ? `&beforeId=${beforeId}` : '';
+      const response = await fetch(`/api/audit-logs?limit=50${before}`, { credentials: 'include', cache: 'no-store' });
+      const payload = await response.json() as { logs?: AuditLog[]; nextBeforeId?: number | null; error?: string };
       if (!response.ok || !Array.isArray(payload.logs)) {
         throw new Error(payload.error ?? 'تعذر تحميل سجل العمليات.');
       }
-      setLogs(payload.logs);
+      setLogs((current) => append ? [...current, ...payload.logs!] : payload.logs!);
+      setNextBeforeId(payload.nextBeforeId ?? null);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'تعذر تحميل سجل العمليات.');
     } finally {
-      setIsLoading(false);
+      if (append) setIsLoadingMore(false);
+      else setIsLoading(false);
     }
   }, []);
 
@@ -190,6 +234,14 @@ export default function ActivityLog() {
               {filteredLogs.map((log) => <ActivityRow key={log.id} log={log} />)}
             </div>
           )}
+          {!isLoading && !error && nextBeforeId && (
+            <div className="border-t border-slate-100 p-4 text-center">
+              <Button type="button" variant="outline" onClick={() => void loadLogs(nextBeforeId)} disabled={isLoadingMore} data-testid="button-load-more-activity">
+                {isLoadingMore ? <LoaderCircle className="ml-2 h-4 w-4 animate-spin" /> : <CalendarClock className="ml-2 h-4 w-4" />}
+                {isLoadingMore ? 'جارٍ تحميل السجل الأقدم...' : 'تحميل عمليات أقدم'}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -204,6 +256,7 @@ function ActivityRow({ log }: { log: AuditLog }) {
   const category = categoryForAction(log.action);
   const Icon = iconForCategory(category);
   const date = new Date(log.createdAt);
+  const adjustment = parseJournalAdjustmentAudit(log);
   return (
     <div className="flex flex-col gap-4 px-5 py-4 transition hover:bg-slate-50 sm:flex-row sm:items-center" data-testid={`activity-row-${log.id}`}>
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600"><Icon className="h-5 w-5" aria-hidden="true" /></span>
@@ -212,11 +265,64 @@ function ActivityRow({ log }: { log: AuditLog }) {
           <h3 className="font-bold text-slate-900">{labelForAction(log.action)}</h3>
           <Badge variant="outline">{categoryLabels[category]}</Badge>
         </div>
-        <p className="mt-1 truncate text-sm text-slate-500">{log.details || (log.entity ? `المرجع: ${log.entity}` : 'تم تسجيل العملية بنجاح.')}</p>
+        <p className="mt-1 text-sm text-slate-500">
+          {adjustment
+            ? `القيد الأصلي ${adjustment.original?.number ?? log.entity} — السبب: ${adjustment.reason ?? 'غير محدد'}`
+            : log.details || (log.entity ? `المرجع: ${log.entity}` : 'تم تسجيل العملية بنجاح.')}
+        </p>
+        {adjustment && (
+          <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600" data-testid={`journal-audit-details-${log.id}`}>
+            <summary className="cursor-pointer font-bold text-slate-800">عرض تفاصيل القيد قبل وبعد</summary>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              <AuditJournalSnapshot title="القيد الأصلي" journal={adjustment.original} />
+              <div className="space-y-3">
+                {(adjustment.created ?? []).map((journal, index) => (
+                  <AuditJournalSnapshot key={`${journal.id ?? index}`} title={journal.adjustmentType === 'reversal' ? 'قيد العكس' : 'القيد المصحح'} journal={journal} />
+                ))}
+              </div>
+            </div>
+            {adjustment.relationship?.originalRemainsUnchanged && (
+              <p className="mt-3 rounded-lg bg-emerald-50 px-3 py-2 font-medium text-emerald-800">
+                القيد الأصلي بقي دون تعديل. القيود المرتبطة: {(adjustment.relationship.createdJournalIds ?? []).join('، ')}
+              </p>
+            )}
+          </details>
+        )}
       </div>
       <div className="flex shrink-0 flex-col gap-1 text-xs text-slate-400 sm:items-end">
         <span className="inline-flex items-center gap-1 font-semibold text-slate-600"><UsersRound className="h-3.5 w-3.5" aria-hidden="true" />{log.actorName}</span>
         <span className="inline-flex items-center gap-1"><CalendarClock className="h-3.5 w-3.5" aria-hidden="true" />{date.toLocaleString('ar-SA')}</span>
+      </div>
+    </div>
+  );
+}
+
+function AuditJournalSnapshot({ title, journal }: { title: string; journal?: AuditJournalSnapshot }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-3">
+      <p className="font-bold text-slate-800">{title}: {journal?.number ?? '—'}</p>
+      <p className="mt-1">{journal?.date ?? '—'} — {journal?.description ?? 'بدون بيان'}</p>
+      <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+        <span className="rounded bg-slate-200 px-2 py-1">الحالة: {journal?.status ?? '—'}</span>
+        {journal?.warehouseId != null && <span className="rounded bg-slate-200 px-2 py-1">الموقع: {journal.warehouseId}</span>}
+        {journal?.fromWarehouseId != null && <span className="rounded bg-slate-200 px-2 py-1">من موقع: {journal.fromWarehouseId}</span>}
+        {journal?.toWarehouseId != null && <span className="rounded bg-slate-200 px-2 py-1">إلى موقع: {journal.toWarehouseId}</span>}
+        {journal?.sourceType && <span className="rounded bg-slate-200 px-2 py-1">المصدر: {journal.sourceType} / {journal.sourceId ?? '—'}</span>}
+        {journal?.adjustsJournalId != null && <span className="rounded bg-slate-200 px-2 py-1">يرتبط بالقيد: {journal.adjustsJournalId}</span>}
+      </div>
+      <div className="mt-2 overflow-x-auto rounded-md border border-slate-200 bg-white">
+        <table className="w-full min-w-[360px] text-right">
+          <thead className="bg-slate-100 text-slate-500"><tr><th className="px-2 py-1.5">الحساب</th><th className="px-2 py-1.5">مدين</th><th className="px-2 py-1.5">دائن</th></tr></thead>
+          <tbody>
+            {(journal?.lines ?? []).map((line, index) => (
+              <tr key={`${line.accountId ?? index}-${index}`} className="border-t border-slate-100">
+                <td className="px-2 py-1.5 font-mono">{line.accountId ?? '—'}</td>
+                <td className="px-2 py-1.5 font-mono">{Number(line.debit ?? 0).toLocaleString('ar-SA', { minimumFractionDigits: 2 })}</td>
+                <td className="px-2 py-1.5 font-mono">{Number(line.credit ?? 0).toLocaleString('ar-SA', { minimumFractionDigits: 2 })}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

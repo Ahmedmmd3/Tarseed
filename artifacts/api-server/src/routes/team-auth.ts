@@ -1,5 +1,5 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import {
   authSessionsTable,
@@ -1319,13 +1319,22 @@ router.post("/team/members/:id/toggle", requireAuth, requireSubscriptionAccess, 
   response.json({ member: safeUser(updated, auth) });
 });
 
-router.get("/audit-logs", requireAuth, requireSubscriptionAccess, requireOwner, async (_request: Request, response: Response): Promise<void> => {
+router.get("/audit-logs", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
+  const requestedLimit = Number(request.query.limit);
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 10), 100) : 50;
+  const requestedBefore = Number(request.query.beforeId);
+  const beforeId = Number.isInteger(requestedBefore) && requestedBefore > 0 ? requestedBefore : null;
   const logs = await db.select().from(teamAuditLogsTable)
-    .where(eq(teamAuditLogsTable.organizationId, auth.organizationId))
+    .where(and(
+      eq(teamAuditLogsTable.organizationId, auth.organizationId),
+      ...(beforeId ? [lt(teamAuditLogsTable.id, beforeId)] : []),
+    ))
     .orderBy(desc(teamAuditLogsTable.createdAt))
-    .limit(50);
-  response.json({ logs });
+    .limit(limit + 1);
+  const hasMore = logs.length > limit;
+  const page = logs.slice(0, limit);
+  response.json({ logs: page, nextBeforeId: hasMore ? page.at(-1)?.id ?? null : null });
 });
 
 export default router;
