@@ -65,3 +65,33 @@ test("يبقي المستند غير الموقّع خارج مسار الامت
   assert.match(result.localValidationError || "", /غير موقع/);
   assert.doesNotMatch(result.xml, /xades:QualifyingProperties/);
 });
+
+test("يحافظ إشعار التصحيح على فرق صافي الضريبة وVAT كما حُسبا من المصدر", async () => {
+  const result = await generateInvoiceDocument({
+    ...baseInput,
+    documentType: "credit_note",
+    parentInvoiceUuid: "b1b1b1b1-1111-4111-8111-111111111111",
+    lines: [{ name: "فرق تصحيح", sku: "", quantity: 1, unitPrice: 20, total: 20 }],
+    seller: { ...seller, pricesIncludeVat: false },
+    taxExclusiveAmountOverride: 20,
+    taxAmountOverride: 3,
+  });
+  assert.equal(result.taxExclusiveAmount, 20);
+  assert.equal(result.taxAmount, 3);
+  assert.equal(result.taxInclusiveAmount, 23);
+  assert.match(result.xml, /<cbc:TaxAmount currencyID="SAR">3\.00<\/cbc:TaxAmount>/);
+  assert.match(result.xml, /<cbc:TaxExclusiveAmount currencyID="SAR">20\.00<\/cbc:TaxExclusiveAmount>/);
+  assert.match(result.xml, /<cac:BillingReference>.*b1b1b1b1-1111-4111-8111-111111111111.*<\/cac:BillingReference>/);
+});
+
+test("يرفض فرق VAT وحده بدلاً من إصدار XML بأساس خاضع صفري", async () => {
+  await assert.rejects(() => generateInvoiceDocument({
+    ...baseInput,
+    documentType: "debit_note",
+    parentInvoiceUuid: "b1b1b1b1-1111-4111-8111-111111111111",
+    lines: [{ name: "فرق ضريبة", sku: "", quantity: 1, unitPrice: 0, total: 0 }],
+    seller: { ...seller, pricesIncludeVat: false },
+    taxExclusiveAmountOverride: 0,
+    taxAmountOverride: 3,
+  }), /دون أساس خاضع/);
+});

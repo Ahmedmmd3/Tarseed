@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 const origin = process.env.INVENTORY_TEST_ORIGIN ?? "http://127.0.0.1:80";
@@ -259,6 +263,8 @@ test("إلغاء الفاتورة يعيد المخزون والذمم وينش�
   assert.equal(cancel.payload.source.status, "cancelled");
   assert.equal(cancel.payload.reversal.adjustmentType, "reversal");
   assert.equal(cancel.payload.reversal.sourceId, invoiceId);
+  assert.equal(cancel.payload.eInvoiceAdjustment.documentType, "credit_note");
+  assert.equal(cancel.payload.source.eInvoiceAdjustmentDocumentId, cancel.payload.eInvoiceAdjustment.id);
 
   const replay = await request(`/accounting/sources/invoices/${invoiceId}/cancel`, {
     method: "POST",
@@ -269,6 +275,17 @@ test("إلغاء الفاتورة يعيد المخزون والذمم وينش�
   assert.equal(replay.response.status, 200, JSON.stringify(replay.payload));
   assert.equal(replay.payload.replayed, true);
   assert.equal(replay.payload.reversal.id, cancel.payload.reversal.id);
+  assert.equal(replay.payload.eInvoiceAdjustment.id, cancel.payload.eInvoiceAdjustment.id);
+
+  const eInvoiceDocuments = await request("/e-invoicing/documents", { cookie: owner.cookie });
+  assert.equal(eInvoiceDocuments.response.status, 200, JSON.stringify(eInvoiceDocuments.payload));
+  const creditNote = eInvoiceDocuments.payload.documents.find((document) => document.id === cancel.payload.eInvoiceAdjustment.id);
+  assert.equal(creditNote.documentType, "credit_note");
+  assert.equal(creditNote.parentDocumentId, checkout.payload.invoice.eInvoiceDocumentId);
+  assert.equal(creditNote.parentInvoiceNumber, checkout.payload.invoice.number);
+  assert.equal(creditNote.taxExclusiveAmount, checkout.payload.invoice.subtotal);
+  assert.equal(creditNote.taxAmount, checkout.payload.invoice.tax);
+  assert.equal(creditNote.taxInclusiveAmount, checkout.payload.invoice.total);
 
   const [balances, receivables, journals] = await Promise.all([
     request("/data/inventoryBalances", { cookie: owner.cookie }),
@@ -288,6 +305,100 @@ test("إلغاء الفاتورة يعيد المخزون والذمم وينش�
     items: [{ productId: product.payload.record.id, quantity: 1 }],
   });
   assert.equal(resale.response.status, 200, JSON.stringify(resale.payload));
+  const increaseCorrection = await request(`/accounting/sources/invoices/${resale.payload.invoice.id}/correct`, {
+    method: "POST",
+    cookie: owner.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      reason: "زيادة الكمية الصحيحة",
+      effectiveDate: "2026-08-30",
+      replacement: {
+        items: [{
+          productId: product.payload.record.id,
+          warehouseId: warehouse.id,
+          quantity: 2,
+          unitPriceExVat: 25,
+          vatRate: 15,
+        }],
+      },
+    },
+  });
+  assert.equal(increaseCorrection.response.status, 201, JSON.stringify(increaseCorrection.payload));
+  assert.equal(increaseCorrection.payload.eInvoiceAdjustment.documentType, "debit_note");
+
+  const setup = await request("/e-invoicing/setup", {
+    method: "PUT",
+    cookie: owner.cookie,
+    body: {
+      unitName: "وحدة اختبار الإشعارات المؤجلة",
+      deviceSerialNumber: unique("DEVICE"),
+      sellerName: "منشأة اختبار الإشعارات",
+      vatNumber: "310122393500003",
+      commercialRegistrationNumber: "1010123456",
+      street: "شارع الاختبار",
+      buildingNumber: "1234",
+      city: "الرياض",
+      postalCode: "12345",
+      countryCode: "SA",
+      vatRate: 15,
+      pricesIncludeVat: false,
+    },
+  });
+  assert.equal(setup.response.status, 200, JSON.stringify(setup.payload));
+  const csr = await request("/e-invoicing/setup/csr", { method: "POST", cookie: owner.cookie });
+  assert.equal(csr.response.status, 200, JSON.stringify(csr.payload));
+  const certificateDirectory = mkdtempSync(join(tmpdir(), "einvoice-adjustment-certificate-"));
+  try {
+    const csrPath = join(certificateDirectory, "device.csr");
+    const caKeyPath = join(certificateDirectory, "ca.key");
+    const caCertificatePath = join(certificateDirectory, "ca.crt");
+    const certificatePath = join(certificateDirectory, "device.crt");
+    writeFileSync(csrPath, csr.payload.csrPem);
+    execFileSync("openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", caKeyPath], {
+      stdio: "ignore",
+    });
+    execFileSync("openssl", [
+      "req", "-x509", "-new", "-key", caKeyPath, "-days", "1",
+      "-subj", "/CN=Inventory Test CA/O=Tarseed/C=SA",
+      "-out", caCertificatePath,
+    ], { stdio: "ignore" });
+    execFileSync("openssl", [
+      "x509", "-req", "-in", csrPath, "-CA", caCertificatePath, "-CAkey", caKeyPath,
+      "-CAcreateserial", "-days", "1", "-out", certificatePath,
+    ], { stdio: "ignore" });
+    const credentials = await request("/e-invoicing/credentials", {
+      method: "PUT",
+      cookie: owner.cookie,
+      body: {
+        certificatePem: readFileSync(certificatePath, "utf8"),
+        csid: "sandbox-test-csid",
+        secret: "sandbox-test-secret",
+      },
+    });
+    assert.equal(credentials.response.status, 200, JSON.stringify(credentials.payload));
+  } finally {
+    rmSync(certificateDirectory, { recursive: true, force: true });
+  }
+
+  const materializedDocuments = await request("/e-invoicing/documents", { cookie: owner.cookie });
+  const materializedOriginal = materializedDocuments.payload.documents.find(
+    (document) => document.id === checkout.payload.invoice.eInvoiceDocumentId,
+  );
+  const materializedCreditNote = materializedDocuments.payload.documents.find(
+    (document) => document.id === cancel.payload.eInvoiceAdjustment.id,
+  );
+  assert.equal(materializedOriginal.xmlAvailable, true);
+  assert.equal(materializedCreditNote.xmlAvailable, true);
+  assert.equal(materializedCreditNote.parentDocumentId, materializedOriginal.id);
+  const generation = generationByCookie.get(owner.cookie);
+  const noteXmlResponse = await fetch(`${apiBase}/e-invoicing/documents/${materializedCreditNote.id}/xml`, {
+    headers: {
+      Cookie: owner.cookie,
+      "X-Wudooh-Data-Generation": String(generation),
+    },
+  });
+  assert.equal(noteXmlResponse.status, 200);
+  assert.match(await noteXmlResponse.text(), new RegExp(materializedOriginal.uuid));
 });
 
 test("تمنع مسارات CRUD العامة تجاوز البيع الذري وفواتيره", async () => {
@@ -402,6 +513,15 @@ test("استلام دفعتين يحسب VAT ويستهلك FIFO ويؤرشف ا
   assert.equal(correction.response.status, 201, JSON.stringify(correction.payload));
   assert.equal(correction.payload.source.cogsTotal, 7);
   assert.equal(correction.payload.source.items[0].fifoAllocations[0].unitCostExVat, 7);
+  assert.equal(correction.payload.eInvoiceAdjustment.documentType, "credit_note");
+  assert.equal(correction.payload.eInvoiceAdjustment.status, "pending_configuration");
+  const correctionDocuments = await request("/e-invoicing/documents", { cookie: owner.cookie });
+  const correctionNote = correctionDocuments.payload.documents.find(
+    (document) => document.id === correction.payload.eInvoiceAdjustment.id,
+  );
+  assert.equal(correctionNote.taxExclusiveAmount, 20);
+  assert.equal(correctionNote.taxAmount, 3);
+  assert.equal(correctionNote.taxInclusiveAmount, 23);
   const accounts = await request("/data/accounts", { cookie: owner.cookie });
   const bank = accounts.payload.records.find((account) => account.code === "1100");
   assert.ok(correction.payload.correction.lines.some((journalLine) => journalLine.accountId === String(bank.id) && journalLine.debit === 11.5));

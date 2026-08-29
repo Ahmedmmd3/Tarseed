@@ -228,6 +228,7 @@ function DocumentsTab() {
             <tr className="border-b border-slate-100 bg-slate-50/80 text-slate-500">
               <th className="px-5 py-4 font-bold">رقم المستند</th>
               <th className="px-5 py-4 font-bold">النوع</th>
+              <th className="px-5 py-4 font-bold">المرجع والضريبة</th>
               <th className="px-5 py-4 font-bold">التاريخ</th>
               <th className="px-5 py-4 font-bold">الحالة</th>
               <th className="px-5 py-4 font-bold text-center">الإجراءات</th>
@@ -236,7 +237,7 @@ function DocumentsTab() {
           <tbody className="divide-y divide-slate-100">
             {(!documents || documents.length === 0) ? (
               <tr>
-                <td colSpan={5} className="px-5 py-12 text-center text-slate-400 font-medium">
+                <td colSpan={6} className="px-5 py-12 text-center text-slate-400 font-medium">
                   لا توجد مستندات بعد.
                 </td>
               </tr>
@@ -247,6 +248,21 @@ function DocumentsTab() {
                   <td className="px-5 py-4">
                     {documentTypeLabels[doc.documentType]}
                   </td>
+                  <td className="px-5 py-4">
+                    {doc.parentInvoiceNumber ? (
+                      <div className="space-y-1 text-xs">
+                        <div className="font-bold text-slate-700">فاتورة {doc.parentInvoiceNumber}</div>
+                        <div className="text-slate-500">
+                          ضريبة {Number(doc.taxAmount ?? 0).toFixed(2)} ر.س · الإجمالي {Number(doc.taxInclusiveAmount ?? 0).toFixed(2)} ر.س
+                        </div>
+                        {doc.adjustmentReason && (
+                          <div className="max-w-56 truncate text-slate-400" title={doc.adjustmentReason}>
+                            {doc.adjustmentReason}
+                          </div>
+                        )}
+                      </div>
+                    ) : <span className="text-slate-300">—</span>}
+                  </td>
                   <td className="px-5 py-4 text-slate-500">
                     {format(new Date(doc.issuedAt), 'yyyy-MM-dd HH:mm')}
                   </td>
@@ -254,6 +270,11 @@ function DocumentsTab() {
                     <Badge className={`${documentStatusLabels[doc.status].className} hover:bg-inherit`}>
                       {documentStatusLabels[doc.status].label}
                     </Badge>
+                    {doc.submissionError && (
+                      <p className="mt-1 max-w-64 text-xs leading-5 text-rose-600" title={doc.submissionError}>
+                        {doc.submissionError}
+                      </p>
+                    )}
                   </td>
                   <td className="px-5 py-4">
                     <div className="flex items-center justify-center gap-2">
@@ -921,6 +942,7 @@ function IssueNoteDialog({ document }: { document: EInvoiceDocument }) {
   const addNote = useAddDocumentNote();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
+  const [operationId, setOperationId] = useState(() => crypto.randomUUID());
 
   const form = useForm<z.infer<typeof noteSchema>>({
     resolver: zodResolver(noteSchema),
@@ -934,10 +956,11 @@ function IssueNoteDialog({ document }: { document: EInvoiceDocument }) {
 
   const onSubmit = async (values: z.infer<typeof noteSchema>) => {
     try {
-      await addNote.mutateAsync({ id: document.id, ...values });
+      await addNote.mutateAsync({ id: document.id, operationId, ...values });
       toast({ title: 'نجاح', description: 'تم إنشاء الإشعار بنجاح.' });
       setOpen(false);
       form.reset();
+      setOperationId(crypto.randomUUID());
     } catch (err: any) {
       toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
     }

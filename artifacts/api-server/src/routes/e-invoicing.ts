@@ -22,6 +22,11 @@ import {
   type ZatcaComplianceFixtureResult,
   type SellerProfile,
 } from "../lib/e-invoicing";
+import {
+  EInvoiceAdjustmentError,
+  issueEInvoiceAdjustment,
+  materializePendingEInvoiceAdjustments,
+} from "../lib/e-invoice-adjustments";
 import { readPrivateInvoiceXml, savePrivateInvoiceXml } from "../lib/private-object-store";
 import {
   requireAuth,
@@ -345,8 +350,9 @@ async function run(response: Response, handler: () => Promise<RecordData>): Prom
   try {
     response.json(await handler());
   } catch (error) {
-    if (error instanceof EInvoiceRouteError) {
-      response.status(error.status).json({ error: error.message, ...error.details });
+    if (error instanceof EInvoiceRouteError || error instanceof EInvoiceAdjustmentError) {
+      const details = error instanceof EInvoiceRouteError ? error.details : {};
+      response.status(error.status).json({ error: error.message, ...details });
       return;
     }
     throw error;
@@ -464,6 +470,7 @@ router.put("/e-invoicing/credentials", requireAuth, requireSubscriptionAccess, r
         status: "credentials_saved", complianceStatus: "not_started", complianceSuiteStatus: "not_started", complianceSuiteResults: null, complianceError: null, lastComplianceCheckAt: null, updatedAt: new Date(),
       }).where(eq(eInvoiceUnitsTable.id, current.id)).returning();
       await tx.update(eInvoiceDocumentsTable).set({ status: "pending_compliance", updatedAt: new Date() }).where(and(eq(eInvoiceDocumentsTable.organizationId, auth.organizationId), eq(eInvoiceDocumentsTable.unitId, current.id), inArray(eInvoiceDocumentsTable.status, ["pending_submission", "rejected"])));
+      await materializePendingEInvoiceAdjustments(tx, auth.organizationId);
       const { teamAuditLogsTable } = await import("@workspace/db");
       await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_credentials_saved", entity: String(saved.id), details: "" });
       return saved;
@@ -499,6 +506,9 @@ router.get("/e-invoicing/documents", requireAuth, requireSubscriptionAccess, asy
         id: document.id,
         invoiceRecordId: document.invoiceRecordId,
         parentDocumentId: document.parentDocumentId,
+        parentInvoiceNumber: document.parentDocumentId
+          ? records.find((candidate) => candidate.id === document.parentDocumentId)?.invoiceNumber ?? null
+          : null,
         documentType: document.documentType,
         status: document.status === "pending_submission" && !certificate.usable
           ? (certificate.status === "expired" ? "certificate_expired" : "certificate_action_required")
@@ -514,6 +524,10 @@ router.get("/e-invoicing/documents", requireAuth, requireSubscriptionAccess, asy
         authorityXmlAvailable: Boolean(document.authorityXmlObjectPath),
         issuedAt: document.issuedAt.toISOString(),
         lastSubmissionAt: document.lastSubmissionAt?.toISOString() ?? null,
+        adjustmentReason: document.adjustmentReason,
+        taxExclusiveAmount: document.taxExclusiveAmount == null ? null : Number(document.taxExclusiveAmount),
+        taxAmount: document.taxAmount == null ? null : Number(document.taxAmount),
+        taxInclusiveAmount: document.taxInclusiveAmount == null ? null : Number(document.taxInclusiveAmount),
         xmlAvailable: Boolean(document.xmlObjectPath),
       })),
     };
@@ -766,7 +780,16 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
     if (!["pending_submission", "rejected"].includes(document.status)) {
       throw new EInvoiceRouteError("لا يمكن إرسال هذا المستند في حالته الحالية.", 409);
     }
-    const endpoint = document.documentType === "standard"
+    const [parentDocument] = document.parentDocumentId
+      ? await tx.select({ documentType: eInvoiceDocumentsTable.documentType })
+        .from(eInvoiceDocumentsTable)
+        .where(and(
+          eq(eInvoiceDocumentsTable.id, document.parentDocumentId),
+          eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+        )).limit(1)
+      : [];
+    const requiresClearance = document.documentType === "standard" || parentDocument?.documentType === "standard";
+    const endpoint = requiresClearance
       ? "/invoices/clearance/single"
       : "/invoices/reporting/single";
     const [claimed] = await tx.update(eInvoiceDocumentsTable).set({
@@ -827,12 +850,12 @@ router.post("/e-invoicing/documents/:id/submit", requireAuth, requireSubscriptio
       await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_submission_unknown", entity: String(document.id), details: "" });
       return { kind: "unknown" as const };
     }
-    const authorityStatus = document.documentType === "standard"
+    const authorityStatus = requiresClearance
       ? remote.body.clearanceStatus
       : remote.body.reportingStatus;
-    const expectedStatus = document.documentType === "standard" ? "CLEARED" : "REPORTED";
+    const expectedStatus = requiresClearance ? "CLEARED" : "REPORTED";
     const accepted = remote.response.ok && typeof authorityStatus === "string" && authorityStatus.toUpperCase() === expectedStatus;
-    const status = accepted ? (document.documentType === "standard" ? "cleared" : "reported") : "rejected";
+    const status = accepted ? (requiresClearance ? "cleared" : "reported") : "rejected";
     const returnedXml = authorityXmlFromResponse(remote.body);
     const authorityXmlObjectPath = returnedXml
       ? await savePrivateInvoiceXml(auth.organizationId, document.id, returnedXml, "authority")
@@ -881,9 +904,10 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
     if (!isLocationAllowed(auth, "invoices", invoice.data, invoice.id)) {
       throw new EInvoiceRouteError("المستند غير متاح.", 404);
     }
+    const operationId = request.get("Idempotency-Key")?.trim() ?? "";
+    if (!operationId || operationId.length > 180) throw new EInvoiceRouteError("معرّف عملية الإشعار مطلوب.");
     const amountValue = Number(body.amount);
     if (!Number.isFinite(amountValue) || amountValue <= 0) throw new EInvoiceRouteError("أدخل مبلغ الإشعار بشكل صحيح.");
-    const quantity = 1;
     const reason = requiredText(body.reason, "سبب الإشعار");
     const created = await db.transaction(async (tx) => {
       await requireLockedWrite(tx, response);
@@ -901,63 +925,33 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
       if (!lockedOriginal || !lockedInvoice || !isLocationAllowed(auth, "invoices", lockedInvoice.data, lockedInvoice.id)) {
         throw new EInvoiceRouteError("المستند غير متاح.", 404);
       }
-      const [unit] = await tx.select().from(eInvoiceUnitsTable).where(
-        eq(eInvoiceUnitsTable.organizationId, auth.organizationId),
-      ).for("update");
-      if (!unit) throw new EInvoiceRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
-      const seller = sellerFromUnit(unit);
-      if (!configurationIsComplete(seller)) throw new EInvoiceRouteError("لا يمكن إصدار إشعار قبل إكمال إعدادات الفوترة.");
-      const invoiceNumber = `${noteType === "credit_note" ? "CN" : "DN"}-${lockedOriginal.invoiceNumber}-${unit.nextInvoiceCounter}`;
-      const generated = await generateInvoiceDocument({
-        invoiceNumber,
-        invoiceCounter: unit.nextInvoiceCounter,
-        previousInvoiceHash: unit.previousInvoiceHash,
-        documentType: noteType,
-        issueAt: new Date(),
-        customerName: String(lockedInvoice.data.customerName ?? "عميل نقدي"),
-        customerVatNumber: optionalText(body.customerVatNumber, 15),
-        paymentMethod: String(lockedInvoice.data.paymentMethod ?? "cash"),
-        lines: [{ name: reason, sku: "", quantity, unitPrice: amountValue, total: amountValue }],
-        seller,
-        parentInvoiceUuid: lockedOriginal.uuid,
-        privateKeyPem: decryptEInvoiceSecret(unit.privateKeyCiphertext),
-        certificatePem: decryptEInvoiceSecret(unit.certificateCiphertext),
-      });
-      const [note] = await tx.insert(eInvoiceDocumentsTable).values({
+      const issued = await issueEInvoiceAdjustment(tx, {
         organizationId: auth.organizationId,
-        unitId: unit.id,
         invoiceRecordId: lockedOriginal.invoiceRecordId,
         parentDocumentId: lockedOriginal.id,
+        operationId,
         documentType: noteType,
-        status: generated.signatureValid ? "pending_compliance" : "pending_credentials",
-        invoiceNumber,
-        uuid: generated.uuid,
-        invoiceCounter: unit.nextInvoiceCounter,
-        previousInvoiceHash: unit.previousInvoiceHash,
-        invoiceHash: generated.invoiceHash,
-        qrPayload: generated.qrPayload,
-        xmlDigest: generated.invoiceHash,
-        localValidationError: generated.localValidationError,
-        issuedAt: new Date(),
-      }).returning();
-      const xmlObjectPath = await savePrivateInvoiceXml(auth.organizationId, note.id, generated.xml);
-      const [updated] = await tx.update(eInvoiceDocumentsTable).set({ xmlObjectPath, updatedAt: new Date() })
-        .where(eq(eInvoiceDocumentsTable.id, note.id)).returning();
-      await tx.update(eInvoiceUnitsTable).set({
-        nextInvoiceCounter: unit.nextInvoiceCounter + 1,
-        previousInvoiceHash: generated.invoiceHash,
-        complianceStatus: "not_started",
-        complianceSuiteStatus: "not_started",
-        complianceSuiteResults: null,
-        complianceError: null,
-        lastComplianceCheckAt: null,
-        updatedAt: new Date(),
-      }).where(eq(eInvoiceUnitsTable.id, unit.id));
+        reason,
+        taxExclusiveAmount: amountValue,
+        issueAt: new Date(),
+        customerVatNumber: optionalText(body.customerVatNumber, 15),
+      });
+      if (!issued) throw new EInvoiceRouteError("لم يتم العثور على الفاتورة الأصلية.", 404);
       const { teamAuditLogsTable } = await import("@workspace/db");
-      await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_note_issued", entity: String(updated.id), details: noteType });
-      return updated;
+      if (!issued.replayed) {
+        await tx.insert(teamAuditLogsTable).values({ organizationId: auth.organizationId, actorId: auth.id, actorName: auth.name || auth.email, action: "einvoice_note_issued", entity: String(issued.document.id), details: noteType });
+      }
+      return issued;
     });
-    return { document: { id: created.id, invoiceNumber: created.invoiceNumber, status: created.status, qrPayload: created.qrPayload } };
+    return {
+      replayed: created.replayed,
+      document: {
+        id: created.document.id,
+        invoiceNumber: created.document.invoiceNumber,
+        status: created.document.status,
+        qrPayload: created.document.qrPayload,
+      },
+    };
   });
 });
 

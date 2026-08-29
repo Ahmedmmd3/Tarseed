@@ -42,6 +42,8 @@ export type InvoiceLine = {
   quantity: number;
   unitPrice: number;
   total: number;
+  vatRate?: number;
+  vatAmount?: number;
 };
 
 export type InvoiceInput = {
@@ -57,6 +59,8 @@ export type InvoiceInput = {
   lines: InvoiceLine[];
   seller: SellerProfile;
   parentInvoiceUuid?: string;
+  taxExclusiveAmountOverride?: number;
+  taxAmountOverride?: number;
   privateKeyPem?: string;
   certificatePem?: string;
 };
@@ -219,7 +223,12 @@ function tlv(payload: Array<[number, string]>): string {
   return Buffer.concat(chunks).toString("base64");
 }
 
-function calculateTotals(lines: InvoiceLine[], rate: number, pricesIncludeVat: boolean): {
+function calculateTotals(
+  lines: InvoiceLine[],
+  rate: number,
+  pricesIncludeVat: boolean,
+  overrides?: { taxExclusiveAmount?: number; taxAmount?: number },
+): {
   taxExclusiveAmount: number;
   taxAmount: number;
   taxInclusiveAmount: number;
@@ -232,15 +241,24 @@ function calculateTotals(lines: InvoiceLine[], rate: number, pricesIncludeVat: b
     const net = pricesIncludeVat
       ? Math.round((stated / (1 + rateFraction)) * 100) / 100
       : stated;
-    const tax = pricesIncludeVat
-      ? Math.round((stated - net) * 100) / 100
-      : Math.round(net * rateFraction * 100) / 100;
+    const lineRateFraction = (line.vatRate ?? rate) / 100;
+    const tax = line.vatAmount == null
+      ? (pricesIncludeVat
+        ? Math.round((stated - net) * 100) / 100
+        : Math.round(net * lineRateFraction * 100) / 100)
+      : Math.round(line.vatAmount * 100) / 100;
     return { net: sum.net + net, tax: sum.tax + tax, gross: sum.gross + (pricesIncludeVat ? stated : net + tax) };
   }, { net: 0, tax: 0, gross: 0 });
+  const taxExclusiveAmount = overrides?.taxExclusiveAmount == null
+    ? Math.round(totals.net * 100) / 100
+    : Math.round(overrides.taxExclusiveAmount * 100) / 100;
+  const taxAmount = overrides?.taxAmount == null
+    ? Math.round(totals.tax * 100) / 100
+    : Math.round(overrides.taxAmount * 100) / 100;
   return {
-    taxExclusiveAmount: Math.round(totals.net * 100) / 100,
-    taxAmount: Math.round(totals.tax * 100) / 100,
-    taxInclusiveAmount: Math.round(totals.gross * 100) / 100,
+    taxExclusiveAmount,
+    taxAmount,
+    taxInclusiveAmount: Math.round((taxExclusiveAmount + taxAmount) * 100) / 100,
   };
 }
 
@@ -254,6 +272,25 @@ function validateInput(input: InvoiceInput): void {
     if (!line.name || !Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isFinite(line.total) || line.total < 0) {
       throw new Error("أحد بنود الفاتورة غير صالح.");
     }
+  }
+  if (
+    input.taxExclusiveAmountOverride != null
+    && (!Number.isFinite(input.taxExclusiveAmountOverride) || input.taxExclusiveAmountOverride < 0)
+  ) {
+    throw new Error("صافي مبلغ المستند غير صالح.");
+  }
+  if (
+    input.taxAmountOverride != null
+    && (!Number.isFinite(input.taxAmountOverride) || input.taxAmountOverride < 0)
+  ) {
+    throw new Error("ضريبة المستند غير صالحة.");
+  }
+  if (
+    input.taxExclusiveAmountOverride === 0
+    && input.taxAmountOverride != null
+    && input.taxAmountOverride > 0
+  ) {
+    throw new Error("لا يمكن إصدار ضريبة موجبة دون أساس خاضع للضريبة.");
   }
   if (input.certificatePem && !input.privateKeyPem) {
     throw new Error("شهادة وحدة الإصدار لا يمكن استخدامها دون المفتاح الخاص المطابق.");
@@ -368,7 +405,28 @@ function lineXml(line: InvoiceLine, index: number, input: InvoiceInput): string 
   const rate = input.seller.vatRate / 100;
   const lineNet = input.seller.pricesIncludeVat ? Number(line.total) / (1 + rate) : Number(line.total);
   const unitNet = lineNet / Number(line.quantity);
-  return `<cac:InvoiceLine><cbc:ID>${index + 1}</cbc:ID><cbc:InvoicedQuantity unitCode="PCE">${escapeXml(line.quantity)}</cbc:InvoicedQuantity><cbc:LineExtensionAmount currencyID="SAR">${amount(lineNet)}</cbc:LineExtensionAmount><cac:Item><cbc:Name>${escapeXml(line.name)}</cbc:Name>${line.sku ? `<cac:SellersItemIdentification><cbc:ID>${escapeXml(line.sku)}</cbc:ID></cac:SellersItemIdentification>` : ""}<cac:ClassifiedTaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>${amount(input.seller.vatRate)}</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:ClassifiedTaxCategory></cac:Item><cac:Price><cbc:PriceAmount currencyID="SAR">${amount(unitNet)}</cbc:PriceAmount></cac:Price></cac:InvoiceLine>`;
+  return `<cac:InvoiceLine><cbc:ID>${index + 1}</cbc:ID><cbc:InvoicedQuantity unitCode="PCE">${escapeXml(line.quantity)}</cbc:InvoicedQuantity><cbc:LineExtensionAmount currencyID="SAR">${amount(lineNet)}</cbc:LineExtensionAmount><cac:Item><cbc:Name>${escapeXml(line.name)}</cbc:Name>${line.sku ? `<cac:SellersItemIdentification><cbc:ID>${escapeXml(line.sku)}</cbc:ID></cac:SellersItemIdentification>` : ""}<cac:ClassifiedTaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>${amount(line.vatRate ?? input.seller.vatRate)}</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:ClassifiedTaxCategory></cac:Item><cac:Price><cbc:PriceAmount currencyID="SAR">${amount(unitNet)}</cbc:PriceAmount></cac:Price></cac:InvoiceLine>`;
+}
+
+function taxSubtotalsXml(input: InvoiceInput): string {
+  const groups = new Map<number, { net: number; tax: number }>();
+  for (const line of input.lines) {
+    const rate = line.vatRate ?? input.seller.vatRate;
+    const stated = Math.round(Number(line.total) * 100) / 100;
+    const net = input.seller.pricesIncludeVat
+      ? Math.round((stated / (1 + rate / 100)) * 100) / 100
+      : stated;
+    const tax = line.vatAmount == null
+      ? (input.seller.pricesIncludeVat
+        ? Math.round((stated - net) * 100) / 100
+        : Math.round(net * rate / 100 * 100) / 100)
+      : Math.round(line.vatAmount * 100) / 100;
+    const current = groups.get(rate) ?? { net: 0, tax: 0 };
+    groups.set(rate, { net: current.net + net, tax: current.tax + tax });
+  }
+  return [...groups.entries()].map(([rate, values]) => (
+    `<cac:TaxSubtotal><cbc:TaxableAmount currencyID="SAR">${amount(values.net)}</cbc:TaxableAmount><cbc:TaxAmount currencyID="SAR">${amount(values.tax)}</cbc:TaxAmount><cac:TaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>${amount(rate)}</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal>`
+  )).join("");
 }
 
 function invoiceBody(input: InvoiceInput, uuid: string, totals: ReturnType<typeof calculateTotals>, qrPayload: string): string {
@@ -381,7 +439,7 @@ function invoiceBody(input: InvoiceInput, uuid: string, totals: ReturnType<typeo
   const referenceSection = input.parentInvoiceUuid
     ? `<cac:BillingReference><cac:InvoiceDocumentReference><cbc:ID>${escapeXml(input.parentInvoiceUuid)}</cbc:ID></cac:InvoiceDocumentReference></cac:BillingReference>`
     : "";
-  return `<cbc:ProfileID>reporting:1.0</cbc:ProfileID><cbc:ID>${escapeXml(input.invoiceNumber)}</cbc:ID><cbc:UUID>${uuid}</cbc:UUID><cbc:IssueDate>${issuedDate}</cbc:IssueDate><cbc:IssueTime>${issuedTime}</cbc:IssueTime><cbc:InvoiceTypeCode name="${invoiceNameCode(input)}">${invoiceTypeValue(input.documentType)}</cbc:InvoiceTypeCode><cbc:DocumentCurrencyCode>SAR</cbc:DocumentCurrencyCode><cbc:TaxCurrencyCode>SAR</cbc:TaxCurrencyCode>${referenceSection}<cac:AdditionalDocumentReference><cbc:ID>ICV</cbc:ID><cbc:UUID>${input.invoiceCounter}</cbc:UUID></cac:AdditionalDocumentReference><cac:AdditionalDocumentReference><cbc:ID>PIH</cbc:ID><cac:Attachment><cbc:EmbeddedDocumentBinaryObject mimeCode="text/plain">${escapeXml(input.previousInvoiceHash)}</cbc:EmbeddedDocumentBinaryObject></cac:Attachment></cac:AdditionalDocumentReference>${qrPayload ? `<cac:AdditionalDocumentReference><cbc:ID>QR</cbc:ID><cac:Attachment><cbc:EmbeddedDocumentBinaryObject mimeCode="text/plain">${qrPayload}</cbc:EmbeddedDocumentBinaryObject></cac:Attachment></cac:AdditionalDocumentReference>` : ""}<cac:Signature><cbc:ID>urn:oasis:names:specification:ubl:signature:1</cbc:ID><cbc:SignatureMethod>urn:oasis:names:specification:ubl:dsig:enveloped:xades</cbc:SignatureMethod></cac:Signature><cac:AccountingSupplierParty><cac:Party><cac:PartyIdentification><cbc:ID schemeID="CRN">${escapeXml(input.seller.commercialRegistrationNumber)}</cbc:ID></cac:PartyIdentification><cac:PostalAddress><cbc:StreetName>${escapeXml(input.seller.street)}</cbc:StreetName><cbc:BuildingNumber>${escapeXml(input.seller.buildingNumber)}</cbc:BuildingNumber><cbc:CitySubdivisionName>${escapeXml(input.seller.city)}</cbc:CitySubdivisionName><cbc:CityName>${escapeXml(input.seller.city)}</cbc:CityName><cbc:PostalZone>${escapeXml(input.seller.postalCode)}</cbc:PostalZone><cac:Country><cbc:IdentificationCode>${escapeXml(input.seller.countryCode)}</cbc:IdentificationCode></cac:Country></cac:PostalAddress><cac:PartyTaxScheme><cbc:CompanyID>${escapeXml(input.seller.vatNumber)}</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme><cac:PartyLegalEntity><cbc:RegistrationName>${escapeXml(input.seller.sellerName)}</cbc:RegistrationName></cac:PartyLegalEntity></cac:Party></cac:AccountingSupplierParty>${customerSection}<cac:PaymentMeans><cbc:PaymentMeansCode>${paymentMeansCode(input.paymentMethod)}</cbc:PaymentMeansCode></cac:PaymentMeans><cac:TaxTotal><cbc:TaxAmount currencyID="SAR">${amount(totals.taxAmount)}</cbc:TaxAmount><cac:TaxSubtotal><cbc:TaxableAmount currencyID="SAR">${amount(totals.taxExclusiveAmount)}</cbc:TaxableAmount><cbc:TaxAmount currencyID="SAR">${amount(totals.taxAmount)}</cbc:TaxAmount><cac:TaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>${amount(input.seller.vatRate)}</cbc:Percent><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory></cac:TaxSubtotal></cac:TaxTotal><cac:LegalMonetaryTotal><cbc:LineExtensionAmount currencyID="SAR">${amount(totals.taxExclusiveAmount)}</cbc:LineExtensionAmount><cbc:TaxExclusiveAmount currencyID="SAR">${amount(totals.taxExclusiveAmount)}</cbc:TaxExclusiveAmount><cbc:TaxInclusiveAmount currencyID="SAR">${amount(totals.taxInclusiveAmount)}</cbc:TaxInclusiveAmount><cbc:PayableAmount currencyID="SAR">${amount(totals.taxInclusiveAmount)}</cbc:PayableAmount></cac:LegalMonetaryTotal>${input.lines.map((line, index) => lineXml(line, index, input)).join("")}`;
+  return `<cbc:ProfileID>reporting:1.0</cbc:ProfileID><cbc:ID>${escapeXml(input.invoiceNumber)}</cbc:ID><cbc:UUID>${uuid}</cbc:UUID><cbc:IssueDate>${issuedDate}</cbc:IssueDate><cbc:IssueTime>${issuedTime}</cbc:IssueTime><cbc:InvoiceTypeCode name="${invoiceNameCode(input)}">${invoiceTypeValue(input.documentType)}</cbc:InvoiceTypeCode><cbc:DocumentCurrencyCode>SAR</cbc:DocumentCurrencyCode><cbc:TaxCurrencyCode>SAR</cbc:TaxCurrencyCode>${referenceSection}<cac:AdditionalDocumentReference><cbc:ID>ICV</cbc:ID><cbc:UUID>${input.invoiceCounter}</cbc:UUID></cac:AdditionalDocumentReference><cac:AdditionalDocumentReference><cbc:ID>PIH</cbc:ID><cac:Attachment><cbc:EmbeddedDocumentBinaryObject mimeCode="text/plain">${escapeXml(input.previousInvoiceHash)}</cbc:EmbeddedDocumentBinaryObject></cac:Attachment></cac:AdditionalDocumentReference>${qrPayload ? `<cac:AdditionalDocumentReference><cbc:ID>QR</cbc:ID><cac:Attachment><cbc:EmbeddedDocumentBinaryObject mimeCode="text/plain">${qrPayload}</cbc:EmbeddedDocumentBinaryObject></cac:Attachment></cac:AdditionalDocumentReference>` : ""}<cac:Signature><cbc:ID>urn:oasis:names:specification:ubl:signature:1</cbc:ID><cbc:SignatureMethod>urn:oasis:names:specification:ubl:dsig:enveloped:xades</cbc:SignatureMethod></cac:Signature><cac:AccountingSupplierParty><cac:Party><cac:PartyIdentification><cbc:ID schemeID="CRN">${escapeXml(input.seller.commercialRegistrationNumber)}</cbc:ID></cac:PartyIdentification><cac:PostalAddress><cbc:StreetName>${escapeXml(input.seller.street)}</cbc:StreetName><cbc:BuildingNumber>${escapeXml(input.seller.buildingNumber)}</cbc:BuildingNumber><cbc:CitySubdivisionName>${escapeXml(input.seller.city)}</cbc:CitySubdivisionName><cbc:CityName>${escapeXml(input.seller.city)}</cbc:CityName><cbc:PostalZone>${escapeXml(input.seller.postalCode)}</cbc:PostalZone><cac:Country><cbc:IdentificationCode>${escapeXml(input.seller.countryCode)}</cbc:IdentificationCode></cac:Country></cac:PostalAddress><cac:PartyTaxScheme><cbc:CompanyID>${escapeXml(input.seller.vatNumber)}</cbc:CompanyID><cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:PartyTaxScheme><cac:PartyLegalEntity><cbc:RegistrationName>${escapeXml(input.seller.sellerName)}</cbc:RegistrationName></cac:PartyLegalEntity></cac:Party></cac:AccountingSupplierParty>${customerSection}<cac:PaymentMeans><cbc:PaymentMeansCode>${paymentMeansCode(input.paymentMethod)}</cbc:PaymentMeansCode></cac:PaymentMeans><cac:TaxTotal><cbc:TaxAmount currencyID="SAR">${amount(totals.taxAmount)}</cbc:TaxAmount>${taxSubtotalsXml(input)}</cac:TaxTotal><cac:LegalMonetaryTotal><cbc:LineExtensionAmount currencyID="SAR">${amount(totals.taxExclusiveAmount)}</cbc:LineExtensionAmount><cbc:TaxExclusiveAmount currencyID="SAR">${amount(totals.taxExclusiveAmount)}</cbc:TaxExclusiveAmount><cbc:TaxInclusiveAmount currencyID="SAR">${amount(totals.taxInclusiveAmount)}</cbc:TaxInclusiveAmount><cbc:PayableAmount currencyID="SAR">${amount(totals.taxInclusiveAmount)}</cbc:PayableAmount></cac:LegalMonetaryTotal>${input.lines.map((line, index) => lineXml(line, index, input)).join("")}`;
 }
 
 function invoiceRoot(content: string): string {
@@ -391,7 +449,10 @@ function invoiceRoot(content: string): string {
 export async function generateInvoiceDocument(input: InvoiceInput): Promise<GeneratedInvoice> {
   validateInput(input);
   const uuid = randomUUID();
-  const totals = calculateTotals(input.lines, input.seller.vatRate, input.seller.pricesIncludeVat);
+  const totals = calculateTotals(input.lines, input.seller.vatRate, input.seller.pricesIncludeVat, {
+    taxExclusiveAmount: input.taxExclusiveAmountOverride,
+    taxAmount: input.taxAmountOverride,
+  });
   const unsigned = invoiceRoot(invoiceBody(input, uuid, totals, ""));
   const invoiceHash = await invoiceHashFor(unsigned);
   let extension = "";

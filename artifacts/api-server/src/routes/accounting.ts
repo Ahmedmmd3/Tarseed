@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
+import { db, eInvoiceDocumentsTable, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
 import { buildLedgerReport } from "../lib/accounting-ledger";
 import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type JournalAdjustmentAction, type JournalRecord } from "../lib/journal-adjustments";
+import { EInvoiceAdjustmentError, issueEInvoiceAdjustment } from "../lib/e-invoice-adjustments";
 
 const router: IRouter = Router();
 
@@ -161,6 +162,12 @@ function sourceDate(data: Record<string, unknown>, fallback?: string): string {
 
 function sourceAmount(data: Record<string, unknown>): number {
   return asNumber(data.total ?? data.amount ?? data.totalAmount);
+}
+
+function sourceTaxExclusiveAmount(data: Record<string, unknown>): number {
+  const subtotal = asNumber(data.subtotal ?? data.netAmount);
+  if (subtotal > 0) return subtotal;
+  return Math.max(0, sourceAmount(data) - asNumber(data.tax ?? data.vatAmount));
 }
 
 function sourceLabel(tableName: SourceTable): string {
@@ -1028,6 +1035,13 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
           : [];
         const reversal = replayedJournals.find((journal) => journal.data.adjustmentType === "reversal");
         const correction = replayedJournals.find((journal) => journal.data.adjustmentType === "correction");
+        const eInvoiceDocumentId = Number(replayedEvent.data.eInvoiceDocumentId);
+        const [eInvoiceAdjustment] = Number.isInteger(eInvoiceDocumentId) && eInvoiceDocumentId > 0
+          ? await tx.select().from(eInvoiceDocumentsTable).where(and(
+            eq(eInvoiceDocumentsTable.id, eInvoiceDocumentId),
+            eq(eInvoiceDocumentsTable.organizationId, currentAuth.organizationId),
+          )).limit(1)
+          : [];
         if (!reversal || (action === "correct" && !correction)) {
           throw new SourceCorrectionError(409, "عملية التصحيح السابقة غير مكتملة وتحتاج مراجعة.");
         }
@@ -1036,6 +1050,12 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
           source: { ...source.data, id: source.id },
           reversal: { ...reversal.data, id: reversal.id },
           correction: correction ? { ...correction.data, id: correction.id } : undefined,
+          eInvoiceAdjustment: eInvoiceAdjustment ? {
+            id: eInvoiceAdjustment.id,
+            documentType: eInvoiceAdjustment.documentType,
+            status: eInvoiceAdjustment.status,
+            invoiceNumber: eInvoiceAdjustment.invoiceNumber,
+          } : undefined,
         };
       }
       if (source.data.status === "cancelled" || source.data.status === "canceled") {
@@ -1074,10 +1094,9 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
       if (tableName === "purchaseOrders" && action === "correct" && requestBody.replacement && typeof requestBody.replacement === "object" && !Array.isArray(requestBody.replacement) && Object.hasOwn(requestBody.replacement, "items")) {
         throw new SourceCorrectionError(409, "تصحيح كميات استلام الشراء يتطلب عكس الاستلام ثم استلاماً جديداً للحفاظ على طبقات FIFO.");
       }
-      let afterData = action === "cancel"
+      let afterData: Record<string, unknown> = action === "cancel"
         ? {
           ...source.data, status: "cancelled", cancelledAt: new Date().toISOString(), cancellationReason: reason,
-          ...(tableName === "invoices" ? { eInvoiceCancellationStatus: "cancellation_pending_credit_note" } : {}),
         }
         : {
           ...replacement,
@@ -1431,6 +1450,90 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
           },
         }).returning();
       }
+      let eInvoiceAdjustment: Awaited<ReturnType<typeof issueEInvoiceAdjustment>> = null;
+      if (tableName === "invoices") {
+        const originalNet = sourceTaxExclusiveAmount(source.data);
+        const correctedNet = action === "correct" ? sourceTaxExclusiveAmount(effectData) : 0;
+        const originalTax = asNumber(source.data.tax ?? source.data.vatAmount);
+        const correctedTax = action === "correct" ? asNumber(effectData.tax ?? effectData.vatAmount) : 0;
+        const originalTotal = Math.round((originalNet + originalTax) * 100) / 100;
+        const correctedTotal = Math.round((correctedNet + correctedTax) * 100) / 100;
+        const netDelta = Math.round((correctedNet - originalNet) * 100) / 100;
+        const taxDelta = Math.round((correctedTax - originalTax) * 100) / 100;
+        if (netDelta === 0 && taxDelta !== 0) {
+          throw new SourceCorrectionError(
+            400,
+            "لا يمكن إصدار إشعار إلكتروني لفرق ضريبة فقط دون أساس خاضع. صحح بنود الفاتورة ومعدلاتها معاً.",
+          );
+        }
+        if (netDelta !== 0 && taxDelta !== 0 && Math.sign(netDelta) !== Math.sign(taxDelta)) {
+          throw new SourceCorrectionError(
+            400,
+            "لا يمكن إصدار إشعار إلكتروني واحد عندما يتحرك صافي الفاتورة والضريبة في اتجاهين متعاكسين. افصل التصحيح إلى عمليتين.",
+          );
+        }
+        const totalDifference = Math.round(Math.abs(correctedTotal - originalTotal) * 100) / 100;
+        const taxDifference = Math.round(Math.abs(correctedTax - originalTax) * 100) / 100;
+        const netDifference = Math.round(Math.abs(correctedNet - originalNet) * 100) / 100;
+        const vatGroups = (data: Record<string, unknown>) => {
+          const groups = new Map<number, { net: number; tax: number }>();
+          const items = Array.isArray(data.items) ? data.items : [];
+          for (const rawItem of items) {
+            const item = rawItem && typeof rawItem === "object" ? rawItem as Record<string, unknown> : {};
+            const rate = asNumber(item.vatRate);
+            const current = groups.get(rate) ?? { net: 0, tax: 0 };
+            groups.set(rate, {
+              net: Math.round((current.net + asNumber(item.lineNet)) * 100) / 100,
+              tax: Math.round((current.tax + asNumber(item.vatAmount)) * 100) / 100,
+            });
+          }
+          return groups;
+        };
+        const originalGroups = vatGroups(source.data);
+        const correctedGroups = action === "correct" ? vatGroups(effectData) : new Map<number, { net: number; tax: number }>();
+        const expectedDirection = correctedTotal > originalTotal ? 1 : -1;
+        const adjustmentLines = [...new Set([...originalGroups.keys(), ...correctedGroups.keys()])].map((vatRate) => {
+          const originalGroup = originalGroups.get(vatRate) ?? { net: 0, tax: 0 };
+          const correctedGroup = correctedGroups.get(vatRate) ?? { net: 0, tax: 0 };
+          const groupNetDelta = Math.round((correctedGroup.net - originalGroup.net) * 100) / 100;
+          const groupTaxDelta = Math.round((correctedGroup.tax - originalGroup.tax) * 100) / 100;
+          if (
+            (groupNetDelta !== 0 && Math.sign(groupNetDelta) !== expectedDirection)
+            || (groupTaxDelta !== 0 && Math.sign(groupTaxDelta) !== expectedDirection)
+          ) {
+            throw new SourceCorrectionError(
+              400,
+              "لا يمكن إصدار إشعار واحد عندما تتحرك مجموعة ضريبية بعكس اتجاه إجمالي التصحيح. افصل التصحيح إلى عمليتين.",
+            );
+          }
+          return {
+            vatRate,
+            taxExclusiveAmount: Math.round(Math.abs(groupNetDelta) * 100) / 100,
+            taxAmount: Math.round(Math.abs(groupTaxDelta) * 100) / 100,
+          };
+        }).filter((line) => line.taxExclusiveAmount > 0 || line.taxAmount > 0);
+        if (totalDifference > 0) {
+          eInvoiceAdjustment = await issueEInvoiceAdjustment(tx, {
+            organizationId: currentAuth.organizationId,
+            invoiceRecordId: sourceId,
+            operationId: `${operationId}:einvoice`,
+            documentType: action === "cancel" || correctedTotal < originalTotal ? "credit_note" : "debit_note",
+            reason,
+            taxExclusiveAmount: netDifference,
+            taxAmount: taxDifference,
+            adjustmentLines,
+            issueAt: new Date(`${effectiveDate}T12:00:00.000Z`),
+          });
+          if (eInvoiceAdjustment) {
+            afterData = {
+              ...afterData,
+              eInvoiceAdjustmentDocumentId: eInvoiceAdjustment.document.id,
+              eInvoiceAdjustmentType: eInvoiceAdjustment.document.documentType,
+              eInvoiceAdjustmentStatus: eInvoiceAdjustment.document.status,
+            };
+          }
+        }
+      }
       const createdJournalIds = [createdReversal.id, ...(createdCorrection ? [createdCorrection.id] : [])];
       const auditSnapshot = JSON.stringify({
         sourceTable: tableName,
@@ -1441,6 +1544,9 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
         after: afterData,
         originalJournalId: originalJournal.id,
         createdJournalIds,
+        eInvoiceDocumentId: eInvoiceAdjustment?.document.id ?? null,
+        eInvoiceDocumentType: eInvoiceAdjustment?.document.documentType ?? null,
+        eInvoiceDocumentStatus: eInvoiceAdjustment?.document.status ?? null,
         inventory: {
           before: [...oldMovements.values()],
           after: [...newMovements.values()],
@@ -1459,6 +1565,9 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
           requestFingerprint,
           createdJournalIds,
           originalJournalId: originalJournal.id,
+          eInvoiceDocumentId: eInvoiceAdjustment?.document.id ?? null,
+          eInvoiceDocumentType: eInvoiceAdjustment?.document.documentType ?? null,
+          eInvoiceDocumentStatus: eInvoiceAdjustment?.document.status ?? null,
           auditSnapshot: JSON.parse(auditSnapshot),
           actorId: currentAuth.id,
           occurredAt: new Date().toISOString(),
@@ -1478,13 +1587,20 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
         source: { ...afterData, id: source.id },
         reversal: { ...createdReversal.data, id: createdReversal.id },
         correction: createdCorrection ? { ...createdCorrection.data, id: createdCorrection.id } : undefined,
+        eInvoiceAdjustment: eInvoiceAdjustment ? {
+          id: eInvoiceAdjustment.document.id,
+          documentType: eInvoiceAdjustment.document.documentType,
+          status: eInvoiceAdjustment.document.status,
+          invoiceNumber: eInvoiceAdjustment.document.invoiceNumber,
+        } : undefined,
         eventId: event.id,
       };
     });
     response.status(result.replayed ? 200 : 201).json(result);
   } catch (error) {
-    if (error instanceof SourceCorrectionError || error instanceof AccountingMutationError) {
-      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+    if (error instanceof SourceCorrectionError || error instanceof AccountingMutationError || error instanceof EInvoiceAdjustmentError) {
+      const code = "code" in error ? error.code : undefined;
+      response.status(error.status).json({ error: error.message, ...(code ? { code } : {}) });
       return;
     }
     throw error;

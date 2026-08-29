@@ -60,6 +60,7 @@ export type EInvoiceDocument = {
   id: number;
   invoiceRecordId: number;
   parentDocumentId: number | null;
+  parentInvoiceNumber: string | null;
   documentType: 'simplified' | 'standard' | 'credit_note' | 'debit_note';
   status: 'pending_configuration' | 'pending_credentials' | 'pending_compliance' | 'pending_submission' | 'certificate_action_required' | 'certificate_expired' | 'submitting' | 'submission_unknown' | 'reported' | 'cleared' | 'rejected';
   invoiceNumber: string;
@@ -73,6 +74,10 @@ export type EInvoiceDocument = {
   authorityXmlAvailable: boolean;
   issuedAt: string;
   lastSubmissionAt: string | null;
+  adjustmentReason: string | null;
+  taxExclusiveAmount: number | null;
+  taxAmount: number | null;
+  taxInclusiveAmount: number | null;
   xmlAvailable: boolean;
 };
 
@@ -294,11 +299,12 @@ export function useAddDocumentNote() {
   const { currentUser } = useStore();
 
   return useMutation({
-    mutationFn: async ({ id, ...payload }: { id: number; type: 'credit_note' | 'debit_note'; reason: string; amount: number; customerVatNumber?: string }) => {
+    mutationFn: async ({ id, operationId, ...payload }: { id: number; operationId: string; type: 'credit_note' | 'debit_note'; reason: string; amount: number; customerVatNumber?: string }) => {
       const res = await fetch(`/api/e-invoicing/documents/${id}/notes`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Idempotency-Key': operationId,
           'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0),
         },
         credentials: 'include',
