@@ -21,3 +21,4 @@
 - [دفع GitHub Actions من Replit](replit-github-workflow-push.md) — OAuth قد يرفض ملفات workflows حتى لمستودع فارغ؛ استخدم مفتاح SSH يضيفه المالك يدوياً.
 - [ذرية الإقفال المالي](financial-period-closure-atomicity.md) — سلسل الإقفال والترحيل وتغييرات المصادر بقفل المنشأة، واحسب لقطة الإقفال بعد القفل.
 - [عزل ملخصات الذكاء الاصطناعي](ai-summary-session-isolation.md) — اربط cache بالنطاق والجلسة، وافرض قيود الاستدعاء الحساسة ذرياً في الخادم.
+- [اختبار PWA من بناء الإنتاج](pwa-production-browser-testing.md) — اختبر التسجيل وoffline shell من بناء production؛ خادم التطوير لا يثبت صحة precache.
