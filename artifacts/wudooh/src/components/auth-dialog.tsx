@@ -313,8 +313,8 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md overflow-hidden border-slate-200 p-0" dir="rtl">
-        <div className="bg-[#001738] px-6 pb-6 pt-8 text-white">
+      <DialogContent className="flex max-h-[85vh] max-w-md flex-col overflow-hidden border-slate-200 p-0" dir="rtl">
+        <div className="shrink-0 bg-[#001738] px-6 pb-6 pt-8 text-white">
           <DialogHeader className="text-right sm:text-right">
             <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-teal-400/15 text-teal-300">
               <Building2 className="h-5 w-5" aria-hidden="true" />
@@ -346,7 +346,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
           </DialogHeader>
         </div>
 
-        <div className="p-6">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6 [-webkit-overflow-scrolling:touch]">
           {screen === 'recovery' ? (
             <form onSubmit={submitRecovery} className="space-y-4" noValidate>
               <div className="space-y-2">
