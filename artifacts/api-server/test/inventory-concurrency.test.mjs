@@ -444,6 +444,26 @@ test("تعديل بيانات المنتج المتزامن مع تحويل لا
   await assertProductMatchesBalances(scenario.firstCookie, scenario.productId);
 });
 
+test("لا يسمح بتسجيل الباركود نفسه لمنتجين داخل المنشأة", async () => {
+  const owner = await registerOwner();
+  const barcode = `BC-${crypto.randomUUID()}`;
+  const first = await post(owner.cookie, "/data/products", {
+    name: unique("منتج باركود أول"), barcode, stock: 0, sellPrice: 10,
+  });
+  assert.equal(first.response.status, 201, JSON.stringify(first.payload));
+  const duplicate = await post(owner.cookie, "/data/products", {
+    name: unique("منتج باركود ثان"), barcode: ` ${barcode.toLowerCase()} `, stock: 0, sellPrice: 12,
+  });
+  assert.equal(duplicate.response.status, 409, JSON.stringify(duplicate.payload));
+  assert.equal(duplicate.payload.code, "duplicate_product_barcode");
+  const other = await post(owner.cookie, "/data/products", {
+    name: unique("منتج باركود ثالث"), barcode: `${barcode}-other`, stock: 0, sellPrice: 14,
+  });
+  assert.equal(other.response.status, 201, JSON.stringify(other.payload));
+  const updateDuplicate = await patch(owner.cookie, `/data/products/${other.payload.record.id}`, { barcode });
+  assert.equal(updateDuplicate.response.status, 409, JSON.stringify(updateDuplicate.payload));
+});
+
 test("يرفض الخادم المواقع غير الموجودة أو التابعة لمنشأة أخرى", async () => {
   const scenario = await createScenario({ initialQuantity: 10, transferQuantity: 3 });
   const nonexistent = await post(scenario.firstCookie, "/inventory/adjustments", {

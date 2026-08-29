@@ -193,7 +193,16 @@ async function sendResendEmail({ to, subject, html }: { to: string; subject: str
     }),
   });
   if (!response.ok) {
-    throw new Error(`Resend request failed with status ${response.status}`);
+    const providerBody = (await response.text().catch(() => "")).slice(0, 1_000);
+    const providerMessage = (() => {
+      try {
+        const parsed = JSON.parse(providerBody) as { message?: unknown; name?: unknown };
+        return [parsed.name, parsed.message].filter((item): item is string => typeof item === "string").join(": ");
+      } catch {
+        return "";
+      }
+    })();
+    throw new Error(`Resend request failed with status ${response.status}${providerMessage ? ` (${providerMessage})` : ""}`);
   }
 }
 
@@ -1218,6 +1227,26 @@ router.post("/auth/password-reset/request", async (request: Request, response: R
     await new Promise((resolve) => setTimeout(resolve, remainingDelay));
   }
   response.status(202).json({ message });
+});
+
+router.post("/auth/email-delivery/check", requireAuth, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner") {
+    response.status(403).json({ error: "فحص البريد متاح لمالك المنشأة فقط." });
+    return;
+  }
+  try {
+    await sendResendEmail({
+      to: auth.email,
+      subject: "فحص جاهزية بريد ترصيد",
+      html: '<div dir="rtl"><h1>بريد ترصيد جاهز</h1><p>نجح فحص إرسال رسائل التفعيل واستعادة كلمة المرور.</p></div>',
+    });
+    response.json({ ready: true, checkedAt: new Date().toISOString() });
+  } catch (error) {
+    const reason = deliveryFailureReason(error);
+    _request.log?.error?.({ err: error, organizationId: auth.organizationId, operation: "email_delivery_readiness" }, "Email delivery readiness check failed");
+    response.status(503).json({ ready: false, error: "إرسال البريد غير جاهز. راجع إعداد المرسل والنطاق في Resend.", reason });
+  }
 });
 
 router.post("/auth/password-reset/confirm", async (request: Request, response: Response): Promise<void> => {

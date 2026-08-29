@@ -33,7 +33,7 @@ export type Journal = {
   adjustmentStatus?: 'reversed' | 'corrected';
   adjustedByJournalIds?: string[];
   adjustmentReason?: string;
-  sourceType?: 'sale' | 'purchase' | 'expense' | 'opening_balance';
+  sourceType?: 'sale' | 'purchase' | 'expense' | 'opening_balance' | 'opening_balance_correction';
   sourceId?: string;
 };
 
@@ -73,7 +73,7 @@ type StoreContextType = {
   accounts: Account[];
   addAccount: (account: Omit<Account, 'id'>) => Promise<Account>;
   updateAccount: (id: string, account: Partial<Account>) => Promise<void>;
-  addOpeningBalance: (input: { accountId: string; counterAccountId: string; amount: number; side: 'debit' | 'credit'; date: string }) => Promise<void>;
+  addOpeningBalance: (input: { accountId: string; counterAccountId: string; amount: number; side: 'debit' | 'credit'; date: string; mode?: 'create' | 'correction' }) => Promise<void>;
   journals: Journal[];
   addJournal: (journal: Omit<Journal, 'id' | 'number'>) => Promise<void>;
   updateJournal: (id: string, journal: Partial<Journal>) => Promise<void>;
@@ -516,7 +516,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return created;
   };
 
-  const addOpeningBalance = async (input: { accountId: string; counterAccountId: string; amount: number; side: 'debit' | 'credit'; date: string }) => {
+  const addOpeningBalance = async (input: { accountId: string; counterAccountId: string; amount: number; side: 'debit' | 'credit'; date: string; mode?: 'create' | 'correction' }) => {
     if (connectionMode !== 'remote') throw new Error('يتطلب تسجيل الرصيد الافتتاحي اتصالاً بالخادم.');
     const response = await fetch('/api/accounting/opening-balances', {
       method: 'POST', credentials: 'include',

@@ -81,6 +81,14 @@ type StoredAnomalyAnalysis = {
   result?: AnomalyAnalysisResult;
 };
 
+type FinancialAnomalyHistoryItem = {
+  id: number;
+  detectedAt?: string;
+  createdAt: string;
+  anomaly?: FinancialAnomaly;
+  analysis?: string | null;
+};
+
 const anomalyCooldownMs = 6 * 60 * 60 * 1000;
 const anomalyStoragePrefix = 'wudooh-financial-anomaly-v1';
 const anomalyCooldownMemory = new Map<string, number>();
@@ -365,6 +373,20 @@ function FinancialAnomalyDrawer({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const [history, setHistory] = React.useState<FinancialAnomalyHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = React.useState(false);
+  React.useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setHistoryLoading(true);
+    fetch('/api/assistant/anomalies/history', { credentials: 'include' })
+      .then(async (response) => {
+        const payload = await response.json() as { alerts?: FinancialAnomalyHistoryItem[] };
+        if (active && response.ok) setHistory(Array.isArray(payload.alerts) ? payload.alerts : []);
+      })
+      .finally(() => { if (active) setHistoryLoading(false); });
+    return () => { active = false; };
+  }, [open]);
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" dir="rtl" className="w-full overflow-y-auto sm:max-w-lg">
@@ -405,6 +427,23 @@ function FinancialAnomalyDrawer({
             </div>
           </div>
         )}
+        <div className="mt-8 border-t border-slate-200 pt-5">
+          <h3 className="font-black text-slate-900">سجل التنبيهات السابقة</h3>
+          <p className="mt-1 text-xs text-slate-500">يبقى محفوظاً حتى بعد إغلاق هذه النافذة.</p>
+          {historyLoading && <p className="mt-4 text-sm text-slate-500">جارٍ تحميل السجل...</p>}
+          {!historyLoading && history.length === 0 && <p className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-500">لا توجد تنبيهات سابقة محفوظة.</p>}
+          <div className="mt-4 space-y-3">
+            {history.map((item) => (
+              <div key={item.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <p className="font-bold text-slate-900">{item.anomaly?.title ?? 'تنبيه مالي'}</p>
+                  <time className="shrink-0 text-xs text-slate-400">{(item.detectedAt ?? item.createdAt).slice(0, 10)}</time>
+                </div>
+                {item.anomaly?.details && <p className="mt-2 text-sm leading-6 text-slate-600">{item.anomaly.details}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
       </SheetContent>
     </Sheet>
   );

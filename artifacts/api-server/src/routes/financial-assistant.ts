@@ -587,6 +587,21 @@ router.post(
         eq(erpRecordsTable.organizationId, auth.organizationId),
         eq(erpRecordsTable.tableName, "financialAnomalyAnalyses"),
       ));
+      if (anomalies.length > 0) {
+        await db.insert(erpRecordsTable).values(anomalies.map((anomaly) => ({
+          organizationId: auth.organizationId,
+          tableName: "financialAnomalyAlerts",
+          data: {
+            userId: auth.id,
+            scopeFingerprint,
+            detectedAt: result.analyzedAt,
+            status: "open",
+            anomaly,
+            analysis,
+            metrics: result.metrics,
+          },
+        })));
+      }
       response.json(result);
     } catch (error) {
       _request.log?.error?.({ err: error }, "Financial anomaly analysis failed");
@@ -594,5 +609,26 @@ router.post(
     }
   },
 );
+
+router.get("/assistant/anomalies/history", requireAuth, requireSubscriptionAccess, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const canReadFinancials = auth.roleId === "owner"
+    || (auth.permissions.sales === true && auth.permissions.accounting === true);
+  if (!canReadFinancials) {
+    response.status(403).json({ error: "ليس لديك صلاحية لعرض سجل التنبيهات المالية." });
+    return;
+  }
+  const records = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    eq(erpRecordsTable.tableName, "financialAnomalyAlerts"),
+  ));
+  response.json({
+    alerts: records
+      .filter((record) => Number(record.data.userId) === auth.id)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      .slice(0, 100)
+      .map((record) => ({ ...record.data, id: record.id, createdAt: record.createdAt.toISOString() })),
+  });
+});
 
 export default router;

@@ -141,6 +141,10 @@ export default function Accounts() {
     try {
       if (editingAccount) {
         await updateAccount(editingAccount.id, { code: normalizedCode, name: normalizedName, type, parent: parent || null });
+        const amount = Number(openingAmount);
+        if (amount > 0) {
+          await addOpeningBalance({ accountId: editingAccount.id, counterAccountId, amount, side: openingSide, date: openingDate, mode: 'correction' });
+        }
         toast({ title: 'تم تحديث الحساب', description: `تم حفظ التعديلات على ${normalizedName}.` });
       } else {
         const created = await addAccount({ code: normalizedCode, name: normalizedName, type, parent: parent || null, openingBalance: 0, balance: 0, status: 'active' });
@@ -209,9 +213,9 @@ export default function Accounts() {
                   ))}
                 </select>
               </div>
-              {!editingAccount && (
+              {(
                 <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <Label className="font-semibold">رصيد افتتاحي اختياري</Label>
+                  <Label className="font-semibold">{editingAccount ? 'تصحيح الرصيد الافتتاحي اختياري' : 'رصيد افتتاحي اختياري'}</Label>
                   <div className="grid grid-cols-2 gap-2">
                     <Input type="number" min="0" step="0.01" value={openingAmount} onChange={(event) => setOpeningAmount(event.target.value)} placeholder="المبلغ" data-testid="input-opening-amount" />
                     <select value={openingSide} onChange={(event) => setOpeningSide(event.target.value as 'debit' | 'credit')} className="h-10 rounded-md border border-input bg-white px-3 text-sm" data-testid="select-opening-side">
@@ -223,7 +227,7 @@ export default function Accounts() {
                     <option value="">اختر الحساب المقابل</option>
                     {accounts.filter((account) => account.status === 'active').map((account) => <option key={account.id} value={account.id}>{account.code} — {account.name}</option>)}
                   </select>
-                  <p className="text-xs text-slate-500">يُنشأ قيد افتتاحي مرحّل ومتوازن. أي تغيير لاحق يتم بقيد تصحيح مستقل.</p>
+                  <p className="text-xs text-slate-500">{editingAccount ? 'أدخل الرصيد النهائي المطلوب؛ سيُرحّل قيد بالفرق فقط.' : 'يُنشأ قيد افتتاحي مرحّل ومتوازن. أي تغيير لاحق يتم بقيد تصحيح مستقل.'}</p>
                 </div>
               )}
               <div className="space-y-2">

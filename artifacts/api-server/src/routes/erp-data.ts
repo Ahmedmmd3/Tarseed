@@ -101,7 +101,26 @@ function canManageInventoryCatalog(auth: AuthContext): boolean {
 function normalizeProductData(data: Record<string, unknown>, fallbackRate = 15): Record<string, unknown> | null {
   const vatRate = Number(data.vatRate ?? fallbackRate);
   if (![0, 5, 15].includes(vatRate)) return null;
-  return { ...data, vatRate };
+  const barcode = typeof data.barcode === "string" ? data.barcode.trim() : "";
+  return { ...data, barcode, vatRate };
+}
+
+async function ensureUniqueProductBarcode(
+  executor: DatabaseExecutor,
+  organizationId: number,
+  data: Record<string, unknown>,
+  excludeId?: number,
+): Promise<void> {
+  const barcode = typeof data.barcode === "string" ? data.barcode.trim().toLocaleLowerCase("en") : "";
+  if (!barcode) return;
+  const products = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "products"),
+  ));
+  if (products.some((row) => row.id !== excludeId
+    && String((row.data as Record<string, unknown>).barcode ?? "").trim().toLocaleLowerCase("en") === barcode)) {
+    throw new MutationRejected(409, "الباركود مستخدم لمنتج آخر داخل هذه المنشأة.", "duplicate_product_barcode");
+  }
 }
 
 function rejectUnauthorizedInventoryCatalogMutation(access: { auth: AuthContext; tableName: string }, response: Response): boolean {
@@ -347,6 +366,9 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       if (access.tableName === "accounts") {
         await validateAccountHierarchy(tx, currentAuth.organizationId, null, recordData);
       }
+      if (access.tableName === "products") {
+        await ensureUniqueProductBarcode(tx, currentAuth.organizationId, recordData);
+      }
       const [inserted] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
         tableName: access.tableName,
@@ -427,6 +449,12 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (!current) return { kind: "missing" as const };
       const data = normalizeProductData({ ...current.data, ...(body as Record<string, unknown>), stock: current.data.stock }, Number(current.data.vatRate ?? 15));
       if (!data) return { kind: "invalid-tax" as const };
+      try {
+        await ensureUniqueProductBarcode(tx, currentAuth.organizationId, data, current.id);
+      } catch (error) {
+        if (error instanceof MutationRejected && error.code === "duplicate_product_barcode") return { kind: "duplicate-barcode" as const };
+        throw error;
+      }
       if (!isLocationAllowed(currentAuth, access.tableName, data, current.id)) {
         return { kind: "forbidden" as const };
       }
@@ -448,6 +476,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     }
     if (result.kind === "invalid-tax") {
       response.status(400).json({ error: "اختر ضريبة المنتج: بدون ضريبة أو 5٪ أو 15٪." });
+      return;
+    }
+    if (result.kind === "duplicate-barcode") {
+      response.status(409).json({ error: "الباركود مستخدم لمنتج آخر داخل هذه المنشأة.", code: "duplicate_product_barcode" });
       return;
     }
     await audit(access.auth, response, "products_updated", String(id));

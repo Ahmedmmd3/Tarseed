@@ -90,6 +90,13 @@ test("يُبقي الرد عاماً ويسجل سبب فشل البريد وي�
   });
   assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
   const ownerCookie = cookieFrom(verified.response);
+  const readiness = await request("/api/auth/email-delivery/check", {
+    method: "POST",
+    cookie: ownerCookie,
+  });
+  assert.equal(readiness.response.status, 503, JSON.stringify(readiness.payload));
+  assert.equal(readiness.payload.ready, false);
+  assert.match(readiness.payload.reason, /503/);
 
   const memberEmail = `${unique("reset-member")}@example.test`;
   const createdMember = await request("/api/team/members", {

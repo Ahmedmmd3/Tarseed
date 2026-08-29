@@ -925,6 +925,21 @@ router.post("/e-invoicing/documents/:id/notes", requireAuth, requireSubscription
       if (!lockedOriginal || !lockedInvoice || !isLocationAllowed(auth, "invoices", lockedInvoice.data, lockedInvoice.id)) {
         throw new EInvoiceRouteError("المستند غير متاح.", 404);
       }
+      const [unit] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.id, lockedOriginal.unitId)).limit(1);
+      if (unit?.environment === "production" && !["reported", "cleared", "accepted"].includes(String(lockedOriginal.status))) {
+        throw new EInvoiceRouteError("لا يمكن إصدار إشعار إنتاجي قبل قبول الفاتورة الأصلية من الهيئة.", 409);
+      }
+      const siblingNotes = await tx.select().from(eInvoiceDocumentsTable).where(and(
+        eq(eInvoiceDocumentsTable.organizationId, auth.organizationId),
+        eq(eInvoiceDocumentsTable.parentDocumentId, lockedOriginal.id),
+      ));
+      const previouslyAdjusted = siblingNotes
+        .filter((note) => note.operationId !== operationId && note.documentType === noteType)
+        .reduce((sum, note) => sum + Number(note.taxExclusiveAmount ?? 0), 0);
+      const originalNet = Number(lockedOriginal.taxExclusiveAmount ?? lockedInvoice.data.subtotal ?? lockedInvoice.data.total ?? 0);
+      if (!Number.isFinite(originalNet) || amountValue + previouslyAdjusted > originalNet + 0.001) {
+        throw new EInvoiceRouteError("إجمالي الإشعارات لا يمكن أن يتجاوز صافي الفاتورة الأصلية.", 409);
+      }
       const issued = await issueEInvoiceAdjustment(tx, {
         organizationId: auth.organizationId,
         invoiceRecordId: lockedOriginal.invoiceRecordId,

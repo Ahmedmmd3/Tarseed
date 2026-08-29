@@ -174,6 +174,14 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
     body: { accountId: childId, counterAccountId: capital.id, amount: 100, side: "debit", date: "2026-01-02", operationId: crypto.randomUUID() },
   });
   assert.equal(duplicateOpening.response.status, 409, JSON.stringify(duplicateOpening.payload));
+  const correction = await request("/accounting/opening-balances", {
+    method: "POST", cookie: owner.cookie,
+    body: { accountId: childId, counterAccountId: capital.id, amount: 1500.5, side: "debit", date: "2026-01-03", mode: "correction", operationId: crypto.randomUUID() },
+  });
+  assert.equal(correction.response.status, 201, JSON.stringify(correction.payload));
+  assert.equal(correction.payload.journal.sourceType, "opening_balance_correction");
+  assert.equal(correction.payload.journal.lines.find((line) => line.accountId === String(childId)).debit, 250);
+  assert.equal(correction.payload.journal.lines.reduce((sum, line) => sum + line.debit - line.credit, 0), 0);
 
   const outsider = await registerOwner();
   const isolatedParent = await request("/data/accounts", {

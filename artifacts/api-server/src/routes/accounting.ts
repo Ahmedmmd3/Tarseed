@@ -525,6 +525,7 @@ router.post("/accounting/opening-balances", requireAuth, requireSubscriptionAcce
   const side = body.side === "credit" ? "credit" : body.side === "debit" ? "debit" : "";
   const date = typeof body.date === "string" ? body.date : "";
   const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
+  const mode = body.mode === "correction" ? "correction" : "create";
   if (!Number.isInteger(accountId) || !Number.isInteger(counterAccountId) || accountId === counterAccountId || amount <= 0 || !side || !isValidIsoDate(date) || !operationId) {
     response.status(400).json({ error: "أدخل حساباً وحساباً مقابلاً ومبلغاً وتاريخاً صحيحاً." });
     return;
@@ -548,21 +549,30 @@ router.post("/accounting/opening-balances", requireAuth, requireSubscriptionAcce
         throw new AccountingMutationError(409, "تاريخ الرصيد الافتتاحي يقع في فترة مقفلة.");
       }
       const journals = await organizationRecordsFor(currentAuth, "journalEntries", tx);
-      const replay = journals.find((item) => item.sourceType === "opening_balance" && item.operationId === operationId);
+      const replay = journals.find((item) => ["opening_balance", "opening_balance_correction"].includes(String(item.sourceType)) && item.operationId === operationId);
       if (replay) return { journal: replay, replayed: true };
       const prior = journals.find((item) => item.sourceType === "opening_balance" && Number(item.sourceId) === accountId);
-      if (prior) throw new AccountingMutationError(409, "سُجل رصيد افتتاحي لهذا الحساب مسبقاً. استخدم قيد تصحيح مستقل.");
+      if (prior && mode !== "correction") throw new AccountingMutationError(409, "سُجل رصيد افتتاحي لهذا الحساب مسبقاً. استخدم قيد تصحيح مستقل.");
+      if (!prior && mode === "correction") throw new AccountingMutationError(409, "لا يوجد رصيد افتتاحي سابق لتصحيحه.");
+      const desiredNet = side === "debit" ? amount : -amount;
+      const currentNet = journals
+        .filter((item) => ["opening_balance", "opening_balance_correction"].includes(String(item.sourceType)) && Number(item.sourceId) === accountId)
+        .flatMap((item) => normalizeLines(item.lines))
+        .filter((line) => line.accountId === String(accountId))
+        .reduce((sum, line) => sum + line.debit - line.credit, 0);
+      const movement = mode === "correction" ? money(desiredNet - currentNet) : desiredNet;
+      if (movement === 0) throw new AccountingMutationError(409, "الرصيد المدخل يطابق الرصيد الافتتاحي الحالي ولا يحتاج تصحيحاً.");
       const number = `OPEN-${String(journals.length + 1).padStart(4, "0")}`;
       const [created] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
         tableName: "journalEntries",
         clientOperationId: operationId,
         data: {
-          number, date, description: `رصيد افتتاحي — ${String(target.name)}`, status: "posted",
-          sourceType: "opening_balance", sourceId: String(accountId), operationId,
+          number, date, description: `${mode === "correction" ? "تصحيح رصيد افتتاحي" : "رصيد افتتاحي"} — ${String(target.name)}`, status: "posted",
+          sourceType: mode === "correction" ? "opening_balance_correction" : "opening_balance", sourceId: String(accountId), operationId,
           lines: [
-            { id: crypto.randomUUID(), accountId: String(accountId), debit: side === "debit" ? amount : 0, credit: side === "credit" ? amount : 0 },
-            { id: crypto.randomUUID(), accountId: String(counterAccountId), debit: side === "credit" ? amount : 0, credit: side === "debit" ? amount : 0 },
+            { id: crypto.randomUUID(), accountId: String(accountId), debit: movement > 0 ? Math.abs(movement) : 0, credit: movement < 0 ? Math.abs(movement) : 0 },
+            { id: crypto.randomUUID(), accountId: String(counterAccountId), debit: movement < 0 ? Math.abs(movement) : 0, credit: movement > 0 ? Math.abs(movement) : 0 },
           ],
         },
       }).returning();

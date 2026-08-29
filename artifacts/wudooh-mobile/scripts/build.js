@@ -23,6 +23,7 @@ function findWorkspaceRoot(startDir) {
 
 const workspaceRoot = findWorkspaceRoot(projectRoot);
 const basePath = (process.env.BASE_PATH || '/').replace(/\/+$/, '');
+const metroPort = Number.parseInt(process.env.METRO_BUILD_PORT || '8082', 10);
 
 function exitWithError(message) {
   console.error(message);
@@ -116,7 +117,7 @@ function clearMetroCache() {
 
 async function checkMetroHealth() {
   try {
-    const response = await fetch('http://localhost:8081/status', {
+    const response = await fetch(`http://localhost:${metroPort}/status`, {
       signal: AbortSignal.timeout(5000),
     });
     return response.ok;
@@ -150,7 +151,7 @@ async function startMetro(expoPublicDomain, expoPublicReplId) {
 
   metroProcess = spawn(
     'pnpm',
-    ['exec', 'expo', 'start', '--no-dev', '--minify', '--localhost'],
+    ['exec', 'expo', 'start', '--no-dev', '--minify', '--localhost', '--port', String(metroPort)],
     {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
@@ -230,7 +231,7 @@ async function downloadBundle(platform, timestamp) {
     'entry',
   );
   const bundlePath = path.relative(workspaceRoot, entryPath);
-  const url = new URL(`http://localhost:8081/${bundlePath}.bundle`);
+  const url = new URL(`http://localhost:${metroPort}/${bundlePath}.bundle`);
   url.searchParams.set('platform', platform);
   url.searchParams.set('dev', 'false');
   url.searchParams.set('hot', 'false');
