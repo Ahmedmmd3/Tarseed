@@ -33,7 +33,7 @@ export type Journal = {
   adjustmentStatus?: 'reversed' | 'corrected';
   adjustedByJournalIds?: string[];
   adjustmentReason?: string;
-  sourceType?: 'sale' | 'purchase' | 'expense';
+  sourceType?: 'sale' | 'purchase' | 'expense' | 'opening_balance';
   sourceId?: string;
 };
 
@@ -71,8 +71,9 @@ type StoreContextType = {
   currentUser: SharedUser | null;
   signOut: () => Promise<void>;
   accounts: Account[];
-  addAccount: (account: Omit<Account, 'id'>) => Promise<void>;
+  addAccount: (account: Omit<Account, 'id'>) => Promise<Account>;
   updateAccount: (id: string, account: Partial<Account>) => Promise<void>;
+  addOpeningBalance: (input: { accountId: string; counterAccountId: string; amount: number; side: 'debit' | 'credit'; date: string }) => Promise<void>;
   journals: Journal[];
   addJournal: (journal: Omit<Journal, 'id' | 'number'>) => Promise<void>;
   updateJournal: (id: string, journal: Partial<Journal>) => Promise<void>;
@@ -504,13 +505,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (connectionMode === 'remote') {
       const created = normalizeAccount(await createRecord<Account>('accounts', account, currentDataGeneration()));
       setAccounts((current) => [...current, created]);
-      return;
+      return created;
     }
     const id = crypto.randomUUID();
-    setAccounts((current) => [...current, { ...account, id }]);
+    const created = { ...account, id };
+    setAccounts((current) => [...current, created]);
     if (connectionMode === 'local' && canRetrySharedConnection) {
       enqueueSyncOperation({ table: 'accounts', action: 'create', recordId: id, data: account as Record<string, unknown> });
     }
+    return created;
+  };
+
+  const addOpeningBalance = async (input: { accountId: string; counterAccountId: string; amount: number; side: 'debit' | 'credit'; date: string }) => {
+    if (connectionMode !== 'remote') throw new Error('يتطلب تسجيل الرصيد الافتتاحي اتصالاً بالخادم.');
+    const response = await fetch('/api/accounting/opening-balances', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json', 'X-Wudooh-Data-Generation': String(currentDataGeneration()) },
+      body: JSON.stringify({ ...input, operationId: crypto.randomUUID() }),
+    });
+    const payload = await response.json() as { journal?: Journal; error?: string };
+    if (!response.ok || !payload.journal) {
+      notifyStaleDataGeneration(response, payload.error);
+      throw new Error(payload.error ?? 'تعذر تسجيل الرصيد الافتتاحي.');
+    }
+    setJournals((current) => [...current, normalizeJournal(payload.journal as Journal)]);
   };
 
   const updateAccount = async (id: string, account: Partial<Account>) => {
@@ -753,7 +771,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     <StoreContext.Provider value={{
       currentUser, signOut,
       refreshSession: loadSharedData,
-      accounts, addAccount, updateAccount,
+      accounts, addAccount, updateAccount, addOpeningBalance,
       journals, addJournal, updateJournal, postJournal, adjustJournal,
       receivables, addReceivable, updateReceivable, payReceivable,
       closures, closePeriod, connectionMode, canRetrySharedConnection,

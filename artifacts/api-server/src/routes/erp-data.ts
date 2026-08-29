@@ -32,6 +32,46 @@ const DEFAULT_ACCOUNT_DEFINITIONS = [
   { code: "6000", name: "تكلفة المبيعات", type: "expense", parent: null, openingBalance: 0, status: "active" },
 ] as const;
 
+async function validateAccountHierarchy(
+  executor: DatabaseExecutor,
+  organizationId: number,
+  accountId: number | null,
+  candidate: Record<string, unknown>,
+): Promise<void> {
+  const parentId = candidate.parent == null || candidate.parent === "" ? null : Number(candidate.parent);
+  if (parentId !== null && (!Number.isInteger(parentId) || parentId <= 0)) {
+    throw new MutationRejected(400, "الحساب الأب غير صالح.");
+  }
+  if (accountId !== null && parentId === accountId) {
+    throw new MutationRejected(409, "لا يمكن جعل الحساب أباً لنفسه.");
+  }
+  const rows = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "accounts"),
+  ));
+  const accounts = new Map(rows.map((row) => [row.id, row.data as Record<string, unknown>]));
+  if (parentId !== null) {
+    const parent = accounts.get(parentId);
+    if (!parent) throw new MutationRejected(404, "الحساب الأب غير موجود في هذه المنشأة.");
+    if (parent.status !== "active") throw new MutationRejected(409, "لا يمكن الإضافة تحت حساب أب موقوف.");
+    if (parent.type !== candidate.type) throw new MutationRejected(409, "يجب أن يكون الحساب الأب من التصنيف المحاسبي نفسه.");
+    const visited = new Set<number>();
+    let cursor: number | null = parentId;
+    while (cursor !== null) {
+      if (cursor === accountId) throw new MutationRejected(409, "لا يمكن نقل الحساب تحت أحد حساباته الفرعية.");
+      if (visited.has(cursor)) throw new MutationRejected(409, "دليل الحسابات يحتوي دورة غير صالحة.");
+      visited.add(cursor);
+      const next: unknown = accounts.get(cursor)?.parent;
+      cursor = next == null || next === "" ? null : Number(next);
+    }
+  }
+  if (accountId !== null && candidate.status === "inactive") {
+    const activeChild = rows.some((row) => Number((row.data as Record<string, unknown>).parent) === accountId
+      && (row.data as Record<string, unknown>).status === "active");
+    if (activeChild) throw new MutationRejected(409, "لا يمكن تعطيل حساب له حسابات فرعية نشطة.");
+  }
+}
+
 function requireTableAccess(request: Request, response: Response): { auth: AuthContext; tableName: string } | null {
   const auth = response.locals.auth as AuthContext;
   const raw = Array.isArray(request.params.table) ? request.params.table[0] : request.params.table;
@@ -303,6 +343,9 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       }
       if (access.tableName === "journalEntries" && await isClosedDate(currentAuth, String(recordData.date), tx)) {
         throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن إنشاء قيد فيها.");
+      }
+      if (access.tableName === "accounts") {
+        await validateAccountHierarchy(tx, currentAuth.organizationId, null, recordData);
       }
       const [inserted] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
@@ -582,6 +625,9 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         if (await isClosedDate(currentAuth, String(currentData.date), tx)) {
           throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن ترحيل قيد فيها.");
         }
+      }
+      if (access.tableName === "accounts") {
+        await validateAccountHierarchy(tx, currentAuth.organizationId, current.id, currentData);
       }
       if (!isLocationAllowed(currentAuth, access.tableName, currentData, current.id)) {
         throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");

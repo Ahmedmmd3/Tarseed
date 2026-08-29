@@ -512,6 +512,72 @@ router.get("/accounting/ledger", requireAuth, requireSubscriptionAccess, require
   response.json(report);
 });
 
+router.post("/accounting/opening-balances", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner" && auth.locationScope !== "all") {
+    response.status(403).json({ error: "الأرصدة الافتتاحية الشاملة متاحة للمالك أو للمحاسب المخوّل بجميع المواقع فقط." });
+    return;
+  }
+  const body = request.body as Record<string, unknown>;
+  const accountId = Number(body.accountId);
+  const counterAccountId = Number(body.counterAccountId);
+  const amount = asNumber(body.amount);
+  const side = body.side === "credit" ? "credit" : body.side === "debit" ? "debit" : "";
+  const date = typeof body.date === "string" ? body.date : "";
+  const operationId = typeof body.operationId === "string" ? body.operationId.trim() : "";
+  if (!Number.isInteger(accountId) || !Number.isInteger(counterAccountId) || accountId === counterAccountId || amount <= 0 || !side || !isValidIsoDate(date) || !operationId) {
+    response.status(400).json({ error: "أدخل حساباً وحساباً مقابلاً ومبلغاً وتاريخاً صحيحاً." });
+    return;
+  }
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
+      const target = accounts.find((item) => item.id === accountId);
+      const counter = accounts.find((item) => item.id === counterAccountId);
+      if (!target || !counter || target.status !== "active" || counter.status !== "active") {
+        throw new AccountingMutationError(404, "الحساب أو الحساب المقابل غير موجود أو موقوف.");
+      }
+      if (accounts.some((item) => Number(item.parent) === accountId) || accounts.some((item) => Number(item.parent) === counterAccountId)) {
+        throw new AccountingMutationError(409, "يجب تسجيل الرصيد الافتتاحي على حسابات تفصيلية بلا فروع.");
+      }
+      const closures = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      if (closures.some((item) => item.status === "closed" && date >= String(item.from) && date <= String(item.to))) {
+        throw new AccountingMutationError(409, "تاريخ الرصيد الافتتاحي يقع في فترة مقفلة.");
+      }
+      const journals = await organizationRecordsFor(currentAuth, "journalEntries", tx);
+      const replay = journals.find((item) => item.sourceType === "opening_balance" && item.operationId === operationId);
+      if (replay) return { journal: replay, replayed: true };
+      const prior = journals.find((item) => item.sourceType === "opening_balance" && Number(item.sourceId) === accountId);
+      if (prior) throw new AccountingMutationError(409, "سُجل رصيد افتتاحي لهذا الحساب مسبقاً. استخدم قيد تصحيح مستقل.");
+      const number = `OPEN-${String(journals.length + 1).padStart(4, "0")}`;
+      const [created] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "journalEntries",
+        clientOperationId: operationId,
+        data: {
+          number, date, description: `رصيد افتتاحي — ${String(target.name)}`, status: "posted",
+          sourceType: "opening_balance", sourceId: String(accountId), operationId,
+          lines: [
+            { id: crypto.randomUUID(), accountId: String(accountId), debit: side === "debit" ? amount : 0, credit: side === "credit" ? amount : 0 },
+            { id: crypto.randomUUID(), accountId: String(counterAccountId), debit: side === "credit" ? amount : 0, credit: side === "debit" ? amount : 0 },
+          ],
+        },
+      }).returning();
+      return { journal: { ...created.data, id: created.id }, replayed: false };
+    });
+    response.status(result.replayed ? 200 : 201).json({ journal: result.journal });
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+});
+
 router.get("/accounting/aging", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const asOf = typeof request.query.asOf === "string" ? request.query.asOf : new Date().toISOString().slice(0, 10);
   const type = request.query.type === "payable" ? "payable" : request.query.type === "receivable" ? "receivable" : "all";
