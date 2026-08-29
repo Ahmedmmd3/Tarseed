@@ -732,7 +732,11 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
     platformAccessSuspendedAt: result.organization.platformAccessSuspendedAt,
   };
   await recordAudit(auth, "login", "user", result.user.email);
-  response.json({ user: safeUser(result.user, auth) });
+  const mobileSessionRequested = request.get("x-wudooh-client") === "mobile";
+  response.json({
+    user: safeUser(result.user, auth),
+    ...(mobileSessionRequested ? { sessionToken: result.token } : {}),
+  });
 });
 
 router.post("/auth/email-verification/verify", async (request: Request, response: Response): Promise<void> => {
@@ -1189,7 +1193,9 @@ router.post("/auth/password-reset/confirm", async (request: Request, response: R
 });
 
 router.post("/auth/logout", requireAuth, async (request: Request, response: Response): Promise<void> => {
-  const token = request.cookies?.wudooh_session;
+  const authorization = request.get("authorization")?.trim() ?? "";
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  const token = bearerToken || request.cookies?.wudooh_session;
   if (typeof token === "string") {
     await db.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.tokenHash, hashSessionToken(token)));
   }

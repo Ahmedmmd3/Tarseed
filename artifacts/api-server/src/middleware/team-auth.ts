@@ -36,7 +36,9 @@ export function hasSubscriptionAccess(subscription: SubscriptionFields, now = ne
 }
 
 export async function getAuthContext(request: Request): Promise<AuthContext | null> {
-  const token = request.cookies?.wudooh_session;
+  const authorization = request.get("authorization")?.trim() ?? "";
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+  const token = bearerToken || request.cookies?.wudooh_session;
   if (typeof token !== "string" || !token) return null;
   const [result] = await db
     .select({
