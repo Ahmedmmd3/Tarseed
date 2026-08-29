@@ -10,6 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:e2e": "playwright test --config=playwright.config.mjs",
     "test:e2e:browser-account": "PROD_TEST_REQUIRED=1 playwright test test/browser-test-account.e2e.mjs --config=playwright.config.mjs",
+    "test:browser-account:preflight": "node test/browser-account-preflight.mjs",
+    "test:e2e:browser-account:published": "playwright test --config=playwright.browser-account.config.mjs",
     "test:e2e:pwa": "PORT=25937 BASE_PATH=/ pnpm run build && playwright test --config=playwright.pwa.config.mjs"
   },
   "devDependencies": {

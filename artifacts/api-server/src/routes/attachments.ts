@@ -77,11 +77,12 @@ async function multipart(request: Request): Promise<{ name: string; type: string
     const next = raw.indexOf(Buffer.from(`\r\n--${boundary}`), offset);
     if (next < 0) throw new Error("بيانات الملف المرفوعة غير صحيحة.");
     const content = raw.subarray(offset, next); offset = next + 2;
-    const disposition = /content-disposition:\s*form-data;[^\r\n]*name="([^"]+)"(?:;[^\r\n]*filename="([^"]*)")?/i.exec(headers);
-    const field = disposition?.[1] ?? "";
-    if (field === "clientOperationId" && !disposition?.[2]) clientOperationId = content.toString("utf8").trim();
-    if (disposition?.[2]) {
-      const rawName = filename(disposition[2]);
+    const disposition = /content-disposition:\s*([^\r\n]+)/i.exec(headers)?.[1] ?? "";
+    const field = /(?:^|;)\s*name="([^"]+)"/i.exec(disposition)?.[1] ?? "";
+    const uploadedName = /(?:^|;)\s*filename="([^"]*)"/i.exec(disposition)?.[1];
+    if (field === "clientOperationId" && uploadedName === undefined) clientOperationId = content.toString("utf8").trim();
+    if (uploadedName !== undefined) {
+      const rawName = filename(uploadedName);
       const type = (/content-type:\s*([^\r\n;]+)/i.exec(headers)?.[1] ?? "").toLowerCase().trim();
       if (!rawName || !SAFE_TYPES.has(type) || !content.length || content.length > MAX_ATTACHMENT_BYTES || result) throw new Error("اسم الملف أو نوعه أو حجمه غير مسموح.");
       result = { name: rawName, type, content };
@@ -94,6 +95,18 @@ function sendLockFailure(response: Response): void {
   const rejection = lockedWriteRejection(response);
   response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
 }
+
+router.get("/attachments/:id/download", requireAuth, requireSubscriptionAccess, async (request, response) => {
+  const auth = response.locals.auth as AuthContext; const id = Number(request.params.id);
+  const [attachment] = Number.isInteger(id) ? await db.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "attachmentRecords"))) : [];
+  if (!attachment || !isPrivateAttachmentPathForOrganization(String(attachment.data.objectPath), auth.organizationId) || !hasAccess(auth, String(attachment.data.parentTable)) || !await parentFor(auth, String(attachment.data.parentTable), Number(attachment.data.parentRecordId))) { response.status(404).json({ error: "المرفق غير متاح." }); return; }
+  try {
+    const object = await readPrivateObject(String(attachment.data.objectPath));
+    response.setHeader("Content-Type", String(attachment.data.contentType || object.contentType || "application/octet-stream"));
+    response.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(String(attachment.data.fileName))}`);
+    response.setHeader("X-Content-Type-Options", "nosniff"); response.send(object.content);
+  } catch { response.status(404).json({ error: "ملف المرفق غير متاح." }); }
+});
 
 router.get("/attachments/:table/:parentId", requireAuth, requireSubscriptionAccess, async (request, response) => {
   const auth = response.locals.auth as AuthContext; const parentId = Number(request.params.parentId); const table = String(request.params.table);
@@ -176,18 +189,6 @@ router.post("/attachments/:table/:parentId", requireAuth, requireSubscriptionAcc
       error: mismatch ? "معرّف العملية مستخدم لطلب مرفق مختلف." : parentUnavailable ? "السجل غير متاح." : "تعذر حفظ المرفق.",
     });
   }
-});
-
-router.get("/attachments/:id/download", requireAuth, requireSubscriptionAccess, async (request, response) => {
-  const auth = response.locals.auth as AuthContext; const id = Number(request.params.id);
-  const [attachment] = Number.isInteger(id) ? await db.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "attachmentRecords"))) : [];
-  if (!attachment || !isPrivateAttachmentPathForOrganization(String(attachment.data.objectPath), auth.organizationId) || !hasAccess(auth, String(attachment.data.parentTable)) || !await parentFor(auth, String(attachment.data.parentTable), Number(attachment.data.parentRecordId))) { response.status(404).json({ error: "المرفق غير متاح." }); return; }
-  try {
-    const object = await readPrivateObject(String(attachment.data.objectPath));
-    response.setHeader("Content-Type", String(attachment.data.contentType || object.contentType || "application/octet-stream"));
-    response.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(String(attachment.data.fileName))}`);
-    response.setHeader("X-Content-Type-Options", "nosniff"); response.send(object.content);
-  } catch { response.status(404).json({ error: "ملف المرفق غير متاح." }); }
 });
 
 router.delete("/attachments/:id", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request, response) => {

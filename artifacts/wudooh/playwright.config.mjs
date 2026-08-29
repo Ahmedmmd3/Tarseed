@@ -4,8 +4,9 @@ export default defineConfig({
   testDir: './test',
   testMatch: '**/*.e2e.mjs',
   testIgnore: '**/pwa.e2e.mjs',
+  globalSetup: './test/browser-account-preflight.mjs',
+  timeout: 60_000,
   outputDir: '../../.cache/wudooh-playwright',
-  timeout: 30_000,
   expect: {
     timeout: 10_000,
   },

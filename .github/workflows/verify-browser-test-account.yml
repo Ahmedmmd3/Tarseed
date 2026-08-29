@@ -1,0 +1,61 @@
+name: Verify browser test account
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-browser-test-account
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify browser account and protected screens
+    runs-on: ubuntu-latest
+    env:
+      BROWSER_ACCOUNT_BASE_URL: ${{ vars.PROD_APP_URL }}
+      PROD_TEST_EMAIL: ${{ secrets.PROD_TEST_EMAIL }}
+      PROD_TEST_PASSWORD: ${{ secrets.PROD_TEST_PASSWORD }}
+      PROD_TEST_REQUIRED: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Require the published app and account settings
+        shell: bash
+        run: |
+          if [ -z "$BROWSER_ACCOUNT_BASE_URL" ]; then
+            echo "Repository variable PROD_APP_URL is not configured." >&2
+            exit 1
+          fi
+          if [ -z "$PROD_TEST_EMAIL" ] || [ -z "$PROD_TEST_PASSWORD" ]; then
+            echo "Browser test account secrets are not configured." >&2
+            exit 1
+          fi
+
+      - name: Verify login before browser tests
+        run: pnpm --filter @workspace/wudooh run test:browser-account:preflight
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Check reports, attachments, import and export
+        run: pnpm --filter @workspace/wudooh run test:e2e:browser-account:published
