@@ -4,10 +4,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { LockKeyhole, FileSpreadsheet, TrendingUp, Landmark, Calculator, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { LockKeyhole, FileSpreadsheet, TrendingUp, Landmark, Calculator, AlertTriangle, ShieldCheck, BookOpen } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { LedgerReport } from '@/components/accounting/ledger-report';
 
-type ReportType = 'trial' | 'income' | 'balance';
+type ReportType = 'trial' | 'income' | 'balance' | 'ledger';
 type ServerSummary = {
   totals: { revenue: number; expense: number; netIncome: number; receivables?: number; payables?: number };
   trialBalance: Array<{ id: string | number; code: string; name: string; type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense'; debit: number; credit: number }>;
@@ -77,7 +78,7 @@ export default function Reports() {
   };
 
   const localReport = useMemo(() => {
-    const closingBalances = new Map(accounts.map((account) => [account.id, 0]));
+    const closingBalances = new Map(accounts.map((account) => [account.id, Number(account.openingBalance ?? 0)]));
     const periodBalances = new Map(accounts.map((account) => [account.id, 0]));
     const applyJournal = (balances: Map<string, number>, journal: (typeof journals)[number]) => journal.lines
       .forEach((line) => {
@@ -195,6 +196,15 @@ export default function Reports() {
             <span className="hidden sm:inline">الميزانية العمومية</span>
             <span className="sm:hidden">الميزانية</span>
           </button>
+          <button
+            className={`flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 text-sm rounded-md transition-all duration-200 ${reportType === 'ledger' ? 'bg-white text-primary font-bold shadow-sm ring-1 ring-black/5' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50 font-medium'}`}
+            onClick={() => setReportType('ledger')}
+            data-testid="tab-report-ledger"
+          >
+            <BookOpen className="h-4 w-4" />
+            <span className="hidden sm:inline">دفتر الأستاذ</span>
+            <span className="sm:hidden">الأستاذ</span>
+          </button>
         </div>
       </div>
       
@@ -283,6 +293,8 @@ export default function Reports() {
           </div>
         </Card>
       )}
+
+      {reportType === 'ledger' && <LedgerReport />}
 
       {reportType === 'income' && (
         <Card className="max-w-3xl mx-auto border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">

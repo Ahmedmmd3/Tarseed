@@ -107,7 +107,7 @@ export default function Accounts() {
         await updateAccount(editingAccount.id, { code: normalizedCode, name: normalizedName, type });
         toast({ title: 'تم تحديث الحساب', description: `تم حفظ التعديلات على ${normalizedName}.` });
       } else {
-        await addAccount({ code: normalizedCode, name: normalizedName, type, parent: null, balance: 0, status: 'active' });
+        await addAccount({ code: normalizedCode, name: normalizedName, type, parent: null, openingBalance: 0, balance: 0, status: 'active' });
         toast({ title: 'تمت إضافة الحساب', description: `أضيف ${normalizedName} إلى دليل الحسابات.` });
       }
       setIsDialogOpen(false);

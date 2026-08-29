@@ -3,6 +3,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
+import { buildLedgerReport } from "../lib/accounting-ledger";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,12 @@ const asNumber = (value: unknown): number => {
 const asDate = (value: unknown): string => {
   if (typeof value !== "string" || !value) return "";
   return value.slice(0, 10);
+};
+
+const isValidIsoDate = (value: string): boolean => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 };
 
 function requireAccounting(_request: Request, response: Response, next: NextFunction): void {
@@ -240,6 +247,35 @@ router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requir
     receivables: items,
     sourceCounts: { invoices: invoices.length, expenses: expenses.length, purchases: purchases.length },
   });
+});
+
+router.get("/accounting/ledger", requireAuth, requireSubscriptionAccess, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const accountId = typeof request.query.accountId === "string" ? request.query.accountId.trim() : "";
+  const from = typeof request.query.from === "string" ? request.query.from.trim() : "";
+  const to = typeof request.query.to === "string" ? request.query.to.trim() : "";
+
+  if (!/^\d+$/.test(accountId) || !isValidIsoDate(from) || !isValidIsoDate(to) || from > to) {
+    response.status(400).json({ error: "يجب تحديد حساب وفترة صحيحة." });
+    return;
+  }
+
+  const auth = response.locals.auth as AuthContext;
+  const [accounts, journals] = await Promise.all([
+    recordsFor(auth, "accounts"),
+    recordsFor(auth, "journalEntries"),
+  ]);
+  const selectedAccount = accounts.find((account) => String(account.id) === accountId);
+  if (!selectedAccount || selectedAccount.status === "inactive") {
+    response.status(404).json({ error: "الحساب غير موجود أو غير نشط." });
+    return;
+  }
+
+  const report = buildLedgerReport(accounts, journals, accountId, from, to);
+  if (!report) {
+    response.status(404).json({ error: "تعذر العثور على الحساب المطلوب." });
+    return;
+  }
+  response.json(report);
 });
 
 router.post("/accounting/sync-source-journals", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { migrateLegacyLocalOpeningBalances } from '@/lib/local-ledger';
 
 export type AccountType = 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
 
@@ -8,6 +9,7 @@ export type Account = {
   name: string;
   type: AccountType;
   parent: string | null;
+  openingBalance?: number;
   balance: number;
   status: 'active' | 'inactive';
 };
@@ -120,18 +122,18 @@ const storageKey = 'wudooh-accounting-data';
 const remoteSessionHintCookie = 'wudooh_remote_session';
 const sharedSessionKeyStorageKey = 'wudooh_shared_session_key';
 const syncQueueStoragePrefix = 'wudooh-sync-queue-';
-const storedDataVersion = 2;
+const storedDataVersion = 3;
 const staleDataGenerationEvent = 'wudooh:stale-data-generation';
 
 const initialAccounts: Account[] = [
-  { id: '1', code: '1000', name: 'الصندوق', type: 'asset', parent: null, balance: 5000, status: 'active' },
-  { id: '2', code: '1100', name: 'البنك', type: 'asset', parent: null, balance: 58000, status: 'active' },
-  { id: '3', code: '1200', name: 'العملاء', type: 'asset', parent: null, balance: 12000, status: 'active' },
-  { id: '4', code: '2000', name: 'الموردين', type: 'liability', parent: null, balance: 4000, status: 'active' },
-  { id: '5', code: '3000', name: 'رأس المال', type: 'equity', parent: null, balance: 60000, status: 'active' },
-  { id: '6', code: '4000', name: 'المبيعات', type: 'revenue', parent: null, balance: 17000, status: 'active' },
-  { id: '7', code: '5000', name: 'المشتريات', type: 'expense', parent: null, balance: 4000, status: 'active' },
-  { id: '8', code: '5100', name: 'مصروفات الرواتب', type: 'expense', parent: null, balance: 2000, status: 'active' },
+  { id: '1', code: '1000', name: 'الصندوق', type: 'asset', parent: null, openingBalance: 0, balance: 5000, status: 'active' },
+  { id: '2', code: '1100', name: 'البنك', type: 'asset', parent: null, openingBalance: 0, balance: 58000, status: 'active' },
+  { id: '3', code: '1200', name: 'العملاء', type: 'asset', parent: null, openingBalance: 0, balance: 12000, status: 'active' },
+  { id: '4', code: '2000', name: 'الموردين', type: 'liability', parent: null, openingBalance: 0, balance: 4000, status: 'active' },
+  { id: '5', code: '3000', name: 'رأس المال', type: 'equity', parent: null, openingBalance: 0, balance: 60000, status: 'active' },
+  { id: '6', code: '4000', name: 'المبيعات', type: 'revenue', parent: null, openingBalance: 0, balance: 17000, status: 'active' },
+  { id: '7', code: '5000', name: 'المشتريات', type: 'expense', parent: null, openingBalance: 0, balance: 4000, status: 'active' },
+  { id: '8', code: '5100', name: 'مصروفات الرواتب', type: 'expense', parent: null, openingBalance: 0, balance: 2000, status: 'active' },
 ];
 
 const initialJournals: Journal[] = [
@@ -791,7 +793,12 @@ function notifyStaleDataGeneration(response: Response, error?: string): void {
 }
 
 function normalizeAccount(account: Account): Account {
-  return { ...account, id: String(account.id), balance: Number(account.balance ?? 0) };
+  return {
+    ...account,
+    id: String(account.id),
+    ...(account.openingBalance == null ? {} : { openingBalance: Number(account.openingBalance) }),
+    balance: Number(account.balance ?? 0),
+  };
 }
 
 function normalizeJournal(journal: Journal): Journal {
@@ -878,7 +885,7 @@ function readStoredData(): { accounts: Account[]; journals: Journal[]; receivabl
     if (!raw) return null;
     const data = JSON.parse(raw) as Partial<{ accounts: Account[]; journals: Journal[]; receivables: Receivable[]; closures: FinancialClosure[] }>;
     return Array.isArray(data.accounts) && Array.isArray(data.journals) && Array.isArray(data.receivables)
-      ? { accounts: data.accounts, journals: data.journals, receivables: data.receivables, closures: Array.isArray(data.closures) ? data.closures : [] }
+      ? { accounts: migrateLegacyLocalOpeningBalances(data.accounts, data.journals), journals: data.journals, receivables: data.receivables, closures: Array.isArray(data.closures) ? data.closures : [] }
       : null;
   } catch {
     return null;
