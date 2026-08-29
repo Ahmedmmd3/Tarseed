@@ -286,7 +286,7 @@ function journalLinesForSource(
     throw new SourceCorrectionError(409, "يلزم مبلغ موجب وحسابات افتراضية نشطة مطابقة في دليل الحسابات.");
   }
   if (type === "sale") {
-    const sales = account("4000"); const outputVat = account("2100"); const inventory = account("1300"); const cogsAccount = account("6000");
+    const sales = account("4000"); const outputVat = account("2100"); const inventory = account("1300"); const cogsAccount = account("5500") ?? account("6000");
     if (!sales || !outputVat || !inventory || !cogsAccount) throw new SourceCorrectionError(409, "الحسابات الافتراضية للبيع غير مكتملة.");
     return [
       { accountId: String(cashOrAr.id), debit: total, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: net },

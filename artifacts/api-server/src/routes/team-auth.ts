@@ -32,6 +32,7 @@ import {
   verifyPassword,
 } from "../lib/team-auth";
 import { logger } from "../lib/logger";
+import { seedDemoData } from "../lib/seed-demo-data";
 import { isSmsDeliveryConfigured, sendSmsWithTwilio } from "../lib/sms";
 import { getAuthContext, hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, subscriptionState, type AuthContext, type SubscriptionFields } from "../middleware/team-auth";
 
@@ -508,18 +509,25 @@ router.post("/auth/test-workspace-invitations/accept", async (request: Request, 
       locationScope: "all",
       warehouseIds: [],
     }).returning();
-    await tx.insert(erpRecordsTable).values([
-      {
-        organizationId: organization.id,
-        tableName: "warehouses",
-        data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
-      },
-      {
-        organizationId: organization.id,
-        tableName: "warehouses",
-        data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
-      },
-    ]);
+    const existingWarehouses = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, organization.id),
+      eq(erpRecordsTable.tableName, "warehouses"),
+    )).limit(1);
+    if (!existingWarehouses.length) {
+      await tx.insert(erpRecordsTable).values([
+        {
+          organizationId: organization.id,
+          tableName: "warehouses",
+          data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+        },
+        {
+          organizationId: organization.id,
+          tableName: "warehouses",
+          data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+        },
+      ]);
+    }
+    await seedDemoData(organization.id, organization.dataGeneration, tx);
     await tx.update(testWorkspaceInvitationsTable)
       .set({ acceptedAt: now })
       .where(eq(testWorkspaceInvitationsTable.id, invitation.id));
@@ -686,6 +694,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
             data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
           },
         ]);
+        await seedDemoData(organization.id, organization.dataGeneration, tx);
         return { kind: "created", userId: user.id, organizationId: organization.id };
       });
     } catch (error) {

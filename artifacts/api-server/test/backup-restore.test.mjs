@@ -60,6 +60,9 @@ async function registerOwner() {
 
 test("يستعيد المالك نسخة بيانات منشأته دون إبقاء التغييرات اللاحقة", async () => {
   const { cookie, email, password } = await registerOwner();
+  const clearedDemoData = await request("/demo-data", { method: "DELETE", cookie });
+  assert.equal(clearedDemoData.response.status, 200, JSON.stringify(clearedDemoData.payload));
+  generationByCookie.set(cookie, clearedDemoData.payload.dataGeneration);
   const accountDefinitions = [
     { code: "1000", name: "النقدية قبل النسخة", type: "asset" },
     { code: "4000", name: "إيرادات المبيعات قبل النسخة", type: "revenue" },

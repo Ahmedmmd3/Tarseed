@@ -1,12 +1,14 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
-import { db, erpRecordsTable } from "@workspace/db";
+import { db, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
 import { isLocationAllowed } from "../lib/location-scope";
+import { DEFAULT_ACCOUNT_DEFINITIONS, DEMO_SEED_KEY } from "../lib/seed-demo-data";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
+type DemoIdSets = Map<string, Set<string>>;
 const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
@@ -17,20 +19,45 @@ const TABLE_MODULES: Record<string, string | string[]> = {
   financialClosures: "accounting", bankReconciliationSessions: "accounting", bankStatementLines: "accounting",
 };
 
-const DEFAULT_ACCOUNT_DEFINITIONS = [
-  { code: "1000", name: "الصندوق", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "1100", name: "البنك", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "1200", name: "العملاء", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "1300", name: "المخزون", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "1400", name: "ضريبة مدخلات", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "2000", name: "الموردين", type: "liability", parent: null, openingBalance: 0, status: "active" },
-  { code: "2100", name: "ضريبة مخرجات", type: "liability", parent: null, openingBalance: 0, status: "active" },
-  { code: "3000", name: "رأس المال", type: "equity", parent: null, openingBalance: 0, status: "active" },
-  { code: "4000", name: "المبيعات", type: "revenue", parent: null, openingBalance: 0, status: "active" },
-  { code: "5000", name: "المشتريات", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5100", name: "مصروفات الرواتب", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "6000", name: "تكلفة المبيعات", type: "expense", parent: null, openingBalance: 0, status: "active" },
-] as const;
+const REFERENCE_TABLE_BY_KEY: Record<string, string> = {
+  accountId: "accounts",
+  counterAccountId: "accounts",
+  customerId: "customers",
+  productId: "products",
+  invoiceId: "invoices",
+  originalInvoiceId: "invoices",
+  expenseId: "expenses",
+  journalId: "journalEntries",
+};
+
+function referencesDemoRecord(
+  value: unknown,
+  demoIds: DemoIdSets,
+  path: string[] = [],
+  rootTable = "",
+  rootData: Record<string, unknown> = {},
+): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => referencesDemoRecord(item, demoIds, path, rootTable, rootData));
+  }
+  if (!value || typeof value !== "object") return false;
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    let referencedTable = REFERENCE_TABLE_BY_KEY[key];
+    if (key === "parent" && rootTable === "accounts") referencedTable = "accounts";
+    if (key === "id" && path.includes("trialBalance")) referencedTable = "accounts";
+    if (key === "sourceId") {
+      const sourceType = String(rootData.sourceType ?? "");
+      if (sourceType === "sale" || sourceType === "invoice") referencedTable = "invoices";
+      if (sourceType === "expense") referencedTable = "expenses";
+    }
+    if (referencedTable && child !== null && child !== undefined
+      && demoIds.get(referencedTable)?.has(String(child))) {
+      return true;
+    }
+    if (referencesDemoRecord(child, demoIds, [...path, key], rootTable, rootData)) return true;
+  }
+  return false;
+}
 
 async function validateAccountHierarchy(
   executor: DatabaseExecutor,
@@ -272,6 +299,74 @@ router.post("/accounting/initialize", requireAuth, requireSubscriptionAccess, re
     created: result.created,
     accounts: result.records.map((record) => ({ ...record.data, id: record.id, userId: result.auth.organizationId })),
   });
+});
+
+router.delete("/demo-data", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner") {
+    response.status(403).json({ error: "حذف البيانات التجريبية متاح لمالك المنشأة فقط." });
+    return;
+  }
+
+  const result = await db.transaction(async (tx) => {
+    if (!await lockAndValidateDataGeneration(tx, response)) return null;
+    const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+    if (!currentAuth || currentAuth.roleId !== "owner") {
+      response.locals.writeAccessFailure = "authorization_changed";
+      return null;
+    }
+    const organizationRecords = await tx.select().from(erpRecordsTable)
+      .where(eq(erpRecordsTable.organizationId, currentAuth.organizationId));
+    const demoIds: DemoIdSets = new Map();
+    for (const record of organizationRecords) {
+      if (record.data.demoSeedKey !== DEMO_SEED_KEY) continue;
+      const ids = demoIds.get(record.tableName) ?? new Set<string>();
+      ids.add(String(record.id));
+      demoIds.set(record.tableName, ids);
+    }
+    const unsafeUserRecord = organizationRecords.find((record) =>
+      record.data.demoSeedKey !== DEMO_SEED_KEY
+      && referencesDemoRecord(record.data, demoIds, [], record.tableName, record.data));
+    if (unsafeUserRecord) {
+      return {
+        kind: "blocked" as const,
+        tableName: unsafeUserRecord.tableName,
+      };
+    }
+    const deleted = await tx.delete(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+      sql`${erpRecordsTable.data}->>'demoSeedKey' = ${DEMO_SEED_KEY}`,
+    )).returning({ id: erpRecordsTable.id });
+    const [organization] = await tx.update(organizationsTable).set({
+      dataGeneration: sql`${organizationsTable.dataGeneration} + 1`,
+    }).where(eq(organizationsTable.id, currentAuth.organizationId)).returning({
+      dataGeneration: organizationsTable.dataGeneration,
+    });
+    if (!organization) throw new Error("تعذر تحديث جيل بيانات المنشأة.");
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: currentAuth.organizationId,
+      actorId: currentAuth.id,
+      actorName: currentAuth.name || currentAuth.email,
+      action: "demo_data_deleted",
+      entity: "organization",
+      details: JSON.stringify({ deletedRecords: deleted.length, demoSeedKey: DEMO_SEED_KEY }),
+    });
+    return { kind: "deleted" as const, deleted: deleted.length, dataGeneration: organization.dataGeneration };
+  });
+
+  if (!result) {
+    const rejection = lockedWriteRejection(response);
+    response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+    return;
+  }
+  if (result.kind === "blocked") {
+    response.status(409).json({
+      error: "تعذر حذف البيانات التجريبية بأمان بعد إنشاء معاملات أو حسابات مترابطة. احذفها قبل البدء بإدخال معاملاتك.",
+      code: "DEMO_DATA_REFERENCED",
+    });
+    return;
+  }
+  response.json({ deleted: result.deleted, dataGeneration: result.dataGeneration });
 });
 
 router.get("/data/:table", requireAuth, requireSubscriptionAccess, async (request: Request, response: Response): Promise<void> => {

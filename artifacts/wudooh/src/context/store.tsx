@@ -443,7 +443,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       await flushSyncQueue(sessionKey, queue);
       const canReadAccounting = sharedUser.roleId === 'owner' || sharedUser.permissions.accounting === true;
       const [accountResult, journalResult, receivableResult, closureResult] = await Promise.all([
-        canReadAccounting ? initializeAccounts(sharedUser.dataGeneration) : Promise.resolve([]),
+        canReadAccounting ? getRecords<Account>('accounts') : Promise.resolve([]),
         canReadAccounting ? getRecords<Journal>('journalEntries') : Promise.resolve([]),
         canReadAccounting ? getRecords<Receivable>('receivables') : Promise.resolve([]),
         canReadAccounting ? getRecords<FinancialClosure>('financialClosures') : Promise.resolve([]),
@@ -798,22 +798,6 @@ async function getRecords<T>(table: string): Promise<T[]> {
   if (!response.ok) throw new Error('تعذر تحميل بيانات المحاسبة.');
   const payload = await response.json() as { records?: T[] };
   return payload.records ?? [];
-}
-
-async function initializeAccounts(dataGeneration: number): Promise<Account[]> {
-  const response = await fetch('/api/accounting/initialize', {
-    method: 'POST',
-    credentials: 'include',
-    headers: {
-      'X-Wudooh-Data-Generation': String(dataGeneration),
-    },
-  });
-  const payload = await response.json() as { accounts?: Account[]; error?: string };
-  if (!response.ok || !Array.isArray(payload.accounts)) {
-    notifyStaleDataGeneration(response, payload.error);
-    throw new Error(payload.error ?? 'تعذر تهيئة دليل الحسابات.');
-  }
-  return payload.accounts;
 }
 
 async function createRecord<T>(table: string, data: unknown, dataGeneration: number): Promise<T> {

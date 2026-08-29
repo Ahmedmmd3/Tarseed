@@ -679,7 +679,7 @@ test("استلام دفعتين يحسب VAT ويستهلك FIFO ويؤرشف ا
       netByAccount.set(journalLine.accountId, (netByAccount.get(journalLine.accountId) ?? 0) + Number(journalLine.debit) - Number(journalLine.credit));
     }
   }
-  for (const code of ["1100", "4000", "2100", "6000", "1300"]) {
+  for (const code of ["1100", "4000", "2100", "5500", "1300"]) {
     const account = accounts.payload.records.find((candidate) => candidate.code === code);
     assert.ok(account, `الحساب ${code} مطلوب`);
     assert.ok(Math.abs(netByAccount.get(String(account.id)) ?? 0) < 0.000001, `يجب أن يكون صافي O,-O,C,-C صفراً للحساب ${code}`);

@@ -56,7 +56,7 @@ async function registerOwner() {
   assert.equal(emailVerification.response.status, 200, JSON.stringify(emailVerification.payload));
   const cookie = cookieFrom(emailVerification.response);
   generationByCookie.set(cookie, emailVerification.payload.user.dataGeneration);
-  return { email, password, cookie };
+  return { email, password, cookie, dataGeneration: emailVerification.payload.user.dataGeneration };
 }
 
 async function login(email, password) {
@@ -95,18 +95,43 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
   for (const result of initializationResults) {
     assert.equal(result.response.status, 200, JSON.stringify(result.payload));
     assert.ok(Array.isArray(result.payload.accounts));
-    assert.equal(result.payload.accounts.length, 12);
+    assert.equal(result.payload.accounts.length, 15);
   }
   assert.deepEqual(
     initializationResults.map((result) => result.payload.created).sort((left, right) => left - right),
-    [0, 12],
+    [0, 0],
   );
 
   const accounts = await request("/data/accounts", { cookie: owner.cookie });
   assert.equal(accounts.response.status, 200, JSON.stringify(accounts.payload));
   const codes = accounts.payload.records.map((account) => account.code);
   assert.equal(new Set(codes).size, codes.length);
-  assert.deepEqual([...codes].sort(), ["1000", "1100", "1200", "1300", "1400", "2000", "2100", "3000", "4000", "5000", "5100", "6000"]);
+  assert.deepEqual([...codes].sort(), ["1000", "1100", "1200", "1300", "1400", "2000", "2100", "2200", "3000", "3100", "4000", "4100", "5000", "5100", "5500"]);
+
+  const [customers, products, invoices, expenses, journals] = await Promise.all([
+    request("/data/customers", { cookie: owner.cookie }),
+    request("/data/products", { cookie: owner.cookie }),
+    request("/data/invoices", { cookie: owner.cookie }),
+    request("/data/expenses", { cookie: owner.cookie }),
+    request("/data/journalEntries", { cookie: owner.cookie }),
+  ]);
+  assert.equal(customers.payload.records.filter((record) => record.isDemoData).length, 3);
+  assert.deepEqual(
+    products.payload.records.filter((record) => record.isDemoData).map((record) => [record.sku, record.sellPrice, record.stock]),
+    [["QH001", 45, 100], ["TM001", 120, 50], ["AS001", 200, 30], ["ZF001", 350, 20], ["MA001", 25, 200]],
+  );
+  assert.deepEqual(
+    invoices.payload.records.filter((record) => record.isDemoData).map((record) => record.total),
+    [4500, 8200, 3750, 6100],
+  );
+  assert.equal(expenses.payload.records.filter((record) => record.isDemoData).length, 5);
+  const demoJournals = journals.payload.records.filter((record) => record.isDemoData);
+  assert.equal(demoJournals.length, 10);
+  assert.ok(demoJournals.every((journal) => {
+    const debit = journal.lines.reduce((sum, line) => sum + line.debit, 0);
+    const credit = journal.lines.reduce((sum, line) => sum + line.credit, 0);
+    return Math.abs(debit - credit) < 0.005;
+  }));
 
   const duplicateCode = `9${crypto.randomUUID().replaceAll(/\D/g, "").slice(0, 7).padEnd(7, "0")}`;
   const duplicateCreates = await Promise.all([
@@ -182,6 +207,9 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
   assert.equal(correction.payload.journal.sourceType, "opening_balance_correction");
   assert.equal(correction.payload.journal.lines.find((line) => line.accountId === String(childId)).debit, 250);
   assert.equal(correction.payload.journal.lines.reduce((sum, line) => sum + line.debit - line.credit, 0), 0);
+  const unsafeDelete = await request("/demo-data", { method: "DELETE", cookie: owner.cookie });
+  assert.equal(unsafeDelete.response.status, 409, JSON.stringify(unsafeDelete.payload));
+  assert.equal(unsafeDelete.payload.code, "DEMO_DATA_REFERENCED");
 
   const outsider = await registerOwner();
   const isolatedParent = await request("/data/accounts", {
@@ -189,4 +217,40 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
     body: { code: "991001", name: "محاولة ربط خارجية", type: "asset", parent: String(parentId), openingBalance: 0, balance: 0, status: "active" },
   });
   assert.equal(isolatedParent.response.status, 404, JSON.stringify(isolatedParent.payload));
+
+  const ownCustomer = await request("/data/customers", {
+    method: "POST",
+    cookie: outsider.cookie,
+    body: { name: "عميل المستخدم", phone: "0500000000", status: "active" },
+  });
+  assert.equal(ownCustomer.response.status, 201, JSON.stringify(ownCustomer.payload));
+  const ownAccount = await request("/data/accounts", {
+    method: "POST",
+    cookie: outsider.cookie,
+    body: { code: "990001", name: "حساب المستخدم المستقل", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  });
+  assert.equal(ownAccount.response.status, 201, JSON.stringify(ownAccount.payload));
+  const ownProduct = await request("/data/products", {
+    method: "POST",
+    cookie: outsider.cookie,
+    body: { name: "منتج المستخدم المستقل", sku: unique("USR"), sellPrice: 75, costPrice: 50, stock: 0, vatRate: 15, status: "active" },
+  });
+  assert.equal(ownProduct.response.status, 201, JSON.stringify(ownProduct.payload));
+  const deletedDemo = await request("/demo-data", {
+    method: "DELETE",
+    cookie: outsider.cookie,
+  });
+  assert.equal(deletedDemo.response.status, 200, JSON.stringify(deletedDemo.payload));
+  assert.ok(deletedDemo.payload.deleted > 0);
+  assert.equal(deletedDemo.payload.dataGeneration, outsider.dataGeneration + 1);
+  const [accountsAfterDelete, customersAfterDelete, productsAfterDelete, warehousesAfterDelete] = await Promise.all([
+    request("/data/accounts", { cookie: outsider.cookie }),
+    request("/data/customers", { cookie: outsider.cookie }),
+    request("/data/products", { cookie: outsider.cookie }),
+    request("/data/warehouses", { cookie: outsider.cookie }),
+  ]);
+  assert.deepEqual(accountsAfterDelete.payload.records.map((record) => record.name), ["حساب المستخدم المستقل"]);
+  assert.deepEqual(customersAfterDelete.payload.records.map((record) => record.name), ["عميل المستخدم"]);
+  assert.deepEqual(productsAfterDelete.payload.records.map((record) => record.name), ["منتج المستخدم المستقل"]);
+  assert.equal(warehousesAfterDelete.payload.records.length, 2);
 });

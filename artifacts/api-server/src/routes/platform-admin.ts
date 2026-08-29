@@ -3,6 +3,7 @@ import { and, asc, desc, eq } from "drizzle-orm";
 import { ReplitConnectors } from "@replit/connectors-sdk";
 import {
   db,
+  erpRecordsTable,
   organizationsTable,
   platformAdminsTable,
   platformAdminSessionsTable,
@@ -10,6 +11,7 @@ import {
   testWorkspaceInvitationsTable,
   teamUsersTable,
 } from "@workspace/db";
+import { seedDemoData } from "../lib/seed-demo-data";
 import { createSessionToken, hashSessionToken, isEmail, verifyPassword } from "../lib/team-auth";
 import {
   getPlatformAdminContext,
@@ -359,6 +361,19 @@ router.post("/super-admin/test-workspaces", requirePlatformAdmin, async (request
         trialEndsAt: new Date(now.getTime() + 30 * DAY_MS),
         isTestWorkspace: true,
       }).returning();
+      await tx.insert(erpRecordsTable).values([
+        {
+          organizationId: organization.id,
+          tableName: "warehouses",
+          data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+        },
+        {
+          organizationId: organization.id,
+          tableName: "warehouses",
+          data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+        },
+      ]);
+      await seedDemoData(organization.id, organization.dataGeneration, tx);
       const [invitation] = await tx.insert(testWorkspaceInvitationsTable).values({
         organizationId: organization.id,
         createdByAdminId: admin.id,

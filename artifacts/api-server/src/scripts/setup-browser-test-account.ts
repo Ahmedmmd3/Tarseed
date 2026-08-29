@@ -1,11 +1,13 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import {
   authSessionsTable,
   db,
+  erpRecordsTable,
   organizationsTable,
   pool,
   teamUsersTable,
 } from "@workspace/db";
+import { seedDemoData } from "../lib/seed-demo-data";
 import { hashPassword, isEmail, verifyPassword } from "../lib/team-auth";
 
 const email = process.env.PROD_TEST_EMAIL?.trim().toLowerCase() ?? "";
@@ -73,6 +75,27 @@ try {
         await tx.update(authSessionsTable).set({ revokedAt: now })
           .where(eq(authSessionsTable.userId, existing.id));
       }
+      const warehouses = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable)
+        .where(and(
+          eq(erpRecordsTable.organizationId, organization.id),
+          eq(erpRecordsTable.tableName, "warehouses"),
+        ))
+        .limit(1);
+      if (!warehouses.length) {
+        await tx.insert(erpRecordsTable).values([
+          {
+            organizationId: organization.id,
+            tableName: "warehouses",
+            data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+          },
+          {
+            organizationId: organization.id,
+            tableName: "warehouses",
+            data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+          },
+        ]);
+      }
+      await seedDemoData(organization.id, organization.dataGeneration, tx);
       return;
     }
 
@@ -101,6 +124,19 @@ try {
       warehouseIds: [],
       status: "active",
     });
+    await tx.insert(erpRecordsTable).values([
+      {
+        organizationId: organization.id,
+        tableName: "warehouses",
+        data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+      },
+      {
+        organizationId: organization.id,
+        tableName: "warehouses",
+        data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+      },
+    ]);
+    await seedDemoData(organization.id, organization.dataGeneration, tx);
   });
   process.stdout.write("Browser test account is ready.\n");
 } finally {

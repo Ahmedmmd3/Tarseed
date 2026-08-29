@@ -2,6 +2,16 @@ import { useEffect, useState } from 'react';
 import { useStore } from '@/context/store';
 import { Link, useLocation } from 'wouter';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { 
   Building2, 
   User, 
@@ -13,7 +23,8 @@ import {
   AlertTriangle,
   LoaderCircle,
   CalendarDays,
-  Briefcase
+  Briefcase,
+  Trash2
 } from 'lucide-react';
 
 type BillingPlan = {
@@ -38,6 +49,10 @@ export default function ManagerPortal() {
   const [billingError, setBillingError] = useState('');
   const [billingMessage, setBillingMessage] = useState('');
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal' | null>(null);
+  const [demoDeleteOpen, setDemoDeleteOpen] = useState(false);
+  const [demoDeleting, setDemoDeleting] = useState(false);
+  const [demoMessage, setDemoMessage] = useState('');
+  const [demoError, setDemoError] = useState('');
   const [, setLocation] = useLocation();
 
   useEffect(() => {
@@ -160,6 +175,44 @@ export default function ManagerPortal() {
     } catch (error) {
       setBillingError(error instanceof Error ? error.message : 'تعذر فتح إدارة الاشتراك.');
       setBillingAction(null);
+    }
+  };
+
+  const deleteDemoData = async () => {
+    if (!currentUser || currentUser.roleId !== 'owner') return;
+    setDemoDeleting(true);
+    setDemoError('');
+    setDemoMessage('');
+    try {
+      const response = await fetch('/api/demo-data', {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+        },
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        deleted?: number;
+        dataGeneration?: number;
+        error?: string;
+      };
+      if (!response.ok) {
+        if (response.status === 409) {
+          window.dispatchEvent(new Event('wudooh:stale-data-generation'));
+        }
+        throw new Error(payload.error ?? 'تعذر حذف البيانات التجريبية.');
+      }
+      await refreshSession();
+      setDemoDeleteOpen(false);
+      setDemoMessage(
+        payload.deleted
+          ? `تم حذف ${payload.deleted} سجلاً تجريبياً. أصبحت مساحة العمل جاهزة لبياناتك.`
+          : 'لا توجد بيانات تجريبية متبقية للحذف.',
+      );
+    } catch (error) {
+      setDemoError(error instanceof Error ? error.message : 'تعذر حذف البيانات التجريبية.');
+    } finally {
+      setDemoDeleting(false);
     }
   };
 
@@ -397,7 +450,43 @@ export default function ManagerPortal() {
                  )}
                </section>
 
-              {/* Action Area */}
+               {isOwner && (
+                 <section className="mt-6 border-t border-white/10 pt-6" aria-labelledby="demo-data-heading">
+                   <div className="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-4 sm:p-5">
+                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                       <div className="flex items-start gap-3">
+                         <div className="rounded-xl bg-rose-400/10 p-2.5 text-rose-300">
+                           <Trash2 className="h-5 w-5" aria-hidden="true" />
+                         </div>
+                         <div>
+                           <h4 id="demo-data-heading" className="font-bold text-white">البيانات التجريبية</h4>
+                           <p className="mt-1 max-w-xl text-sm leading-6 text-slate-400">
+                             يمكنك حذف الحسابات والعملاء والمنتجات والفواتير والمصاريف التجريبية والبدء ببيانات منشأتك. لن تُحذف البيانات التي أضفتها بنفسك.
+                           </p>
+                         </div>
+                       </div>
+                       <Button
+                         type="button"
+                         variant="destructive"
+                         onClick={() => {
+                           setDemoError('');
+                           setDemoDeleteOpen(true);
+                         }}
+                         disabled={demoDeleting}
+                         className="shrink-0 bg-rose-600 text-white hover:bg-rose-500"
+                         data-testid="button-delete-demo-data"
+                       >
+                         {demoDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                         حذف البيانات التجريبية
+                       </Button>
+                     </div>
+                     {demoMessage && <p className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-sm font-medium text-emerald-200" role="status">{demoMessage}</p>}
+                     {demoError && <p className="mt-4 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3 text-sm font-medium text-rose-200" role="alert">{demoError}</p>}
+                   </div>
+                 </section>
+               )}
+
+               {/* Action Area */}
               <div className="pt-6 border-t border-white/10 flex flex-col md:flex-row items-center justify-between gap-5">
                 <div className="flex-1 w-full text-center md:text-right">
                   {(!sub || !sub.accessActive) && (
@@ -439,6 +528,33 @@ export default function ManagerPortal() {
           
         </div>
       </main>
+      <AlertDialog open={demoDeleteOpen} onOpenChange={(open) => {
+        if (!demoDeleting) setDemoDeleteOpen(open);
+      }}>
+        <AlertDialogContent dir="rtl" className="border-slate-200 text-right">
+          <AlertDialogHeader className="text-right sm:text-right">
+            <AlertDialogTitle>حذف البيانات التجريبية؟</AlertDialogTitle>
+            <AlertDialogDescription className="leading-7">
+              سيُحذف دليل الحسابات والعملاء والمنتجات وأرصدة المخزون والفواتير والمصاريف والقيود التي أنشأها ترصيد للتجربة فقط. لا يمكن التراجع عن هذه العملية، ولن تتأثر بياناتك الخاصة.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:space-x-0">
+            <AlertDialogCancel disabled={demoDeleting}>إلغاء</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void deleteDemoData();
+              }}
+              disabled={demoDeleting}
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              data-testid="button-confirm-delete-demo-data"
+            >
+              {demoDeleting && <LoaderCircle className="h-4 w-4 animate-spin" />}
+              نعم، احذف البيانات التجريبية
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

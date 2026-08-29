@@ -158,7 +158,7 @@ function fingerprint(value: unknown): string {
 const DEFAULT_ACCOUNTS = [
   ["1000", "الصندوق", "asset"], ["1100", "البنك", "asset"], ["1200", "العملاء", "asset"],
   ["1300", "المخزون", "asset"], ["1400", "ضريبة مدخلات", "asset"], ["2000", "الموردين", "liability"],
-  ["2100", "ضريبة مخرجات", "liability"], ["4000", "المبيعات", "revenue"], ["6000", "تكلفة المبيعات", "expense"],
+  ["2100", "ضريبة مخرجات", "liability"], ["4000", "المبيعات", "revenue"], ["5500", "تكلفة المبيعات", "expense"],
 ] as const;
 
 async function accountsByCode(tx: Transaction, organizationId: number): Promise<Map<string, ErpRecord>> {
@@ -795,7 +795,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         { accountId: String(cashAccount.id), debit: total, credit: 0 },
         { accountId: String(accounts.get("4000")!.id), debit: 0, credit: subtotal },
         { accountId: String(accounts.get("2100")!.id), debit: 0, credit: tax },
-        { accountId: String(accounts.get("6000")!.id), debit: cogsTotal, credit: 0 },
+        { accountId: String(accounts.get("5500")!.id), debit: cogsTotal, credit: 0 },
         { accountId: String(accounts.get("1300")!.id), debit: 0, credit: cogsTotal },
       ]);
       await audit(tx, auth, "automatic_accounting", `${invoice.id}:${journal.id}`);
