@@ -9,6 +9,7 @@
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:e2e": "playwright test --config=playwright.config.mjs",
+    "test:e2e:browser-account": "PROD_TEST_REQUIRED=1 playwright test test/browser-test-account.e2e.mjs --config=playwright.config.mjs",
     "test:e2e:pwa": "PORT=25937 BASE_PATH=/ pnpm run build && playwright test --config=playwright.pwa.config.mjs"
   },
   "devDependencies": {
