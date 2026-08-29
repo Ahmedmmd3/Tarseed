@@ -63,4 +63,30 @@ export const platformAuditLogsTable = pgTable(
   ],
 );
 
+export const testWorkspaceInvitationsTable = pgTable(
+  "test_workspace_invitations",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .notNull()
+      .references(() => organizationsTable.id, { onDelete: "cascade" }),
+    createdByAdminId: integer("created_by_admin_id")
+      .references(() => platformAdminsTable.id, { onDelete: "set null" }),
+    email: text("email").notNull(),
+    ownerName: text("owner_name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    deliveryFailedAt: timestamp("delivery_failed_at", { withTimezone: true }),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("test_workspace_invitations_token_hash_unique").on(table.tokenHash),
+    index("test_workspace_invitations_organization_idx").on(table.organizationId),
+    index("test_workspace_invitations_email_idx").on(table.email),
+  ],
+);
+
 export type PlatformAdmin = typeof platformAdminsTable.$inferSelect;
+export type TestWorkspaceInvitation = typeof testWorkspaceInvitationsTable.$inferSelect;

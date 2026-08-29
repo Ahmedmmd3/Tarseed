@@ -7,8 +7,11 @@ import {
   ChevronRight,
   Clock3,
   ExternalLink,
+  FlaskConical,
   LogOut,
   LoaderCircle,
+  Mail,
+  Plus,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -61,6 +64,7 @@ type OrganizationSummary = {
   accessSuspended: boolean;
   hasBillingPortal: boolean;
   managedByStripe: boolean;
+  isTestWorkspace: boolean;
   createdAt: string;
 };
 
@@ -128,6 +132,11 @@ export default function SuperAdminPortal() {
   const [auditLogs, setAuditLogs] = useState<PlatformAuditLog[]>([]);
   const [isLoadingAudit, setIsLoadingAudit] = useState(false);
   const [auditError, setAuditError] = useState('');
+  const [testWorkspaceDialogOpen, setTestWorkspaceDialogOpen] = useState(false);
+  const [testWorkspaceForm, setTestWorkspaceForm] = useState({ workspaceName: '', ownerName: '', ownerEmail: '' });
+  const [testWorkspaceError, setTestWorkspaceError] = useState('');
+  const [isCreatingTestWorkspace, setIsCreatingTestWorkspace] = useState(false);
+  const [resendingInvitationId, setResendingInvitationId] = useState<number | null>(null);
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -283,6 +292,63 @@ export default function SuperAdminPortal() {
     }
   };
 
+  const createTestWorkspace = async () => {
+    const workspaceName = testWorkspaceForm.workspaceName.trim();
+    const ownerName = testWorkspaceForm.ownerName.trim();
+    const ownerEmail = testWorkspaceForm.ownerEmail.trim();
+    if (!workspaceName || !ownerName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+      setTestWorkspaceError('أدخل اسم المساحة واسم المالك وبريداً إلكترونياً صحيحاً.');
+      return;
+    }
+    setIsCreatingTestWorkspace(true);
+    setTestWorkspaceError('');
+    try {
+      const response = await fetch('/api/super-admin/test-workspaces', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceName, ownerName, ownerEmail }),
+      });
+      const payload = await response.json().catch(() => ({})) as { workspace?: { name: string }; error?: string; code?: string };
+      if (payload.code === 'invitation_delivery_failed' && payload.workspace) {
+        toast({ title: 'تعذر إرسال الدعوة', description: payload.error, variant: 'destructive' });
+        setTestWorkspaceForm({ workspaceName: '', ownerName: '', ownerEmail: '' });
+        setTestWorkspaceDialogOpen(false);
+        setRefreshKey((value) => value + 1);
+        return;
+      }
+      if (!response.ok || !payload.workspace) throw new Error(payload.error ?? 'تعذر إنشاء مساحة الاختبار.');
+      toast({
+        title: 'أُنشئت مساحة الاختبار',
+        description: `أُرسلت دعوة آمنة إلى ${ownerEmail}. ستظهر المساحة مفعّلة بعد قبول المالك.`,
+      });
+      setTestWorkspaceForm({ workspaceName: '', ownerName: '', ownerEmail: '' });
+      setTestWorkspaceDialogOpen(false);
+      setRefreshKey((value) => value + 1);
+    } catch (createError) {
+      setTestWorkspaceError(createError instanceof Error ? createError.message : 'تعذر إنشاء مساحة الاختبار.');
+    } finally {
+      setIsCreatingTestWorkspace(false);
+    }
+  };
+
+  const resendTestWorkspaceInvitation = async (organization: OrganizationSummary) => {
+    setResendingInvitationId(organization.id);
+    try {
+      const response = await fetch(`/api/super-admin/test-workspaces/${organization.id}/resend-invitation`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({})) as { sent?: boolean; error?: string };
+      if (!response.ok || !payload.sent) throw new Error(payload.error ?? 'تعذر إعادة إرسال الدعوة.');
+      toast({ title: 'أُعيد إرسال الدعوة', description: 'تم تدوير الرابط السابق وإرسال رابط جديد صالح ليومين.' });
+    } catch (resendError) {
+      toast({ title: 'تعذر إعادة الإرسال', description: resendError instanceof Error ? resendError.message : 'حاول مرة أخرى.', variant: 'destructive' });
+    } finally {
+      setResendingInvitationId(null);
+    }
+  };
+
   if (sessionState === 'loading') {
     return (
       <div className="flex min-h-[100dvh] items-center justify-center bg-[#061d40] text-white" dir="rtl">
@@ -341,6 +407,34 @@ export default function SuperAdminPortal() {
           <Button type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading} className="bg-teal-400 text-[#061d40] hover:bg-teal-300" data-testid="button-refresh-super-admin">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             تحديث البيانات
+          </Button>
+        </section>
+
+        <section className="grid gap-4 rounded-3xl border border-teal-200 bg-teal-50/70 p-5 shadow-sm lg:grid-cols-[1fr_auto] lg:items-center" data-testid="section-test-workspaces">
+          <div className="flex items-start gap-4">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-teal-600 text-white">
+              <FlaskConical className="h-6 w-6" />
+            </span>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-black text-slate-900">مساحات تدقيق مستقلة</h2>
+                <span className="rounded-full border border-teal-200 bg-white px-2.5 py-1 text-xs font-bold text-teal-800" data-testid="text-test-workspaces-count">
+                  {overview?.organizations.filter((organization) => organization.isTestWorkspace).length ?? 0} مساحة اختبار في الصفحة
+                </span>
+              </div>
+              <p className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">
+                أنشئ مساحة موسومة للاختبار وأرسل دعوة أحادية إلى مالكها. الإدارة العليا تدير حالة الوصول فقط ولا تدخل إلى البيانات المحاسبية.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            onClick={() => { setTestWorkspaceError(''); setTestWorkspaceDialogOpen(true); }}
+            className="bg-teal-700 text-white hover:bg-teal-800"
+            data-testid="button-create-test-workspace"
+          >
+            <Plus className="h-4 w-4" />
+            إنشاء مساحة اختبار
           </Button>
         </section>
 
@@ -410,7 +504,14 @@ export default function SuperAdminPortal() {
                 {overview?.organizations.map((organization) => (
                   <tr key={organization.id} className="hover:bg-slate-50/80" data-testid={`row-organization-${organization.id}`}>
                     <td className="px-5 py-4">
-                      <p className="font-bold text-slate-900" data-testid={`text-organization-name-${organization.id}`}>{organization.name}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-bold text-slate-900" data-testid={`text-organization-name-${organization.id}`}>{organization.name}</p>
+                        {organization.isTestWorkspace && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] font-bold text-teal-800" data-testid={`badge-test-workspace-${organization.id}`}>
+                            <FlaskConical className="h-3 w-3" />مساحة اختبار
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-1 text-xs text-slate-400">#{organization.id}</p>
                     </td>
                     <td className="px-5 py-4">
@@ -426,6 +527,9 @@ export default function SuperAdminPortal() {
                       <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${statusStyles[organization.status]}`} data-testid={`status-organization-${organization.id}`}>
                         {statusLabels[organization.status]}
                       </span>
+                      {organization.isTestWorkspace && !organization.owner && (
+                        <p className="mt-1 text-xs font-bold text-amber-700" data-testid={`status-test-workspace-owner-${organization.id}`}>بانتظار قبول المالك</p>
+                      )}
                     </td>
                     <td className="px-5 py-4 font-medium">{formatDate(organization.effectiveEndsAt)}</td>
                     <td className="px-5 py-4">
@@ -441,6 +545,12 @@ export default function SuperAdminPortal() {
                         <Button type="button" size="sm" variant="outline" onClick={() => void openAuditDialog(organization)} className="gap-1.5" data-testid={`button-view-subscription-audit-${organization.id}`}>
                           <ShieldCheck className="h-3.5 w-3.5" />السجل
                         </Button>
+                        {organization.isTestWorkspace && !organization.owner && (
+                          <Button type="button" size="sm" variant="outline" onClick={() => void resendTestWorkspaceInvitation(organization)} disabled={resendingInvitationId === organization.id} className="gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50" data-testid={`button-resend-test-workspace-invitation-${organization.id}`}>
+                            {resendingInvitationId === organization.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                            إعادة الدعوة
+                          </Button>
+                        )}
                         {organization.hasBillingPortal && (
                           <Button type="button" size="sm" variant="outline" onClick={() => void openBillingPortal(organization)} className="gap-1.5" data-testid={`button-open-billing-portal-${organization.id}`}>
                             <ExternalLink className="h-3.5 w-3.5" />Stripe
@@ -469,6 +579,74 @@ export default function SuperAdminPortal() {
           )}
         </section>
       </main>
+
+      <Dialog open={testWorkspaceDialogOpen} onOpenChange={(open) => { if (!isCreatingTestWorkspace) setTestWorkspaceDialogOpen(open); }}>
+        <DialogContent dir="rtl" className="max-h-[85vh] overflow-y-auto sm:max-w-lg" data-testid="dialog-create-test-workspace">
+          <DialogHeader>
+            <DialogTitle>إنشاء مساحة اختبار ودعوة مالكها</DialogTitle>
+            <DialogDescription>
+              ستُنشأ مساحة مستقلة لمدة 30 يوماً. لا تحصل الإدارة العليا على جلسة داخلها؛ التفعيل يتم فقط بعد قبول المالك للرابط المرسل إلى بريده.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <label className="block text-sm font-bold text-slate-700">
+              اسم مساحة الاختبار
+              <Input
+                value={testWorkspaceForm.workspaceName}
+                onChange={(event) => { setTestWorkspaceForm((value) => ({ ...value, workspaceName: event.target.value })); setTestWorkspaceError(''); }}
+                placeholder="مثال: تدقيق المحاسبة — أغسطس"
+                maxLength={120}
+                className="mt-2"
+                data-testid="input-test-workspace-name"
+              />
+            </label>
+            <label className="block text-sm font-bold text-slate-700">
+              اسم مالك الاختبار
+              <Input
+                value={testWorkspaceForm.ownerName}
+                onChange={(event) => { setTestWorkspaceForm((value) => ({ ...value, ownerName: event.target.value })); setTestWorkspaceError(''); }}
+                placeholder="اسم المدقق أو مسؤول الاختبار"
+                maxLength={120}
+                className="mt-2"
+                data-testid="input-test-workspace-owner-name"
+              />
+            </label>
+            <label className="block text-sm font-bold text-slate-700">
+              بريد مالك الاختبار
+              <span className="relative mt-2 block">
+                <Mail className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-slate-400" />
+                <Input
+                  type="email"
+                  dir="ltr"
+                  value={testWorkspaceForm.ownerEmail}
+                  onChange={(event) => { setTestWorkspaceForm((value) => ({ ...value, ownerEmail: event.target.value })); setTestWorkspaceError(''); }}
+                  placeholder="auditor@company.com"
+                  maxLength={254}
+                  className="pr-9 text-left"
+                  data-testid="input-test-workspace-owner-email"
+                />
+              </span>
+            </label>
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm leading-6 text-blue-900">
+              الرابط صالح ليومين ويُستخدم مرة واحدة. بعد اختيار كلمة المرور يصبح البريد موثقاً عبر حيازة الدعوة، وتبقى المساحة موسومة بوضوح كاختبار.
+            </div>
+            {testWorkspaceError && (
+              <p className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm font-medium text-rose-800" role="alert" data-testid="error-create-test-workspace">
+                {testWorkspaceError}
+              </p>
+            )}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" onClick={() => setTestWorkspaceDialogOpen(false)} disabled={isCreatingTestWorkspace} data-testid="button-cancel-test-workspace">
+                إلغاء
+              </Button>
+              <Button type="button" onClick={() => void createTestWorkspace()} disabled={isCreatingTestWorkspace} className="bg-teal-700 text-white hover:bg-teal-800" data-testid="button-submit-test-workspace">
+                {isCreatingTestWorkspace ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+                {isCreatingTestWorkspace ? 'جارٍ الإنشاء والإرسال...' : 'إنشاء وإرسال الدعوة'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={Boolean(actionOrganization)} onOpenChange={(open) => { if (!open && !isSubmittingAction) setActionOrganization(null); }}>
         <AlertDialogContent dir="rtl" data-testid="dialog-manage-subscription">
@@ -571,6 +749,9 @@ const actionLabels: Record<string, string> = {
   suspend_access: 'تعليق الوصول',
   restore_access: 'استعادة الوصول',
   subscription_portal_opened: 'فتح إدارة Stripe',
+  test_workspace_created: 'إنشاء مساحة اختبار',
+  test_workspace_activated: 'تفعيل مالك مساحة الاختبار',
+  test_workspace_invitation_resent: 'إعادة إرسال دعوة مساحة الاختبار',
 };
 
 function AuditRow({ log }: { log: PlatformAuditLog }) {

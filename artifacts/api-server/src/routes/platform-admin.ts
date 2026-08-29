@@ -1,14 +1,16 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { and, asc, desc, eq } from "drizzle-orm";
+import { ReplitConnectors } from "@replit/connectors-sdk";
 import {
   db,
   organizationsTable,
   platformAdminsTable,
   platformAdminSessionsTable,
   platformAuditLogsTable,
+  testWorkspaceInvitationsTable,
   teamUsersTable,
 } from "@workspace/db";
-import { createSessionToken, hashSessionToken, verifyPassword } from "../lib/team-auth";
+import { createSessionToken, hashSessionToken, isEmail, verifyPassword } from "../lib/team-auth";
 import {
   getPlatformAdminContext,
   PLATFORM_ADMIN_COOKIE,
@@ -28,6 +30,8 @@ const PLAN_NAMES: Record<string, string> = {
 };
 const SUBSCRIPTION_ACTIONS = new Set(["extend_trial", "extend_access", "suspend_access", "restore_access"]);
 const MAX_EXTENSION_DAYS = 365;
+const TEST_WORKSPACE_INVITATION_DAYS = 2;
+const connectors = new ReplitConnectors();
 
 function setPlatformAdminSession(response: Response, token: string): void {
   response.cookie(PLATFORM_ADMIN_COOKIE, token, {
@@ -76,6 +80,74 @@ function subscriptionSnapshot(subscription: SubscriptionFields, now: Date) {
     effectiveEndsAt: endDate?.toISOString() ?? null,
     accessSuspendedAt: subscription.platformAccessSuspendedAt?.toISOString() ?? null,
   };
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  }[character] ?? character));
+}
+
+function appOrigin(request: Request): string {
+  const configuredOrigin = process.env.PUBLIC_APP_URL?.replace(/\/$/, "");
+  if (process.env.NODE_ENV === "production" && !configuredOrigin) {
+    throw new Error("PUBLIC_APP_URL is required for production invitation links.");
+  }
+  if (configuredOrigin) {
+    const parsed = new URL(configuredOrigin);
+    if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") {
+      throw new Error("PUBLIC_APP_URL must use HTTPS in production.");
+    }
+    return parsed.origin;
+  }
+  const forwardedProtocol = request.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  return `${forwardedProtocol || request.protocol}://${request.get("host")}`;
+}
+
+async function sendTestWorkspaceInvitation({
+  email,
+  ownerName,
+  workspaceName,
+  invitationUrl,
+}: {
+  email: string;
+  ownerName: string;
+  workspaceName: string;
+  invitationUrl: string;
+}): Promise<void> {
+  const sender = process.env.RESEND_FROM_EMAIL?.trim();
+  if (!sender && process.env.NODE_ENV === "production") {
+    throw new Error("Email delivery is not configured.");
+  }
+  if (process.env.NODE_ENV === "test") {
+    const delay = Number.parseInt(process.env.TEST_WORKSPACE_INVITATION_TEST_DELAY_MS ?? "0", 10);
+    if (Number.isFinite(delay) && delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (process.env.TEST_WORKSPACE_INVITATION_TEST_FAIL === "1") throw new Error("Simulated invitation delivery failure.");
+    return;
+  }
+  const result = await connectors.proxy("resend", "/emails", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: sender || "ترصيد <onboarding@resend.dev>",
+      to: [email],
+      subject: `دعوة مالك مساحة اختبار في ترصيد: ${workspaceName}`,
+      html: `
+        <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.8;color:#0f172a">
+          <h1 style="font-size:22px">دعوة إلى مساحة اختبار في ترصيد</h1>
+          <p>مرحباً ${escapeHtml(ownerName)}،</p>
+          <p>تمت دعوتك لتكون مالك مساحة الاختبار <strong>${escapeHtml(workspaceName)}</strong> المخصصة لتدقيق المحاسبة.</p>
+          <p>افتح الرابط التالي خلال ${TEST_WORKSPACE_INVITATION_DAYS} يومين لتأكيد بريدك واختيار كلمة مرور آمنة:</p>
+          <p style="margin:24px 0"><a href="${escapeHtml(invitationUrl)}" style="display:inline-block;background:#0f766e;color:#fff;padding:12px 20px;border-radius:6px;text-decoration:none">قبول الدعوة وتجهيز الحساب</a></p>
+          <p>هذه الدعوة تستخدم مرة واحدة، ولا تمنح الإدارة العليا صلاحية الدخول إلى بيانات المساحة.</p>
+        </div>`,
+    }),
+  });
+  if (!result.ok) throw new Error(`Resend request failed with status ${result.status}`);
 }
 
 router.post("/platform-auth/login", async (request: Request, response: Response): Promise<void> => {
@@ -180,6 +252,7 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
       activeUserCount: members.filter((member) => member.status === "active").length,
       planId: organization.planId,
       planName: PLAN_NAMES[organization.planId] ?? organization.planId,
+      isTestWorkspace: organization.isTestWorkspace,
       status,
       trialEndsAt: organization.trialEndsAt?.toISOString() ?? null,
       subscriptionEndsAt: organization.subscriptionEndsAt?.toISOString() ?? null,
@@ -236,6 +309,210 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
     },
     generatedAt: now.toISOString(),
   });
+});
+
+router.post("/super-admin/test-workspaces", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
+  const admin = response.locals.platformAdmin as PlatformAdminContext;
+  const workspaceName = typeof request.body?.workspaceName === "string" ? request.body.workspaceName.trim() : "";
+  const ownerName = typeof request.body?.ownerName === "string" ? request.body.ownerName.trim() : "";
+  const ownerEmail = typeof request.body?.ownerEmail === "string" ? request.body.ownerEmail.trim().toLowerCase() : "";
+
+  if (workspaceName.length < 2 || workspaceName.length > 120) {
+    response.status(400).json({ error: "أدخل اسم مساحة اختبار بين حرفين و120 حرفاً." });
+    return;
+  }
+  if (ownerName.length < 2 || ownerName.length > 120) {
+    response.status(400).json({ error: "أدخل اسم مالك الاختبار بين حرفين و120 حرفاً." });
+    return;
+  }
+  if (!isEmail(ownerEmail)) {
+    response.status(400).json({ error: "أدخل بريداً إلكترونياً صحيحاً لمالك الاختبار." });
+    return;
+  }
+
+  const token = createSessionToken();
+  const tokenHash = hashSessionToken(token);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + TEST_WORKSPACE_INVITATION_DAYS * DAY_MS);
+  let invitationUrl: string;
+  try {
+    invitationUrl = `${appOrigin(request)}/test-workspace-invite?token=${encodeURIComponent(token)}`;
+  } catch (error) {
+    request.log.error({ err: error }, "Test workspace invitation origin is not configured");
+    response.status(503).json({ error: "تعذر إنشاء رابط دعوة آمن. راجع إعداد عنوان التطبيق المنشور." });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [existingUser] = await tx.select({ id: teamUsersTable.id })
+        .from(teamUsersTable)
+        .where(eq(teamUsersTable.email, ownerEmail))
+        .limit(1);
+      if (existingUser) return { kind: "conflict" as const };
+
+      const [organization] = await tx.insert(organizationsTable).values({
+        name: workspaceName,
+        planId: "trial",
+        subscriptionStatus: "trialing",
+        trialStartedAt: now,
+        trialEndsAt: new Date(now.getTime() + 30 * DAY_MS),
+        isTestWorkspace: true,
+      }).returning();
+      const [invitation] = await tx.insert(testWorkspaceInvitationsTable).values({
+        organizationId: organization.id,
+        createdByAdminId: admin.id,
+        email: ownerEmail,
+        ownerName,
+        tokenHash,
+        expiresAt,
+      }).returning({ id: testWorkspaceInvitationsTable.id });
+      await tx.insert(platformAuditLogsTable).values({
+        adminId: admin.id,
+        organizationId: organization.id,
+        actorName: admin.displayName,
+        action: "test_workspace_created",
+        entity: `organization:${organization.id}`,
+        details: JSON.stringify({
+          workspaceName,
+          ownerEmail,
+          invitationId: invitation.id,
+          expiresAt: expiresAt.toISOString(),
+        }),
+      });
+      return { kind: "created" as const, organization, invitationId: invitation.id };
+    });
+
+    if (result.kind === "conflict") {
+      response.status(409).json({ error: "لا يمكن دعوة هذا البريد لأنه مرتبط بحساب منشأة موجود." });
+      return;
+    }
+
+    try {
+      await sendTestWorkspaceInvitation({ email: ownerEmail, ownerName, workspaceName, invitationUrl });
+      const [markedSent] = await db.update(testWorkspaceInvitationsTable)
+        .set({ sentAt: new Date(), deliveryFailedAt: null })
+        .where(and(
+          eq(testWorkspaceInvitationsTable.id, result.invitationId),
+          eq(testWorkspaceInvitationsTable.tokenHash, tokenHash),
+        ))
+        .returning({ id: testWorkspaceInvitationsTable.id });
+      if (!markedSent) throw new Error("Invitation delivery attempt was superseded.");
+    } catch (error) {
+      await db.update(testWorkspaceInvitationsTable)
+        .set({ deliveryFailedAt: new Date() })
+        .where(and(
+          eq(testWorkspaceInvitationsTable.id, result.invitationId),
+          eq(testWorkspaceInvitationsTable.tokenHash, tokenHash),
+        ));
+      request.log.error({ err: error, organizationId: result.organization.id }, "Unable to deliver test workspace invitation");
+      response.status(503).json({
+        error: "أُنشئت مساحة الاختبار لكن تعذر إرسال الدعوة. أعد الإرسال من سجل المنشآت.",
+        code: "invitation_delivery_failed",
+        workspace: { id: result.organization.id, name: result.organization.name, isTestWorkspace: true, status: "delivery_failed" },
+      });
+      return;
+    }
+
+    response.status(201).json({
+      workspace: {
+        id: result.organization.id,
+        name: result.organization.name,
+        isTestWorkspace: true,
+        status: "pending_owner",
+        invitationExpiresAt: expiresAt.toISOString(),
+      },
+    });
+  } catch (error) {
+    request.log.error({ err: error }, "Test workspace provisioning failed");
+    response.status(500).json({ error: "تعذر إنشاء مساحة الاختبار. لم يتم حفظ أي مساحة." });
+  }
+});
+
+router.post("/super-admin/test-workspaces/:organizationId/resend-invitation", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
+  const admin = response.locals.platformAdmin as PlatformAdminContext;
+  const organizationId = organizationIdFromRequest(request);
+  if (!organizationId) {
+    response.status(400).json({ error: "معرّف مساحة الاختبار غير صحيح." });
+    return;
+  }
+  const token = createSessionToken();
+  const tokenHash = hashSessionToken(token);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + TEST_WORKSPACE_INVITATION_DAYS * DAY_MS);
+  let invitationUrl: string;
+  try {
+    invitationUrl = `${appOrigin(request)}/test-workspace-invite?token=${encodeURIComponent(token)}`;
+  } catch (error) {
+    request.log.error({ err: error }, "Test workspace invitation origin is not configured");
+    response.status(503).json({ error: "تعذر إنشاء رابط دعوة آمن. راجع إعداد عنوان التطبيق المنشور." });
+    return;
+  }
+
+  const prepared = await db.transaction(async (tx) => {
+    const [organization] = await tx.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId))
+      .for("update");
+    if (!organization || !organization.isTestWorkspace) return { kind: "missing" as const };
+    const [invitation] = await tx.select().from(testWorkspaceInvitationsTable)
+      .where(eq(testWorkspaceInvitationsTable.organizationId, organizationId))
+      .orderBy(desc(testWorkspaceInvitationsTable.createdAt))
+      .limit(1)
+      .for("update");
+    if (!invitation || invitation.acceptedAt) return { kind: "conflict" as const };
+    await tx.update(testWorkspaceInvitationsTable).set({
+      tokenHash,
+      expiresAt,
+      sentAt: null,
+      deliveryFailedAt: null,
+    }).where(eq(testWorkspaceInvitationsTable.id, invitation.id));
+    return { kind: "prepared" as const, organization, invitation };
+  });
+  if (prepared.kind === "missing") {
+    response.status(404).json({ error: "مساحة الاختبار غير موجودة." });
+    return;
+  }
+  if (prepared.kind === "conflict") {
+    response.status(409).json({ error: "قبل المالك الدعوة بالفعل ولا تحتاج إلى إعادة إرسال." });
+    return;
+  }
+  try {
+    await sendTestWorkspaceInvitation({
+      email: prepared.invitation.email,
+      ownerName: prepared.invitation.ownerName,
+      workspaceName: prepared.organization.name,
+      invitationUrl,
+    });
+    const [markedSent] = await db.update(testWorkspaceInvitationsTable)
+      .set({ sentAt: new Date(), deliveryFailedAt: null })
+      .where(and(
+        eq(testWorkspaceInvitationsTable.id, prepared.invitation.id),
+        eq(testWorkspaceInvitationsTable.tokenHash, tokenHash),
+      ))
+      .returning({ id: testWorkspaceInvitationsTable.id });
+    if (!markedSent) {
+      response.status(409).json({ error: "تجاوز طلب أحدث محاولة إعادة الإرسال هذه. استخدم أحدث دعوة فقط." });
+      return;
+    }
+    await db.insert(platformAuditLogsTable).values({
+      adminId: admin.id,
+      organizationId,
+      actorName: admin.displayName,
+      action: "test_workspace_invitation_resent",
+      entity: `organization:${organizationId}`,
+      details: JSON.stringify({ invitationId: prepared.invitation.id, expiresAt: expiresAt.toISOString() }),
+    });
+    response.json({ sent: true, expiresAt: expiresAt.toISOString() });
+  } catch (error) {
+    await db.update(testWorkspaceInvitationsTable)
+      .set({ deliveryFailedAt: new Date() })
+      .where(and(
+        eq(testWorkspaceInvitationsTable.id, prepared.invitation.id),
+        eq(testWorkspaceInvitationsTable.tokenHash, tokenHash),
+      ));
+    request.log.error({ err: error, organizationId }, "Unable to resend test workspace invitation");
+    response.status(503).json({ error: "تعذر إعادة إرسال الدعوة. يمكنك المحاولة مرة أخرى لاحقاً." });
+  }
 });
 
 router.post("/super-admin/organizations/:organizationId/subscription-action", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {

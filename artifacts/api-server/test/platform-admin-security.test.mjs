@@ -10,16 +10,18 @@ import {
   platformAuditLogsTable,
   teamAuditLogsTable,
   platformAdminsTable,
+  testWorkspaceInvitationsTable,
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
-import { hashPassword } from "../src/lib/team-auth.ts";
+import { hashPassword, hashSessionToken } from "../src/lib/team-auth.ts";
 import { lockAndValidateDataGeneration } from "../src/middleware/team-auth.ts";
 
 let server;
 let origin;
 let adminId;
 let organizationId;
+const testOrganizationIds = [];
 const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
 const username = `admin.${suffix}`;
 const password = "Secure-platform-test-password-123";
@@ -87,6 +89,9 @@ before(async () => {
 after(async () => {
   if (adminId) await db.delete(platformAdminsTable).where(eq(platformAdminsTable.id, adminId));
   if (organizationId) await db.delete(organizationsTable).where(eq(organizationsTable.id, organizationId));
+  for (const id of testOrganizationIds) {
+    await db.delete(organizationsTable).where(eq(organizationsTable.id, id));
+  }
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
 
@@ -102,24 +107,31 @@ test("يرفض اعتماد الإدارة الخاطئ ولا يكشف بيان
 });
 
 test("يعزل جلسة الإدارة عن جلسة مالك المنشأة", async () => {
-  const registration = await request("/auth/register", {
+  const login = await request("/auth/login", {
     method: "POST",
     body: {
-      projectName: `منشأة عزل ${suffix}`,
-      name: "مالك عادي",
-      email: `tenant-${suffix}@example.test`,
+      email: ownerEmail,
       password: "Tenant-test-password-123",
     },
     forwardedFor: "203.0.113.182",
   });
-  assert.equal(registration.response.status, 201, JSON.stringify(registration.payload));
-  const tenantCookie = cookieFrom(registration.response, "wudooh_session");
+  assert.equal(login.response.status, 401, "يجب ألا يعمل اعتماد غير صحيح لمالك المنشأة");
+
+  const ownerLogin = await request("/auth/login", {
+    method: "POST",
+    body: {
+      email: ownerEmail,
+      password: "Owner-test-password-123",
+    },
+    forwardedFor: "203.0.113.182",
+  });
+  assert.equal(ownerLogin.response.status, 200, JSON.stringify(ownerLogin.payload));
+  const tenantCookie = cookieFrom(ownerLogin.response, "wudooh_session");
   assert.ok(tenantCookie);
 
   const overview = await request("/super-admin/overview", { cookie: tenantCookie });
   assert.equal(overview.response.status, 401);
   assert.equal(overview.payload.error, "غير مصرح لك بالوصول إلى الإدارة العليا.");
-  await db.delete(organizationsTable).where(eq(organizationsTable.id, registration.payload.user.organizationId));
 });
 
 test("يسمح للسوبر أدمن ويحسب الاشتراك والمدة المتبقية على الخادم", async () => {
@@ -363,4 +375,183 @@ test("تنتظر عملية التعليق القفل وتُرفض عمليات 
     method: "POST", cookie: adminCookie, body: { action: "restore_access", confirmed: true, reason: "تنظيف اختبار القفل" },
   });
   assert.equal(restored.response.status, 200, JSON.stringify(restored.payload));
+});
+
+test("ينشئ السوبر أدمن مساحة اختبار معلّمة ولا يحصل على جلسة داخلها", async () => {
+  const unauthorized = await request("/super-admin/test-workspaces", {
+    method: "POST",
+    body: {
+      workspaceName: `مساحة غير مصرح بها ${suffix}`,
+      ownerName: "مالك غير مصرح",
+      ownerEmail: `unauthorized-${suffix}@example.test`,
+    },
+  });
+  assert.equal(unauthorized.response.status, 401);
+
+  const login = await request("/platform-auth/login", {
+    method: "POST",
+    body: { username, password },
+    forwardedFor: "203.0.113.190",
+  });
+  const adminCookie = cookieFrom(login.response, "wudooh_super_admin_session");
+  assert.ok(adminCookie);
+  const testWorkspaceName = `تدقيق محاسبي ${suffix}`;
+  const testOwnerEmail = `audit-owner-${suffix}@example.test`;
+  const created = await request("/super-admin/test-workspaces", {
+    method: "POST",
+    cookie: adminCookie,
+    body: {
+      workspaceName: testWorkspaceName,
+      ownerName: "مالك مساحة التدقيق",
+      ownerEmail: testOwnerEmail,
+    },
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+  assert.equal(created.payload.workspace.isTestWorkspace, true);
+  assert.equal(created.payload.workspace.status, "pending_owner");
+  assert.equal(JSON.stringify(created.payload).includes("token"), false);
+  testOrganizationIds.push(created.payload.workspace.id);
+
+  const [organization] = await db.select().from(organizationsTable)
+    .where(eq(organizationsTable.id, created.payload.workspace.id));
+  assert.equal(organization.isTestWorkspace, true);
+  assert.equal(organization.subscriptionStatus, "trialing");
+  assert.equal(organization.platformAccessSuspendedAt, null);
+  const owners = await db.select().from(teamUsersTable)
+    .where(eq(teamUsersTable.organizationId, organization.id));
+  assert.equal(owners.length, 0, "لا ينشأ مالك نشط قبل إثبات حيازة رابط الدعوة");
+  const invitations = await db.select().from(testWorkspaceInvitationsTable)
+    .where(eq(testWorkspaceInvitationsTable.organizationId, organization.id));
+  assert.equal(invitations.length, 1);
+  assert.equal(invitations[0].email, testOwnerEmail);
+  assert.equal(invitations[0].acceptedAt, null);
+  assert.ok(invitations[0].sentAt instanceof Date);
+
+  const tenantSession = await request("/auth/me", { cookie: adminCookie });
+  assert.equal(tenantSession.payload.user, null, "كوكي الإدارة العليا لا تتحول إلى جلسة منشأة");
+});
+
+test("يقبل مالك الاختبار الدعوة مرة واحدة ويظهر كمالك مفعّل", async () => {
+  const now = new Date();
+  const rawToken = `test-workspace-invitation-${randomUUID()}-${randomUUID()}`;
+  const workspaceName = `مساحة قبول دعوة ${suffix}`;
+  const email = `accepted-auditor-${suffix}@example.test`;
+  const [organization] = await db.insert(organizationsTable).values({
+    name: workspaceName,
+    planId: "trial",
+    subscriptionStatus: "trialing",
+    trialStartedAt: now,
+    trialEndsAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    isTestWorkspace: true,
+  }).returning();
+  testOrganizationIds.push(organization.id);
+  await db.insert(testWorkspaceInvitationsTable).values({
+    organizationId: organization.id,
+    createdByAdminId: adminId,
+    email,
+    ownerName: "مدقق الحسابات",
+    tokenHash: hashSessionToken(rawToken),
+    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+    sentAt: now,
+  });
+
+  const status = await request(`/auth/test-workspace-invitations/status?token=${encodeURIComponent(rawToken)}`);
+  assert.equal(status.response.status, 200, JSON.stringify(status.payload));
+  assert.equal(status.payload.invitation.workspaceName, workspaceName);
+  assert.equal(status.payload.invitation.email, email);
+
+  const accepted = await request("/auth/test-workspace-invitations/accept", {
+    method: "POST",
+    body: { token: rawToken, password: "Accepted-owner-password-123!" },
+    forwardedFor: "203.0.113.191",
+  });
+  assert.equal(accepted.response.status, 200, JSON.stringify(accepted.payload));
+  assert.equal(accepted.payload.user.organizationId, organization.id);
+  assert.equal(accepted.payload.user.roleId, "owner");
+  assert.ok(accepted.payload.user.emailVerifiedAt);
+  assert.equal(accepted.payload.user.phone, null);
+  const ownerCookie = cookieFrom(accepted.response, "wudooh_session");
+  assert.ok(ownerCookie);
+
+  const ownerSession = await request("/auth/me", { cookie: ownerCookie });
+  assert.equal(ownerSession.payload.user.organizationId, organization.id);
+  const repeated = await request("/auth/test-workspace-invitations/accept", {
+    method: "POST",
+    body: { token: rawToken, password: "Accepted-owner-password-123!" },
+    forwardedFor: "203.0.113.192",
+  });
+  assert.equal(repeated.response.status, 400);
+
+  const [storedOwner] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.email, email));
+  assert.equal(storedOwner.status, "active");
+  assert.ok(storedOwner.emailVerifiedAt instanceof Date);
+  const [invitation] = await db.select().from(testWorkspaceInvitationsTable)
+    .where(eq(testWorkspaceInvitationsTable.organizationId, organization.id));
+  assert.ok(invitation.acceptedAt instanceof Date);
+  const activationLogs = await db.select().from(platformAuditLogsTable)
+    .where(eq(platformAuditLogsTable.organizationId, organization.id));
+  assert.ok(activationLogs.some((log) => log.action === "test_workspace_activated"));
+});
+
+test("يرفض الدعوات غير المرسلة والمنتهية ويدوّر الرمز عند إعادة الإرسال", async () => {
+  const resendAdminUsername = `resend-admin.${suffix}`;
+  const [resendAdmin] = await db.insert(platformAdminsTable).values({
+    username: resendAdminUsername,
+    displayName: "مدير إعادة إرسال الاختبار",
+    passwordHash: await hashPassword(password),
+  }).returning({ id: platformAdminsTable.id });
+  const login = await request("/platform-auth/login", {
+    method: "POST",
+    body: { username: resendAdminUsername, password },
+    forwardedFor: "203.0.113.193",
+  });
+  const adminCookie = cookieFrom(login.response, "wudooh_super_admin_session");
+  assert.ok(adminCookie);
+  const now = new Date();
+  const [organization] = await db.insert(organizationsTable).values({
+    name: `مساحة ضبط دعوات ${suffix}`,
+    isTestWorkspace: true,
+    trialStartedAt: now,
+    trialEndsAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+  }).returning();
+  testOrganizationIds.push(organization.id);
+  const unsentToken = `unsent-${randomUUID()}-${randomUUID()}`;
+  const [invitation] = await db.insert(testWorkspaceInvitationsTable).values({
+    organizationId: organization.id,
+    createdByAdminId: resendAdmin.id,
+    email: `resend-${suffix}@example.test`,
+    ownerName: "مالك إعادة الإرسال",
+    tokenHash: hashSessionToken(unsentToken),
+    expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+  }).returning();
+
+  const unsentStatus = await request(`/auth/test-workspace-invitations/status?token=${encodeURIComponent(unsentToken)}`);
+  assert.equal(unsentStatus.response.status, 400);
+  const unsentAccept = await request("/auth/test-workspace-invitations/accept", {
+    method: "POST",
+    body: { token: unsentToken, password: "Unsent-owner-password-123!" },
+  });
+  assert.equal(unsentAccept.response.status, 400);
+
+  const resent = await request(`/super-admin/test-workspaces/${organization.id}/resend-invitation`, {
+    method: "POST",
+    cookie: adminCookie,
+  });
+  assert.equal(resent.response.status, 200, JSON.stringify(resent.payload));
+  const [afterResend] = await db.select().from(testWorkspaceInvitationsTable)
+    .where(eq(testWorkspaceInvitationsTable.id, invitation.id));
+  assert.ok(afterResend.sentAt instanceof Date);
+  assert.notEqual(afterResend.tokenHash, hashSessionToken(unsentToken), "يجب إبطال الرمز السابق عند إعادة الإرسال");
+  const oldTokenStatus = await request(`/auth/test-workspace-invitations/status?token=${encodeURIComponent(unsentToken)}`);
+  assert.equal(oldTokenStatus.response.status, 400);
+
+  const expiredToken = `expired-${randomUUID()}-${randomUUID()}`;
+  await db.update(testWorkspaceInvitationsTable).set({
+    tokenHash: hashSessionToken(expiredToken),
+    sentAt: now,
+    expiresAt: new Date(now.getTime() - 1000),
+  }).where(eq(testWorkspaceInvitationsTable.id, invitation.id));
+  const expiredStatus = await request(`/auth/test-workspace-invitations/status?token=${encodeURIComponent(expiredToken)}`);
+  assert.equal(expiredStatus.response.status, 400);
+  await db.delete(platformAdminsTable).where(eq(platformAdminsTable.id, resendAdmin.id));
 });

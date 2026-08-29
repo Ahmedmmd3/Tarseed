@@ -9,6 +9,8 @@ import {
   organizationsTable,
   passwordResetTokensTable,
   phoneVerificationCodesTable,
+  platformAuditLogsTable,
+  testWorkspaceInvitationsTable,
   teamAuditLogsTable,
   teamUsersTable,
   type TeamUser,
@@ -141,6 +143,11 @@ function subscriptionWriteFailure(organization: SubscriptionFields | undefined):
   return organization?.platformAccessSuspendedAt
     ? { error: "تم تعليق وصول هذه المنشأة من إدارة المنصة.", code: "platform_access_suspended" }
     : { error: "يتطلب الوصول إلى لوحة التحكم اشتراكاً فعالاً أو فترة تجريبية سارية.", code: "subscription_required" };
+}
+
+function testWorkspaceInvitationToken(request: Request): string {
+  const candidate = request.method === "GET" ? request.query.token : request.body?.token;
+  return typeof candidate === "string" ? candidate.trim() : "";
 }
 
 function escapeHtml(value: string): string {
@@ -416,6 +423,145 @@ function validateMemberBody(body: Record<string, unknown>, requiresPassword: boo
   if (locationScope === "selected" && warehouseIds.length === 0) return { error: "اختر موقعاً واحداً على الأقل أو استخدم نطاق «لا مواقع»." };
   return { data: { name, email, password, roleId, status, permissions, locationScope, warehouseIds } };
 }
+
+router.get("/auth/test-workspace-invitations/status", async (request: Request, response: Response): Promise<void> => {
+  const token = testWorkspaceInvitationToken(request);
+  if (token.length < 32) {
+    response.status(400).json({ error: "دعوة مساحة الاختبار غير صالحة أو انتهت." });
+    return;
+  }
+  const [invitation] = await db.select({
+    ownerName: testWorkspaceInvitationsTable.ownerName,
+    email: testWorkspaceInvitationsTable.email,
+    expiresAt: testWorkspaceInvitationsTable.expiresAt,
+    sentAt: testWorkspaceInvitationsTable.sentAt,
+    acceptedAt: testWorkspaceInvitationsTable.acceptedAt,
+    workspaceName: organizationsTable.name,
+    isTestWorkspace: organizationsTable.isTestWorkspace,
+  }).from(testWorkspaceInvitationsTable)
+    .innerJoin(organizationsTable, eq(testWorkspaceInvitationsTable.organizationId, organizationsTable.id))
+    .where(eq(testWorkspaceInvitationsTable.tokenHash, hashSessionToken(token)))
+    .limit(1);
+  if (!invitation || !invitation.isTestWorkspace || !invitation.sentAt || invitation.acceptedAt || invitation.expiresAt <= new Date()) {
+    response.status(400).json({ error: "دعوة مساحة الاختبار غير صالحة أو انتهت." });
+    return;
+  }
+  response.json({
+    invitation: {
+      workspaceName: invitation.workspaceName,
+      ownerName: invitation.ownerName,
+      email: invitation.email,
+      expiresAt: invitation.expiresAt.toISOString(),
+    },
+  });
+});
+
+router.post("/auth/test-workspace-invitations/accept", async (request: Request, response: Response): Promise<void> => {
+  const token = testWorkspaceInvitationToken(request);
+  const password = typeof request.body?.password === "string" ? request.body.password : "";
+  const passwordError = validatePassword(password);
+  if (token.length < 32 || passwordError) {
+    response.status(400).json({ error: token.length < 32 ? "دعوة مساحة الاختبار غير صالحة أو انتهت." : passwordError });
+    return;
+  }
+
+  const passwordHash = await hashPassword(password);
+  const now = new Date();
+  const result = await db.transaction(async (tx) => {
+    const [invitation] = await tx.select().from(testWorkspaceInvitationsTable)
+      .where(eq(testWorkspaceInvitationsTable.tokenHash, hashSessionToken(token)))
+      .for("update");
+    if (!invitation || !invitation.sentAt || invitation.acceptedAt || invitation.expiresAt <= now) {
+      return { kind: "invalid" as const };
+    }
+    const [organization] = await tx.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, invitation.organizationId))
+      .for("update");
+    if (!organization || !organization.isTestWorkspace || organization.platformAccessSuspendedAt) {
+      return { kind: "invalid" as const };
+    }
+    const [existingUser] = await tx.select({ id: teamUsersTable.id })
+      .from(teamUsersTable)
+      .where(eq(teamUsersTable.email, invitation.email))
+      .limit(1);
+    if (existingUser) return { kind: "conflict" as const };
+
+    const [user] = await tx.insert(teamUsersTable).values({
+      organizationId: organization.id,
+      email: invitation.email,
+      phone: null,
+      emailVerifiedAt: now,
+      phoneVerifiedAt: null,
+      name: invitation.ownerName,
+      passwordHash,
+      status: "active",
+      roleId: "owner",
+      permissions: Object.fromEntries([...PERMISSION_KEYS].map((key) => [key, true])),
+      locationScope: "all",
+      warehouseIds: [],
+    }).returning();
+    await tx.insert(erpRecordsTable).values([
+      {
+        organizationId: organization.id,
+        tableName: "warehouses",
+        data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+      },
+      {
+        organizationId: organization.id,
+        tableName: "warehouses",
+        data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+      },
+    ]);
+    await tx.update(testWorkspaceInvitationsTable)
+      .set({ acceptedAt: now })
+      .where(eq(testWorkspaceInvitationsTable.id, invitation.id));
+    const sessionToken = createSessionToken();
+    await tx.insert(authSessionsTable).values({
+      userId: user.id,
+      tokenHash: hashSessionToken(sessionToken),
+      expiresAt: new Date(now.getTime() + SESSION_DAYS * 24 * 60 * 60 * 1000),
+    });
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: organization.id,
+      actorId: user.id,
+      actorName: user.name,
+      action: "test_workspace_invitation_accepted",
+      entity: user.email,
+      details: "تم تفعيل مالك مساحة الاختبار عبر رابط الدعوة الأحادي.",
+    });
+    await tx.insert(platformAuditLogsTable).values({
+      adminId: invitation.createdByAdminId,
+      organizationId: organization.id,
+      actorName: user.name,
+      action: "test_workspace_activated",
+      entity: `organization:${organization.id}`,
+      details: JSON.stringify({ invitationId: invitation.id, activatedAt: now.toISOString() }),
+    });
+    return { kind: "accepted" as const, user, organization, sessionToken };
+  });
+
+  if (result.kind === "invalid") {
+    response.status(400).json({ error: "دعوة مساحة الاختبار غير صالحة أو انتهت أو أوقفت المساحة." });
+    return;
+  }
+  if (result.kind === "conflict") {
+    response.status(409).json({ error: "لا يمكن قبول الدعوة لأن البريد مرتبط بحساب موجود." });
+    return;
+  }
+
+  setSession(response, result.sessionToken);
+  response.json({ user: safeUser(result.user, {
+    projectName: result.organization.name,
+    dataGeneration: result.organization.dataGeneration,
+    planId: result.organization.planId,
+    subscriptionStatus: result.organization.subscriptionStatus,
+    trialStartedAt: result.organization.trialStartedAt,
+    trialEndsAt: result.organization.trialEndsAt,
+    subscriptionStartedAt: result.organization.subscriptionStartedAt,
+    subscriptionEndsAt: result.organization.subscriptionEndsAt,
+    platformAccessSuspendedAt: result.organization.platformAccessSuspendedAt,
+  }) });
+});
 
 router.post("/auth/register", async (request: Request, response: Response): Promise<void> => {
   const startedAt = Date.now();
