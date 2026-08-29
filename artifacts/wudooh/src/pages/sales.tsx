@@ -20,11 +20,13 @@ export default function Sales() {
       </div>
       
       <Tabs defaultValue="customers" className="w-full">
-        <TabsList className="mb-6 grid w-full grid-cols-3 md:w-[500px]">
-          <TabsTrigger value="customers">العملاء</TabsTrigger>
-          <TabsTrigger value="invoices">فواتير المبيعات</TabsTrigger>
-          <TabsTrigger value="sales">المبيعات المسجلة</TabsTrigger>
-        </TabsList>
+        <div className="mb-6 overflow-x-auto pb-1">
+          <TabsList className="flex h-auto w-max min-w-full justify-start md:w-[500px] md:min-w-0">
+            <TabsTrigger value="customers" className="min-h-11 shrink-0 px-4">العملاء</TabsTrigger>
+            <TabsTrigger value="invoices" className="min-h-11 shrink-0 px-4">فواتير المبيعات</TabsTrigger>
+            <TabsTrigger value="sales" className="min-h-11 shrink-0 px-4">المبيعات المسجلة</TabsTrigger>
+          </TabsList>
+        </div>
         
         <TabsContent value="customers">
           <CrudTable
@@ -40,10 +42,10 @@ export default function Sales() {
         </TabsContent>
         
         <TabsContent value="invoices">
-          <div className="mb-4 flex items-center justify-between rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          <div className="mb-4 flex flex-col items-stretch justify-between gap-3 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-900 sm:flex-row sm:items-center">
             <span>تُنشأ فواتير البيع المؤثرة في المخزون من مسار نقطة البيع الذري.</span>
             <Link href="/pos">
-              <Button size="sm" className="gap-2 bg-blue-700 hover:bg-blue-800"><Store className="h-4 w-4" />فتح نقطة البيع</Button>
+              <Button size="sm" className="h-11 w-full gap-2 bg-blue-700 hover:bg-blue-800 sm:h-auto sm:w-auto"><Store className="h-4 w-4" />فتح نقطة البيع</Button>
             </Link>
           </div>
           <CrudTable

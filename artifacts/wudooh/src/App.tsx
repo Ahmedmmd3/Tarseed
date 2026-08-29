@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import { PwaStatus } from '@/components/pwa-status';
 import NotFound from '@/pages/not-found';
 import {
   Route,
@@ -112,6 +113,7 @@ function App() {
           <Router />
         </WouterRouter>
         <Toaster />
+        <PwaStatus />
       </TooltipProvider>
     </QueryClientProvider>
   );

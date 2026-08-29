@@ -210,7 +210,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen bg-[#061d40] font-sans text-slate-900" dir="rtl">
       <div className="flex min-h-screen flex-col md:flex-row">
-        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 md:hidden">
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 pb-3 pt-[max(env(safe-area-inset-top),0.75rem)] md:hidden">
           <BrandLockup />
           <Button variant="outline" size="sm" className="gap-2 border-slate-200 text-slate-700" onClick={() => setSidebarOpen((open) => !open)} data-testid="button-menu" aria-label={sidebarOpen ? 'إغلاق القائمة' : 'فتح القائمة'}>
             {sidebarOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />} لوحة التحكم
@@ -219,7 +219,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {sidebarOpen && <button type="button" className="fixed inset-0 z-20 bg-slate-950/40 md:hidden" onClick={closeSidebar} aria-label="إغلاق القائمة" data-testid="button-close-menu-overlay" />}
 
-        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex w-[286px] flex-col border-l border-white/10 bg-[#062344] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
+        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex w-[286px] flex-col border-l border-white/10 bg-[#062344] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
           <div className="border-b border-white/10 px-6 py-6">
             <BrandLockup dark />
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">

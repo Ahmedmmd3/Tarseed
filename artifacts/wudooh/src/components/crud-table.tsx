@@ -245,10 +245,10 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
         <h2 className="text-xl font-bold text-slate-900">{title}</h2>
         {!readOnly && (
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
             {isExpenseTable && (
               <ReceiptExtractionDialog
                 open={receiptDialogOpen}
@@ -257,17 +257,17 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
               />
             )}
             {isExpenseTable && (
-              <Button type="button" variant="outline" onClick={() => setReceiptDialogOpen(true)} className="gap-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800" data-testid="button-add-expense-receipt">
+              <Button type="button" variant="outline" onClick={() => setReceiptDialogOpen(true)} className="h-11 gap-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800" data-testid="button-add-expense-receipt">
                 <ImagePlus className="h-4 w-4" /> إضافة بصورة الإيصال
               </Button>
             )}
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
-                <Button onClick={() => handleOpen()} className="gap-2 bg-teal-600 hover:bg-teal-700" data-testid={`button-add-${table}`}>
+                <Button onClick={() => handleOpen()} className="h-11 w-full gap-2 bg-teal-600 hover:bg-teal-700 sm:w-auto" data-testid={`button-add-${table}`}>
                   <Plus className="h-4 w-4" /> إضافة
                 </Button>
               </DialogTrigger>
-              <DialogContent>
+              <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] rounded-2xl p-5 sm:w-full sm:p-6">
                 <DialogHeader>
                   <DialogTitle>{editingId ? 'تعديل' : 'إضافة'} {title}</DialogTitle>
                 </DialogHeader>
@@ -330,7 +330,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
       )}
 
       <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-        <Table>
+        <Table className={fields.length >= 4 ? 'min-w-[720px]' : 'min-w-[520px]'}>
           <TableHeader>
             <TableRow>
               {fields.map((f) => (

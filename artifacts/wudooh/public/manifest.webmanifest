@@ -1,0 +1,27 @@
+{
+  "name": "ترصيد — إدارة أعمالك بوضوح",
+  "short_name": "ترصيد",
+  "description": "منصة عربية لإدارة المبيعات والمخزون والمحاسبة والعمليات.",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./dashboard",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#061d40",
+  "theme_color": "#061d40",
+  "icons": [
+    {
+      "src": "./logo.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./logo-transparent.png",
+      "sizes": "1254x1254",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

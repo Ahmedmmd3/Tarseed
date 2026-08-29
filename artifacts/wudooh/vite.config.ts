@@ -1,7 +1,9 @@
 import path from 'path';
+import { createHash } from 'node:crypto';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
 
@@ -27,12 +29,47 @@ if (!basePath) {
   );
 }
 
+const publicOutDir = path.resolve(import.meta.dirname, 'dist/public');
+
+async function listBuildAssets(directory: string, prefix = ''): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const assets = await Promise.all(entries.map(async (entry) => {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    return entry.isDirectory()
+      ? listBuildAssets(path.join(directory, entry.name), relativePath)
+      : [relativePath];
+  }));
+  return assets.flat();
+}
+
+function pwaPrecachePlugin(): Plugin {
+  return {
+    name: 'wudooh-pwa-precache',
+    apply: 'build',
+    async closeBundle() {
+      const serviceWorkerPath = path.join(publicOutDir, 'sw.js');
+      const serviceWorkerTemplate = await readFile(serviceWorkerPath, 'utf8');
+      const assetPaths = (await listBuildAssets(path.join(publicOutDir, 'assets'), 'assets')).sort();
+      const buildId = createHash('sha256').update(assetPaths.join('\n')).digest('hex').slice(0, 12);
+      const generatedServiceWorker = serviceWorkerTemplate
+        .replace('__WUDOOH_BUILD_ID__', buildId)
+        .replace('/* __WUDOOH_BUILD_ASSETS__ */ []', JSON.stringify(assetPaths));
+
+      if (generatedServiceWorker === serviceWorkerTemplate) {
+        throw new Error('Service worker precache placeholders were not replaced.');
+      }
+      await writeFile(serviceWorkerPath, generatedServiceWorker);
+    },
+  };
+}
+
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
+    pwaPrecachePlugin(),
     ...(process.env.NODE_ENV !== 'production' &&
     process.env.REPL_ID !== undefined
       ? [
@@ -61,7 +98,7 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname),
   build: {
-    outDir: path.resolve(import.meta.dirname, 'dist/public'),
+    outDir: publicOutDir,
     emptyOutDir: true,
   },
   server: {
