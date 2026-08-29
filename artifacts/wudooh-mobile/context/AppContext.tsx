@@ -26,7 +26,17 @@ export type User = {
   warehouseIds: number[];
   subscription: { status: string; accessActive: boolean };
 };
-export type Product = { id: number; name: string; sku?: string; price?: number; salePrice?: number; sellPrice?: number; stock?: number };
+export type Product = {
+  id: number;
+  name: string;
+  sku?: string;
+  barcode?: string;
+  code?: string;
+  price?: number;
+  salePrice?: number;
+  sellPrice?: number;
+  stock?: number;
+};
 export type Warehouse = { id: number; name: string; status?: string };
 export type Balance = { id: number; productId: number; warehouseId: number; quantity: number };
 export type Invoice = { id: number | string; number?: string; customerName?: string; issueDate?: string; total?: number; status?: string; paymentMethod?: string };

@@ -60,7 +60,7 @@ app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), async
   }
 });
 const trustedOrigins = new Set(
-  [process.env.REPLIT_DEV_DOMAIN, process.env.REPLIT_DOMAINS]
+  [process.env.REPLIT_DEV_DOMAIN, process.env.REPLIT_DOMAINS, process.env.REPLIT_EXPO_DEV_DOMAIN]
     .filter(Boolean)
     .flatMap((domains) => String(domains).split(","))
     .map((domain) => `https://${domain.trim()}`),
@@ -204,7 +204,9 @@ app.use((_request, response, next) => {
 app.use(cors({
   credentials: true,
   origin(origin, callback) {
-    if (!origin || trustedOrigins.has(origin)) {
+    const isLocalDevelopmentOrigin = process.env.NODE_ENV !== "production"
+      && /^http:\/\/localhost(?::\d+)?$/.test(origin ?? "");
+    if (!origin || trustedOrigins.has(origin) || isLocalDevelopmentOrigin) {
       callback(null, true);
       return;
     }
