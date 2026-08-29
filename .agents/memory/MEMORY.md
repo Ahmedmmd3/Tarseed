@@ -23,3 +23,4 @@
 - [عزل ملخصات الذكاء الاصطناعي](ai-summary-session-isolation.md) — اربط cache بالنطاق والجلسة، وافرض قيود الاستدعاء الحساسة ذرياً في الخادم.
 - [اختبار PWA من بناء الإنتاج](pwa-production-browser-testing.md) — اختبر التسجيل وoffline shell من بناء production؛ خادم التطوير لا يثبت صحة precache.
 - [جلسات التطبيقات الأصلية](native-mobile-session-auth.md) — افصل نقل جلسة Native برمز Bearer محفوظ في مخزن النظام الآمن، مع إبقاء الويب على Cookie فقط.
+- [تدقيق الإنتاج المحاسبي](production-accountant-audit-access.md) — يحتاج التدقيق الإنتاجي حساب منشأة مفعّلاً؛ الإدارة العليا لا تفتح البيانات المحاسبية والتسجيل يفرض تحققاً حياً.
