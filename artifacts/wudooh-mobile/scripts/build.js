@@ -259,7 +259,7 @@ async function downloadManifest(platform) {
 
   try {
     console.log(`Fetching ${platform} manifest...`);
-    const response = await fetch('http://localhost:8081/manifest', {
+    const response = await fetch(`http://localhost:${metroPort}/manifest`, {
       headers: { 'expo-platform': platform },
       signal: controller.signal,
     });
@@ -343,7 +343,7 @@ function extractAssets(timestamp) {
       const originalPath = match[1];
       const filename = match[3] + '.' + match[4];
 
-      const tempUrl = new URL(`http://localhost:8081${originalPath}`);
+      const tempUrl = new URL(`http://localhost:${metroPort}${originalPath}`);
       const unstablePath = tempUrl.searchParams.get('unstable_path');
 
       if (!unstablePath) {
@@ -385,7 +385,7 @@ async function downloadAssets(assets, timestamp) {
   const failures = [];
 
   const downloadPromises = assets.map(async (asset) => {
-    const tempUrl = new URL(`http://localhost:8081${asset.originalPath}`);
+    const tempUrl = new URL(`http://localhost:${metroPort}${asset.originalPath}`);
     const unstablePath = tempUrl.searchParams.get('unstable_path');
 
     if (!unstablePath) {
