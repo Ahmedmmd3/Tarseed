@@ -7,6 +7,11 @@ type DemoRecordData = Record<string, unknown>;
 
 export const DEMO_SEED_KEY = "new-organization-v1";
 
+export const DEFAULT_WAREHOUSE_DEFINITIONS = [
+  { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
+  { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
+] as const;
+
 export const DEFAULT_ACCOUNT_DEFINITIONS = [
   { code: "1000", name: "الصندوق", type: "asset", parent: null, openingBalance: 0, status: "active" },
   { code: "1100", name: "البنك", type: "asset", parent: null, openingBalance: 0, status: "active" },
@@ -78,12 +83,35 @@ function balanced(lines: Array<{ accountId: string; debit: number; credit: numbe
   return debit === credit;
 }
 
+async function ensureDefaultWarehouses(
+  organizationId: number,
+  executor: DatabaseExecutor,
+): Promise<void> {
+  const existing = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "warehouses"),
+  ));
+  const existingKeys = new Set(existing.map((record) => `${String(record.data.name)}:${String(record.data.type)}`));
+  const missing = DEFAULT_WAREHOUSE_DEFINITIONS.filter(
+    (definition) => !existingKeys.has(`${definition.name}:${definition.type}`),
+  );
+  if (!missing.length) return;
+
+  await executor.insert(erpRecordsTable).values(missing.map((definition) => ({
+    organizationId,
+    tableName: "warehouses",
+    data: { ...definition },
+  })));
+}
+
 export async function seedDemoData(
   organizationId: number,
   dataGeneration: number,
   executor: DatabaseExecutor = db,
   now = new Date(),
 ): Promise<{ created: number }> {
+  await ensureDefaultWarehouses(organizationId, executor);
+
   const existing = await executor.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
     sql`${erpRecordsTable.data}->>'demoSeedKey' = ${DEMO_SEED_KEY}`,

@@ -5,7 +5,6 @@ import {
   authSessionsTable,
   db,
   emailVerificationCodesTable,
-  erpRecordsTable,
   organizationsTable,
   passwordResetTokensTable,
   phoneVerificationCodesTable,
@@ -509,24 +508,6 @@ router.post("/auth/test-workspace-invitations/accept", async (request: Request, 
       locationScope: "all",
       warehouseIds: [],
     }).returning();
-    const existingWarehouses = await tx.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
-      eq(erpRecordsTable.organizationId, organization.id),
-      eq(erpRecordsTable.tableName, "warehouses"),
-    )).limit(1);
-    if (!existingWarehouses.length) {
-      await tx.insert(erpRecordsTable).values([
-        {
-          organizationId: organization.id,
-          tableName: "warehouses",
-          data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
-        },
-        {
-          organizationId: organization.id,
-          tableName: "warehouses",
-          data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
-        },
-      ]);
-    }
     await seedDemoData(organization.id, organization.dataGeneration, tx);
     await tx.update(testWorkspaceInvitationsTable)
       .set({ acceptedAt: now })
@@ -682,18 +663,6 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           codeHash: hashEmailVerificationCode(verificationCode),
           expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
         });
-        await tx.insert(erpRecordsTable).values([
-          {
-            organizationId: organization.id,
-            tableName: "warehouses",
-            data: { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
-          },
-          {
-            organizationId: organization.id,
-            tableName: "warehouses",
-            data: { name: "فرع المبيعات", type: "branch", city: "", manager: "", status: "active" },
-          },
-        ]);
         await seedDemoData(organization.id, organization.dataGeneration, tx);
         return { kind: "created", userId: user.id, organizationId: organization.id };
       });

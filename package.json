@@ -12,6 +12,7 @@
     "test:password-reset-delivery": "pnpm --filter @workspace/api-server run test:password-reset-delivery",
     "test:billing": "pnpm --filter @workspace/api-server run test:billing",
     "test:stripe-webhook-security": "pnpm --filter @workspace/api-server run test:stripe-webhook-security",
+    "test:organization-initialization": "pnpm --filter @workspace/api-server run test:organization-initialization",
     "test:inventory": "pnpm --filter @workspace/api-server run test:inventory",
     "test:platform-admin": "pnpm --filter @workspace/api-server run test:platform-admin",
     "test:security": "pnpm --filter @workspace/api-server run test:security",
