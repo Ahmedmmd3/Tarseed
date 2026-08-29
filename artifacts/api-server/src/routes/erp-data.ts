@@ -337,6 +337,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
+  if (isAccountingSource(access.tableName)) {
+    response.status(405).json({ error: "يُلغى أو يُصحح المستند المحاسبي من مساره المتخصص حتى تتطابق القيود والمخزون والذمم." });
+    return;
+  }
   const body = request.body;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     response.status(400).json({ error: "بيانات السجل غير صحيحة." });
@@ -589,6 +593,10 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
   if (SPECIALIZED_MUTATION_TABLES.has(access.tableName)) {
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
+    return;
+  }
+  if (isAccountingSource(access.tableName)) {
+    response.status(405).json({ error: "لا يُحذف المستند المحاسبي مباشرة. ألغِه من مساره المتخصص حتى تُعكس آثاره كاملة." });
     return;
   }
   if (access.tableName === "products") {

@@ -9,7 +9,7 @@ function unique(value) {
   return `${value}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-async function request(path, { method = "GET", body, cookie } = {}) {
+async function request(path, { method = "GET", body, cookie, headers = {} } = {}) {
   const generation = generationByCookie.get(cookie);
   const response = await fetch(`${apiBase}${path}`, {
     method,
@@ -18,6 +18,7 @@ async function request(path, { method = "GET", body, cookie } = {}) {
       ...(cookie ? { Cookie: cookie } : {}),
       ...(Number.isSafeInteger(generation) ? { "X-Wudooh-Data-Generation": String(generation) } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers,
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -28,9 +29,10 @@ async function request(path, { method = "GET", body, cookie } = {}) {
 async function registerOwner() {
   const email = `${unique("inventory") }@example.test`;
   const password = "Safe-test-password-123";
+  const phone = `05${String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0")}`;
   const { response, payload } = await request("/auth/register", {
     method: "POST",
-    body: { projectName: unique("منشأة اختبار"), name: "مالك الاختبار", email, password },
+    body: { projectName: unique("منشأة اختبار"), name: "مالك الاختبار", email, phone, password },
   });
   assert.equal(response.status, 201, JSON.stringify(payload));
   const cookie = cookieFrom(response);
@@ -190,6 +192,79 @@ test("موظف المبيعات المخوّل يستطيع تسجيل البي�
   });
   assert.equal(sale.response.status, 200, JSON.stringify(sale.payload));
   await assertProductMatchesBalances(scenario.firstCookie, scenario.productId);
+});
+
+test("إلغاء الفاتورة يعيد المخزون والذمم وينشئ قيد عكس واحداً مع إعادة المحاولة", async () => {
+  const owner = await registerOwner();
+  const accounts = await post(owner.cookie, "/accounting/initialize");
+  assert.equal(accounts.response.status, 200, JSON.stringify(accounts.payload));
+
+  const { payload: locationsPayload } = await request("/data/warehouses", { cookie: owner.cookie });
+  const warehouse = locationsPayload.records[0];
+  const product = await post(owner.cookie, "/data/products", {
+    name: unique("منتج إلغاء فاتورة"),
+    stock: 0,
+    sellPrice: 25,
+  });
+  assert.equal(product.response.status, 201, JSON.stringify(product.payload));
+  const seed = await post(owner.cookie, "/inventory/adjustments", {
+    productId: product.payload.record.id,
+    warehouseId: warehouse.id,
+    actualQuantity: 8,
+    reason: "رصيد اختبار الإلغاء",
+  });
+  assert.equal(seed.response.status, 200, JSON.stringify(seed.payload));
+
+  const checkout = await post(owner.cookie, "/inventory/checkout", {
+    warehouseId: warehouse.id,
+    issueDate: "2026-08-29",
+    paymentMethod: "credit",
+    dueDate: "2026-09-29",
+    customerName: "عميل اختبار الإلغاء",
+    clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 3 }],
+  });
+  assert.equal(checkout.response.status, 200, JSON.stringify(checkout.payload));
+  const invoiceId = checkout.payload.invoice.id;
+  const operationId = crypto.randomUUID();
+  const cancellationBody = {
+    reason: "إلغاء فاتورة اختبارية",
+    effectiveDate: "2026-08-29",
+  };
+  const cancel = await request(`/accounting/sources/invoices/${invoiceId}/cancel`, {
+    method: "POST",
+    cookie: owner.cookie,
+    headers: { "Idempotency-Key": operationId },
+    body: cancellationBody,
+  });
+  assert.equal(cancel.response.status, 201, JSON.stringify(cancel.payload));
+  assert.equal(cancel.payload.source.status, "cancelled");
+  assert.equal(cancel.payload.reversal.adjustmentType, "reversal");
+  assert.equal(cancel.payload.reversal.sourceId, invoiceId);
+
+  const replay = await request(`/accounting/sources/invoices/${invoiceId}/cancel`, {
+    method: "POST",
+    cookie: owner.cookie,
+    headers: { "Idempotency-Key": operationId },
+    body: cancellationBody,
+  });
+  assert.equal(replay.response.status, 200, JSON.stringify(replay.payload));
+  assert.equal(replay.payload.replayed, true);
+  assert.equal(replay.payload.reversal.id, cancel.payload.reversal.id);
+
+  const [balances, receivables, journals] = await Promise.all([
+    request("/data/inventoryBalances", { cookie: owner.cookie }),
+    request("/data/receivables", { cookie: owner.cookie }),
+    request("/data/journalEntries", { cookie: owner.cookie }),
+  ]);
+  const balance = balances.payload.records.find((record) =>
+    record.productId === product.payload.record.id && record.warehouseId === warehouse.id);
+  assert.equal(Number(balance.quantity), 8, "يجب إعادة كمية الفاتورة كاملة إلى الموقع");
+  const receivable = receivables.payload.records.find((record) => record.invoiceId === invoiceId);
+  assert.equal(receivable.status, "cancelled");
+  const sourceJournals = journals.payload.records.filter((record) => record.sourceType === "sale" && record.sourceId === invoiceId);
+  assert.equal(sourceJournals.filter((record) => record.adjustmentType === "reversal").length, 1);
+  assert.equal(sourceJournals.filter((record) => !record.adjustmentType).length, 1);
 });
 
 test("تمنع مسارات CRUD العامة تجاوز البيع الذري وفواتيره", async () => {

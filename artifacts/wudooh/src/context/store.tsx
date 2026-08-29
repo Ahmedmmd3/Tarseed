@@ -33,6 +33,8 @@ export type Journal = {
   adjustmentStatus?: 'reversed' | 'corrected';
   adjustedByJournalIds?: string[];
   adjustmentReason?: string;
+  sourceType?: 'sale' | 'purchase' | 'expense';
+  sourceId?: string;
 };
 
 export type JournalAdjustmentInput = {
@@ -851,6 +853,7 @@ function normalizeJournal(journal: Journal): Journal {
   return {
     ...journal,
     id: String(journal.id),
+    ...(journal.sourceId == null ? {} : { sourceId: String(journal.sourceId) }),
     ...(journal.adjustsJournalId == null ? {} : { adjustsJournalId: String(journal.adjustsJournalId) }),
     ...(Array.isArray(journal.adjustedByJournalIds) ? { adjustedByJournalIds: journal.adjustedByJournalIds.map(String) } : {}),
     lines: journal.lines.map((line) => ({ ...line, id: String(line.id), accountId: String(line.accountId), debit: Number(line.debit), credit: Number(line.credit) })),

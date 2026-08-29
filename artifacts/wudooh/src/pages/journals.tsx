@@ -450,7 +450,7 @@ export default function Journals() {
                     اعتماد وترحيل
                   </Button>
                 )}
-                {journal.status === 'posted' && journal.adjustmentType !== 'reversal' && !journalAdjustmentStatus(journals, journal.id) && (
+                {journal.status === 'posted' && !journal.sourceType && journal.adjustmentType !== 'reversal' && !journalAdjustmentStatus(journals, journal.id) && (
                   <>
                     <Button type="button" size="sm" variant="outline" onClick={() => openAdjustment(journal, 'reverse')} disabled={connectionMode !== 'remote'} data-testid={`button-reverse-${journal.id}`}>
                       <RotateCcw className="ml-1.5 h-4 w-4" />

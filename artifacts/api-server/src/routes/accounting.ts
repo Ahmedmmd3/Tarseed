@@ -19,6 +19,15 @@ class AccountingMutationError extends Error {
   }
 }
 
+type SourceTable = "invoices" | "purchaseOrders" | "expenses";
+type SourceAction = "cancel" | "correct";
+
+class SourceCorrectionError extends Error {
+  constructor(readonly status: number, message: string, readonly code?: string) {
+    super(message);
+  }
+}
+
 function lockedAccountingMutationError(response: Response): AccountingMutationError {
   const rejection = lockedWriteRejection(response);
   return new AccountingMutationError(rejection.status, rejection.error, rejection.code);
@@ -137,6 +146,137 @@ function normalizeLines(value: unknown): Array<{ accountId: string; debit: numbe
     }));
 }
 
+function sourceTable(value: unknown): SourceTable | null {
+  return value === "invoices" || value === "purchaseOrders" || value === "expenses" ? value : null;
+}
+
+function sourceTypeFor(tableName: SourceTable): "sale" | "purchase" | "expense" {
+  return tableName === "invoices" ? "sale" : tableName === "purchaseOrders" ? "purchase" : "expense";
+}
+
+function sourceDate(data: Record<string, unknown>, fallback?: string): string {
+  return asDate(data.issueDate ?? data.date ?? data.createdAt) || fallback || new Date().toISOString().slice(0, 10);
+}
+
+function sourceAmount(data: Record<string, unknown>): number {
+  return asNumber(data.total ?? data.amount ?? data.totalAmount);
+}
+
+function sourceLabel(tableName: SourceTable): string {
+  return tableName === "invoices" ? "فاتورة بيع" : tableName === "purchaseOrders" ? "أمر شراء" : "مصروف";
+}
+
+function sourceCorrectionAccess(auth: AuthContext, tableName: SourceTable): boolean {
+  if (auth.roleId === "owner") return true;
+  if (tableName === "invoices") return auth.permissions.sales === true || auth.permissions.accounting === true;
+  if (tableName === "purchaseOrders") return auth.permissions.inventory === true || auth.permissions.accounting === true;
+  return auth.permissions.accounting === true;
+}
+
+function validSourceCorrectionDate(value: unknown): value is string {
+  return typeof value === "string" && isValidIsoDate(value);
+}
+
+function sourceReplacement(
+  tableName: SourceTable,
+  current: Record<string, unknown>,
+  raw: unknown,
+): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new SourceCorrectionError(400, "بيانات المستند المصحح غير صحيحة.");
+  }
+  const allowed = tableName === "invoices"
+    ? ["number", "issueDate", "warehouseId", "customerId", "customerName", "customerVatNumber", "customerAddress", "paymentMethod", "dueDate", "items", "subtotal", "tax", "total", "paid"]
+    : tableName === "purchaseOrders"
+      ? ["orderNumber", "supplierId", "supplierName", "date", "warehouseId", "status", "items", "subtotal", "tax", "total", "paid", "paymentMethod", "dueDate", "received"]
+      : ["description", "amount", "date", "category", "vendor", "paymentMethod", "paid"];
+  const patch = raw as Record<string, unknown>;
+  const merged = { ...current };
+  for (const key of allowed) {
+    if (Object.hasOwn(patch, key)) merged[key] = patch[key];
+  }
+  if (tableName === "invoices") {
+    const issueDate = sourceDate(merged);
+    if (!validSourceCorrectionDate(issueDate)) throw new SourceCorrectionError(400, "تاريخ الفاتورة المصححة غير صحيح.");
+    const total = sourceAmount(merged);
+    if (total <= 0) throw new SourceCorrectionError(400, "إجمالي الفاتورة المصححة يجب أن يكون موجباً.");
+    if (merged.items != null && !Array.isArray(merged.items)) throw new SourceCorrectionError(400, "أصناف الفاتورة المصححة غير صحيحة.");
+  } else if (tableName === "purchaseOrders") {
+    const date = sourceDate(merged);
+    if (!validSourceCorrectionDate(date)) throw new SourceCorrectionError(400, "تاريخ أمر الشراء المصحح غير صحيح.");
+    if (sourceAmount(merged) <= 0) throw new SourceCorrectionError(400, "إجمالي أمر الشراء المصحح يجب أن يكون موجباً.");
+    if (merged.items != null && !Array.isArray(merged.items)) throw new SourceCorrectionError(400, "أصناف أمر الشراء المصحح غير صحيحة.");
+  } else {
+    if (!validSourceCorrectionDate(sourceDate(merged))) throw new SourceCorrectionError(400, "تاريخ المصروف المصحح غير صحيح.");
+    if (sourceAmount(merged) <= 0) throw new SourceCorrectionError(400, "مبلغ المصروف المصحح يجب أن يكون موجباً.");
+  }
+  return merged;
+}
+
+function movementMap(tableName: SourceTable, data: Record<string, unknown>): Map<string, { productId: number; warehouseId: number; quantity: number }> {
+  const result = new Map<string, { productId: number; warehouseId: number; quantity: number }>();
+  const appliesToStock = tableName === "invoices"
+    || (tableName === "purchaseOrders" && (data.status === "completed" || data.received === true));
+  if (!appliesToStock || !Array.isArray(data.items)) return result;
+  const fallbackWarehouse = Number(data.warehouseId);
+  for (const rawItem of data.items) {
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) continue;
+    const item = rawItem as Record<string, unknown>;
+    const productId = Number(item.productId);
+    const warehouseId = Number(item.warehouseId ?? fallbackWarehouse);
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(warehouseId) || warehouseId <= 0 || !Number.isFinite(quantity) || quantity <= 0) continue;
+    const key = `${productId}:${warehouseId}`;
+    const existing = result.get(key);
+    result.set(key, { productId, warehouseId, quantity: (existing?.quantity ?? 0) + quantity });
+  }
+  return result;
+}
+
+function journalLinesForSource(
+  tableName: SourceTable,
+  data: Record<string, unknown>,
+  accounts: AnyRecord[],
+): Array<{ accountId: string; debit: number; credit: number }> {
+  const type = sourceTypeFor(tableName);
+  const debitCode = type === "sale"
+    ? (data.paymentMethod === "credit" || data.customerId ? "1200" : "1000")
+    : type === "purchase" ? "5000" : "5100";
+  const creditCode = type === "sale" ? "4000" : type === "purchase" ? "2000" : "1000";
+  const debitAccount = accounts.find((account) => String(account.code) === debitCode && account.status !== "inactive");
+  const creditAccount = accounts.find((account) => String(account.code) === creditCode && account.status !== "inactive");
+  const amount = sourceAmount(data);
+  if (amount <= 0 || !debitAccount || !creditAccount) {
+    throw new SourceCorrectionError(409, "يلزم مبلغ موجب وحسابات افتراضية نشطة مطابقة في دليل الحسابات.");
+  }
+  return [
+    { accountId: String(debitAccount.id), debit: amount, credit: 0 },
+    { accountId: String(creditAccount.id), debit: 0, credit: amount },
+  ];
+}
+
+function sourceHasCredit(data: Record<string, unknown>, tableName: SourceTable): boolean {
+  if (tableName === "invoices") return data.paymentMethod === "credit";
+  if (tableName === "purchaseOrders") return data.paymentMethod === "credit" || asNumber(data.paid) < sourceAmount(data);
+  return false;
+}
+
+function sourceParty(data: Record<string, unknown>, tableName: SourceTable): string {
+  return String(tableName === "invoices"
+    ? data.customerName ?? "عميل غير محدد"
+    : tableName === "purchaseOrders"
+      ? data.supplierName ?? "مورد غير محدد"
+      : data.vendor ?? "غير محدد");
+}
+
+function sourceReference(data: Record<string, unknown>, tableName: SourceTable, id: number): string {
+  return String(tableName === "invoices"
+    ? data.number ?? data.invoiceNumber ?? `#${id}`
+    : tableName === "purchaseOrders"
+      ? data.orderNumber ?? data.number ?? `#${id}`
+      : data.reference ?? data.description ?? `#${id}`);
+}
+
 function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: string, to: string) {
   const balances = new Map<string, number>();
   for (const account of accounts) balances.set(String(account.id), asNumber(account.openingBalance ?? account.balance));
@@ -211,6 +351,7 @@ function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: str
 function derivePartyBalances(records: AnyRecord[], type: "receivable" | "payable", to: string) {
   return records
     .filter((record) => {
+      if (record.status === "cancelled" || record.status === "canceled" || record.status === "voided") return false;
       const transactionDate = asDate(record.date ?? record.issueDate ?? record.createdAt);
       return (record.type === type || (type === "receivable" && record.customerId) || (type === "payable" && record.supplierId))
         && (!transactionDate || transactionDate <= to);
@@ -434,6 +575,440 @@ router.post("/accounting/journals/:id/:action", requireAuth, requireSubscription
   } catch (error) {
     if (error instanceof JournalAdjustmentError || error instanceof AccountingMutationError) {
       response.status(error.status).json({ error: error.message, ...("code" in error && error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+});
+
+router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const tableName = sourceTable(request.params.table);
+  const sourceId = Number(request.params.id);
+  const action = request.params.action as SourceAction;
+  const operationId = request.get("Idempotency-Key")?.trim() ?? "";
+  const body = request.body;
+  if (!tableName || !Number.isInteger(sourceId) || sourceId <= 0 || (action !== "cancel" && action !== "correct")) {
+    response.status(400).json({ error: "طلب إلغاء أو تصحيح المستند غير صالح." });
+    return;
+  }
+  if (!operationId || operationId.length > 180) {
+    response.status(400).json({ error: "معرّف عملية الإلغاء أو التصحيح مطلوب." });
+    return;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    response.status(400).json({ error: "بيانات إلغاء أو تصحيح المستند غير صحيحة." });
+    return;
+  }
+  const requestBody = body as Record<string, unknown>;
+  const requestFingerprint = createHash("sha256")
+    .update(JSON.stringify({ tableName, sourceId, action, body: requestBody }))
+    .digest("hex");
+  const reason = typeof requestBody.reason === "string" ? requestBody.reason.trim() : "";
+  if (reason.length < 3 || reason.length > 1000) {
+    response.status(400).json({ error: "أدخل سبباً واضحاً من 3 إلى 1000 حرف." });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !sourceCorrectionAccess(currentAuth, tableName)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw new SourceCorrectionError(403, "ليس لديك صلاحية لتصحيح هذا المستند.");
+      }
+
+      const [source] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, sourceId),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, tableName),
+      )).for("update");
+      if (!source || !isLocationAllowed(currentAuth, tableName, source.data, source.id)) {
+        throw new SourceCorrectionError(404, "المستند غير متاح ضمن نطاقك.");
+      }
+
+      const [replayedEvent] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "sourceCorrectionEvents"),
+        eq(erpRecordsTable.clientOperationId, operationId),
+      )).limit(1);
+      if (replayedEvent) {
+        if (
+          replayedEvent.data.requestFingerprint !== requestFingerprint
+          || replayedEvent.data.sourceTable !== tableName
+          || Number(replayedEvent.data.sourceId) !== sourceId
+        ) {
+          throw new SourceCorrectionError(409, "معرّف العملية مستخدم لطلب مختلف.");
+        }
+        const createdJournalIds = Array.isArray(replayedEvent.data.createdJournalIds)
+          ? replayedEvent.data.createdJournalIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+          : [];
+        const replayedJournals = createdJournalIds.length
+          ? await tx.select().from(erpRecordsTable).where(and(
+            eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+            eq(erpRecordsTable.tableName, "journalEntries"),
+            inArray(erpRecordsTable.id, createdJournalIds),
+          ))
+          : [];
+        const reversal = replayedJournals.find((journal) => journal.data.adjustmentType === "reversal");
+        const correction = replayedJournals.find((journal) => journal.data.adjustmentType === "correction");
+        if (!reversal || (action === "correct" && !correction)) {
+          throw new SourceCorrectionError(409, "عملية التصحيح السابقة غير مكتملة وتحتاج مراجعة.");
+        }
+        return {
+          replayed: true,
+          source: { ...source.data, id: source.id },
+          reversal: { ...reversal.data, id: reversal.id },
+          correction: correction ? { ...correction.data, id: correction.id } : undefined,
+        };
+      }
+      if (source.data.status === "cancelled" || source.data.status === "canceled") {
+        throw new SourceCorrectionError(409, "لا يمكن تعديل مستند ملغى.");
+      }
+      if (source.data.status === "corrected") {
+        throw new SourceCorrectionError(409, "سبق تصحيح هذا المستند.");
+      }
+
+      const replacementInput = requestBody.replacement ?? requestBody.document ?? requestBody.changes;
+      const replacement = action === "correct"
+        ? sourceReplacement(tableName, source.data, replacementInput)
+        : source.data;
+      const effectiveDate = typeof requestBody.effectiveDate === "string"
+        ? requestBody.effectiveDate
+        : action === "correct"
+          ? sourceDate(replacement)
+          : sourceDate(source.data);
+      if (!validSourceCorrectionDate(effectiveDate)) {
+        throw new SourceCorrectionError(400, "تاريخ العملية غير صحيح.");
+      }
+      const closures = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      if (closures.some((closure) => closure.status === "closed" && (
+        effectiveDate >= String(closure.from ?? "") && effectiveDate <= String(closure.to ?? "")
+      ))) {
+        throw new SourceCorrectionError(409, "الفترة المالية المحددة مقفلة. اختر تاريخاً ضمن فترة مفتوحة.");
+      }
+      if (action === "correct" && closures.some((closure) => closure.status === "closed" && (
+        sourceDate(source.data) >= String(closure.from ?? "") && sourceDate(source.data) <= String(closure.to ?? "")
+      ))) {
+        throw new SourceCorrectionError(409, "لا يمكن تصحيح مستند يعود إلى فترة مالية مقفلة.");
+      }
+
+      const beforeData = { ...source.data };
+      const effectData = action === "correct" ? { ...replacement } : {};
+      const afterData = action === "cancel"
+        ? { ...source.data, status: "cancelled", cancelledAt: new Date().toISOString(), cancellationReason: reason }
+        : {
+          ...replacement,
+          status: "corrected",
+          correctedAt: new Date().toISOString(),
+          correctionReason: reason,
+          correctionOfId: sourceId,
+        };
+
+      const oldMovements = movementMap(tableName, source.data);
+      const newMovements = movementMap(tableName, effectData);
+      const movementKeys = [...new Set([...oldMovements.keys(), ...newMovements.keys()])].sort();
+      const productIds = [...new Set(movementKeys.map((key) => Number(key.split(":")[0])))].sort((a, b) => a - b);
+      const warehouseIds = [...new Set(movementKeys.map((key) => Number(key.split(":")[1])))].sort((a, b) => a - b);
+      for (const warehouseId of warehouseIds) {
+        const [warehouse] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, warehouseId),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "warehouses"),
+        )).for("update");
+        if (!warehouse || warehouse.data.status === "inactive") {
+          throw new SourceCorrectionError(409, "لا يمكن تنفيذ التصحيح على موقع تشغيل غير موجود أو غير نشط.");
+        }
+      }
+      const productRows = new Map<number, AnyRecord>();
+      for (const productId of productIds) {
+        const [product] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, productId),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "products"),
+        )).for("update");
+        if (!product) throw new SourceCorrectionError(409, "أحد المنتجات المرتبطة بالمستند غير موجود.");
+        productRows.set(productId, { ...product.data, id: product.id });
+      }
+      for (const key of movementKeys) {
+        const oldMovement = oldMovements.get(key);
+        const newMovement = newMovements.get(key);
+        const delta = tableName === "purchaseOrders"
+          ? (newMovement?.quantity ?? 0) - (oldMovement?.quantity ?? 0)
+          : (oldMovement?.quantity ?? 0) - (newMovement?.quantity ?? 0);
+        if (Math.abs(delta) < 0.000001) continue;
+        const productId = Number(key.split(":")[0]);
+        const warehouseId = Number(key.split(":")[1]);
+        const [balance] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "inventoryBalances"),
+          sql`${erpRecordsTable.data}->>'productId' = ${String(productId)}`,
+          sql`${erpRecordsTable.data}->>'warehouseId' = ${String(warehouseId)}`,
+        )).for("update");
+        const currentQuantity = balance ? asNumber(balance.data.quantity) : 0;
+        const nextQuantity = currentQuantity + delta;
+        if (nextQuantity < 0) {
+          throw new SourceCorrectionError(409, "لا يمكن تصحيح المستند لأن الرصيد الحالي لا يكفي لعكس أثره.");
+        }
+        if (balance) {
+          await tx.update(erpRecordsTable).set({
+            data: { ...balance.data, quantity: nextQuantity },
+            updatedAt: new Date(),
+          }).where(eq(erpRecordsTable.id, balance.id));
+        } else {
+          await tx.insert(erpRecordsTable).values({
+            organizationId: currentAuth.organizationId,
+            tableName: "inventoryBalances",
+            data: { productId, warehouseId, quantity: nextQuantity },
+          });
+        }
+      }
+      for (const [productId, product] of productRows) {
+        const balances = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "inventoryBalances"),
+          sql`${erpRecordsTable.data}->>'productId' = ${String(productId)}`,
+        )).for("update");
+        const stock = balances.reduce((sum, balance) => sum + asNumber(balance.data.quantity), 0);
+        const [currentProduct] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, product.id),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "products"),
+        )).for("update");
+        if (currentProduct) {
+          await tx.update(erpRecordsTable).set({
+            data: { ...currentProduct.data, stock },
+            updatedAt: new Date(),
+          }).where(eq(erpRecordsTable.id, currentProduct.id));
+        }
+      }
+
+      if (tableName === "invoices") {
+        const sales = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "sales"),
+          sql`${erpRecordsTable.data}->>'invoiceId' = ${String(sourceId)}`,
+        )).for("update");
+        if (action === "cancel" || Object.hasOwn(requestBody.replacement && typeof requestBody.replacement === "object" ? requestBody.replacement : {}, "items")) {
+          for (const sale of sales) {
+            await tx.update(erpRecordsTable).set({
+              data: { ...sale.data, voidedAt: new Date().toISOString(), voidReason: reason, sourceCorrectionOperationId: operationId },
+              updatedAt: new Date(),
+            }).where(eq(erpRecordsTable.id, sale.id));
+          }
+          if (action === "correct" && Array.isArray(effectData.items)) {
+            for (const rawItem of effectData.items) {
+              if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) continue;
+              const item = rawItem as Record<string, unknown>;
+              const productId = Number(item.productId);
+              const quantity = Number(item.quantity);
+              if (!Number.isInteger(productId) || productId <= 0 || !Number.isFinite(quantity) || quantity <= 0) continue;
+              await tx.insert(erpRecordsTable).values({
+                organizationId: currentAuth.organizationId,
+                tableName: "sales",
+                data: {
+                  invoiceId: sourceId,
+                  productId,
+                  warehouseId: Number(item.warehouseId ?? effectData.warehouseId),
+                  quantity,
+                  unitPrice: asNumber(item.unitPrice),
+                  total: asNumber(item.total),
+                  issueDate: sourceDate(effectData),
+                  correctionOfInvoiceId: sourceId,
+                  sourceCorrectionOperationId: operationId,
+                  createdAt: new Date().toISOString(),
+                },
+              });
+            }
+          }
+        }
+      }
+
+      const receivableKey = tableName === "invoices" ? "invoiceId" : tableName === "purchaseOrders" ? "purchaseOrderId" : null;
+      const receivables = receivableKey
+        ? await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "receivables"),
+          sql`${erpRecordsTable.data}->>'${sql.raw(receivableKey)}' = ${String(sourceId)}`,
+        )).for("update")
+        : [];
+      const replacementAmount = sourceAmount(effectData);
+      const replacementPaid = Math.min(replacementAmount, Math.max(0, asNumber(effectData.paid)));
+      if (action === "correct" && receivables.some((item) => asNumber(item.data.paid) > replacementAmount)) {
+        throw new SourceCorrectionError(409, "لا يمكن تخفيض المستند إلى أقل من المبلغ المسدد.");
+      }
+      for (const receivable of receivables) {
+        const nextData = action === "cancel"
+          ? { ...receivable.data, status: "cancelled", cancelledAt: new Date().toISOString(), cancellationReason: reason }
+          : sourceHasCredit(effectData, tableName)
+            ? {
+              ...receivable.data,
+              party: sourceParty(effectData, tableName),
+              customerName: tableName === "invoices" ? sourceParty(effectData, tableName) : receivable.data.customerName,
+              supplierName: tableName === "purchaseOrders" ? sourceParty(effectData, tableName) : receivable.data.supplierName,
+              reference: sourceReference(effectData, tableName, sourceId),
+              issueDate: sourceDate(effectData),
+              dueDate: effectData.dueDate ?? receivable.data.dueDate,
+              amount: replacementAmount,
+              paid: replacementPaid,
+              status: replacementPaid >= replacementAmount ? "paid" : replacementPaid > 0 ? "partial" : "unpaid",
+            }
+            : { ...receivable.data, status: "cancelled", cancelledAt: new Date().toISOString(), cancellationReason: reason };
+        await tx.update(erpRecordsTable).set({ data: nextData, updatedAt: new Date() }).where(eq(erpRecordsTable.id, receivable.id));
+      }
+      if (action === "correct" && receivableKey && sourceHasCredit(effectData, tableName) && receivables.length === 0) {
+        await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "receivables",
+          data: {
+            [receivableKey]: sourceId,
+            party: sourceParty(effectData, tableName),
+            ...(tableName === "invoices" ? { customerName: sourceParty(effectData, tableName) } : {}),
+            ...(tableName === "purchaseOrders" ? { supplierName: sourceParty(effectData, tableName), type: "payable" } : {}),
+            type: tableName === "purchaseOrders" ? "payable" : "receivable",
+            reference: sourceReference(effectData, tableName, sourceId),
+            issueDate: sourceDate(effectData),
+            dueDate: effectData.dueDate ?? sourceDate(effectData),
+            amount: replacementAmount,
+            paid: replacementPaid,
+            status: replacementPaid >= replacementAmount ? "paid" : replacementPaid > 0 ? "partial" : "unpaid",
+          },
+        });
+      }
+
+      const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
+      const sourceType = sourceTypeFor(tableName);
+      const baseJournals = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "journalEntries"),
+        sql`${erpRecordsTable.data}->>'sourceType' = ${sourceType}`,
+        sql`${erpRecordsTable.data}->>'sourceId' = ${String(sourceId)}`,
+        sql`coalesce(${erpRecordsTable.data}->>'adjustmentType', '') = ''`,
+      )).for("update");
+      let originalJournal = baseJournals[0];
+      if (!originalJournal) {
+        const [createdSourceJournal] = await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "journalEntries",
+          clientOperationId: `AUTO-${sourceType.toUpperCase()}-${sourceId}`,
+          data: {
+            number: `AUTO-${sourceType.toUpperCase()}-${sourceId}`,
+            date: sourceDate(source.data),
+            description: `${sourceLabel(tableName)} ${sourceReference(source.data, tableName, sourceId)}`,
+            status: "posted",
+            sourceType,
+            sourceId,
+            ...(source.data.warehouseId != null ? { warehouseId: source.data.warehouseId } : {}),
+            lines: journalLinesForSource(tableName, source.data, accounts),
+          },
+        }).onConflictDoNothing({
+          target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+        }).returning();
+        originalJournal = createdSourceJournal;
+      }
+      if (!originalJournal || originalJournal.data.status !== "posted") {
+        throw new SourceCorrectionError(409, "لا يوجد قيد مرحّل صالح مرتبط بالمستند.");
+      }
+      const originalLines = normalizeLines(originalJournal.data.lines);
+      const reversalData = {
+        number: `REV-${String(originalJournal.data.number ?? `#${originalJournal.id}`)}`,
+        date: effectiveDate,
+        description: `عكس ${sourceLabel(tableName)} ${sourceReference(source.data, tableName, sourceId)}: ${reason}`,
+        status: "posted",
+        sourceType,
+        sourceId,
+        sourceDocumentTable: tableName,
+        sourceDocumentId: sourceId,
+        adjustmentType: "reversal",
+        adjustsJournalId: originalJournal.id,
+        adjustmentReason: reason,
+        sourceCorrectionOperationId: operationId,
+        lines: originalLines.map((line, index) => ({ ...line, id: `source-reversal-${index + 1}`, debit: line.credit, credit: line.debit })),
+      };
+      const [createdReversal] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "journalEntries",
+        clientOperationId: `${operationId}:reversal`,
+        data: reversalData,
+      }).returning();
+      let createdCorrection;
+      if (action === "correct") {
+        const correctedLines = journalLinesForSource(tableName, effectData, accounts);
+        [createdCorrection] = await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "journalEntries",
+          clientOperationId: `${operationId}:correction`,
+          data: {
+            number: `COR-${String(originalJournal.data.number ?? `#${originalJournal.id}`)}`,
+            date: effectiveDate,
+            description: `${sourceLabel(tableName)} مصحح ${sourceReference(effectData, tableName, sourceId)}: ${reason}`,
+            status: "posted",
+            sourceType,
+            sourceId,
+            sourceDocumentTable: tableName,
+            sourceDocumentId: sourceId,
+            adjustmentType: "correction",
+            adjustsJournalId: originalJournal.id,
+            adjustmentReason: reason,
+            sourceCorrectionOperationId: operationId,
+            lines: correctedLines.map((line, index) => ({ ...line, id: `source-correction-${index + 1}` })),
+          },
+        }).returning();
+      }
+      const createdJournalIds = [createdReversal.id, ...(createdCorrection ? [createdCorrection.id] : [])];
+      const auditSnapshot = JSON.stringify({
+        sourceTable: tableName,
+        sourceId,
+        action,
+        reason,
+        before: beforeData,
+        after: afterData,
+        originalJournalId: originalJournal.id,
+        createdJournalIds,
+        inventory: {
+          before: [...oldMovements.values()],
+          after: [...newMovements.values()],
+        },
+        originalRemainsUnchanged: true,
+      });
+      const [event] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "sourceCorrectionEvents",
+        clientOperationId: operationId,
+        data: {
+          sourceTable: tableName,
+          sourceId,
+          action,
+          reason,
+          requestFingerprint,
+          createdJournalIds,
+          originalJournalId: originalJournal.id,
+          auditSnapshot: JSON.parse(auditSnapshot),
+          actorId: currentAuth.id,
+          occurredAt: new Date().toISOString(),
+        },
+      }).returning();
+      await tx.update(erpRecordsTable).set({ data: afterData, updatedAt: new Date() }).where(eq(erpRecordsTable.id, source.id));
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: currentAuth.organizationId,
+        actorId: currentAuth.id,
+        actorName: currentAuth.name || currentAuth.email,
+        action: action === "cancel" ? `${tableName}_cancelled` : `${tableName}_corrected`,
+        entity: String(sourceId),
+        details: auditSnapshot,
+      });
+      return {
+        replayed: false,
+        source: { ...afterData, id: source.id },
+        reversal: { ...createdReversal.data, id: createdReversal.id },
+        correction: createdCorrection ? { ...createdCorrection.data, id: createdCorrection.id } : undefined,
+        eventId: event.id,
+      };
+    });
+    response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (error instanceof SourceCorrectionError || error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
     }
     throw error;

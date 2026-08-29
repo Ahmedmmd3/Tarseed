@@ -5,7 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles } from 'lucide-react';
+import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles, RotateCcw, FilePenLine } from 'lucide-react';
+import { SourceDocumentAdjustmentDialog } from '@/components/accounting/source-document-adjustment-dialog';
 
 export type FieldDef = {
   key: string;
@@ -193,6 +194,8 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
   const isExpenseTable = table === 'expenses';
+  const isAccountingSource = table === 'invoices' || table === 'purchaseOrders' || table === 'expenses';
+  const [sourceAdjustment, setSourceAdjustment] = useState<{ item: Record<string, unknown>; action: 'cancel' | 'correct' } | null>(null);
 
   const handleOpen = (item?: any) => {
     if (item) {
@@ -245,6 +248,17 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
 
   return (
     <div className="flex flex-col gap-4">
+      {isAccountingSource && (
+        <SourceDocumentAdjustmentDialog
+          open={Boolean(sourceAdjustment)}
+          action={sourceAdjustment?.action ?? 'cancel'}
+          table={table as 'invoices' | 'purchaseOrders' | 'expenses'}
+          item={sourceAdjustment?.item ?? null}
+          fields={fields}
+          onOpenChange={(nextOpen) => { if (!nextOpen) setSourceAdjustment(null); }}
+          onCompleted={load}
+        />
+      )}
       <div className="flex flex-col items-stretch justify-between gap-3 sm:flex-row sm:items-center">
         <h2 className="text-xl font-bold text-slate-900">{title}</h2>
         {!readOnly && (
@@ -336,7 +350,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
               {fields.map((f) => (
                 <TableHead key={f.key}>{f.label}</TableHead>
               ))}
-              {!readOnly && <TableHead className="w-[100px]">الإجراءات</TableHead>}
+              {(!readOnly || isAccountingSource) && <TableHead className="w-[180px]">الإجراءات</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -349,15 +363,31 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
                       : item[f.key]}
                   </TableCell>
                 ))}
-                {!readOnly && (
+                {(!readOnly || isAccountingSource) && (
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="icon" onClick={() => handleOpen(item)} aria-label="تعديل">
-                        <Edit className="h-4 w-4 text-slate-500" />
-                      </Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)} aria-label="حذف">
-                        <Trash2 className="h-4 w-4 text-rose-500" />
-                      </Button>
+                    <div className="flex flex-wrap items-center gap-1">
+                      {!readOnly && !isAccountingSource && (
+                        <>
+                          <Button variant="ghost" size="icon" onClick={() => handleOpen(item)} aria-label="تعديل">
+                            <Edit className="h-4 w-4 text-slate-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete(item.id)} aria-label="حذف">
+                            <Trash2 className="h-4 w-4 text-rose-500" />
+                          </Button>
+                        </>
+                      )}
+                      {isAccountingSource && item.status !== 'cancelled' && item.status !== 'canceled' && item.status !== 'corrected' && (
+                        <>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setSourceAdjustment({ item, action: 'correct' })} aria-label="تصحيح من المصدر" data-testid={`button-correct-source-${table}-${item.id}`}>
+                            <FilePenLine className="ml-1 h-4 w-4 text-blue-600" />
+                            تصحيح
+                          </Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setSourceAdjustment({ item, action: 'cancel' })} aria-label="إلغاء من المصدر" data-testid={`button-cancel-source-${table}-${item.id}`}>
+                            <RotateCcw className="ml-1 h-4 w-4 text-rose-600" />
+                            إلغاء
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </TableCell>
                 )}
@@ -365,7 +395,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
             ))}
             {data.length === 0 && !loading && (
               <TableRow>
-                <TableCell colSpan={fields.length + (readOnly ? 0 : 1)} className="h-24 text-center text-slate-500">
+                <TableCell colSpan={fields.length + (!readOnly || isAccountingSource ? 1 : 0)} className="h-24 text-center text-slate-500">
                   لا توجد بيانات
                 </TableCell>
               </TableRow>
