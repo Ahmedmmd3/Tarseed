@@ -18,14 +18,18 @@ const TABLE_MODULES: Record<string, string | string[]> = {
 };
 
 const DEFAULT_ACCOUNT_DEFINITIONS = [
-  { code: "1000", name: "الصندوق", type: "asset", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "1100", name: "البنك", type: "asset", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "1200", name: "العملاء", type: "asset", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "2000", name: "الموردين", type: "liability", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "3000", name: "رأس المال", type: "equity", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "4000", name: "المبيعات", type: "revenue", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "5000", name: "المشتريات", type: "expense", parent: null, openingBalance: 0, balance: 0, status: "active" },
-  { code: "5100", name: "مصروفات الرواتب", type: "expense", parent: null, openingBalance: 0, balance: 0, status: "active" },
+  { code: "1000", name: "الصندوق", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  { code: "1100", name: "البنك", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  { code: "1200", name: "العملاء", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  { code: "1300", name: "المخزون", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  { code: "1400", name: "ضريبة مدخلات", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  { code: "2000", name: "الموردين", type: "liability", parent: null, openingBalance: 0, status: "active" },
+  { code: "2100", name: "ضريبة مخرجات", type: "liability", parent: null, openingBalance: 0, status: "active" },
+  { code: "3000", name: "رأس المال", type: "equity", parent: null, openingBalance: 0, status: "active" },
+  { code: "4000", name: "المبيعات", type: "revenue", parent: null, openingBalance: 0, status: "active" },
+  { code: "5000", name: "المشتريات", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5100", name: "مصروفات الرواتب", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "6000", name: "تكلفة المبيعات", type: "expense", parent: null, openingBalance: 0, status: "active" },
 ] as const;
 
 function requireTableAccess(request: Request, response: Response): { auth: AuthContext; tableName: string } | null {

@@ -10,6 +10,7 @@ import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type Jo
 const router: IRouter = Router();
 
 type AnyRecord = Record<string, unknown> & { id: number };
+type ErpRecord = typeof erpRecordsTable.$inferSelect;
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
 
@@ -233,26 +234,67 @@ function movementMap(tableName: SourceTable, data: Record<string, unknown>): Map
   return result;
 }
 
+async function consumeCorrectionFifo(
+  tx: DatabaseTransaction,
+  organizationId: number,
+  productId: number,
+  warehouseId: number,
+  quantity: number,
+): Promise<Array<Record<string, unknown>>> {
+  const layers = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "inventoryLayers"),
+    sql`${erpRecordsTable.data}->>'productId' = ${String(productId)}`,
+    sql`${erpRecordsTable.data}->>'warehouseId' = ${String(warehouseId)}`,
+  )).orderBy(erpRecordsTable.id).for("update");
+  let needed = quantity;
+  const allocations: Array<Record<string, unknown>> = [];
+  for (const layer of layers) {
+    const available = asNumber(layer.data.remainingQuantity);
+    if (available <= 0) continue;
+    const used = Math.min(needed, available);
+    const unitCostExVat = asNumber(layer.data.unitCostExVat);
+    if (unitCostExVat < 0) throw new SourceCorrectionError(409, "تكلفة إحدى طبقات FIFO غير صالحة.");
+    await tx.update(erpRecordsTable).set({ data: { ...layer.data, remainingQuantity: available - used }, updatedAt: new Date() }).where(eq(erpRecordsTable.id, layer.id));
+    allocations.push({ layerId: layer.id, quantity: used, unitCostExVat, costAmount: Math.round(used * unitCostExVat * 100) / 100 });
+    needed -= used;
+    if (needed <= 0) break;
+  }
+  if (needed > 0.000001) throw new SourceCorrectionError(409, "طبقات FIFO لا تكفي لتصحيح الفاتورة.");
+  return allocations;
+}
+
 function journalLinesForSource(
   tableName: SourceTable,
   data: Record<string, unknown>,
   accounts: AnyRecord[],
 ): Array<{ accountId: string; debit: number; credit: number }> {
   const type = sourceTypeFor(tableName);
-  const debitCode = type === "sale"
-    ? (data.paymentMethod === "credit" || data.customerId ? "1200" : "1000")
-    : type === "purchase" ? "5000" : "5100";
-  const creditCode = type === "sale" ? "4000" : type === "purchase" ? "2000" : "1000";
-  const debitAccount = accounts.find((account) => String(account.code) === debitCode && account.status !== "inactive");
-  const creditAccount = accounts.find((account) => String(account.code) === creditCode && account.status !== "inactive");
-  const amount = sourceAmount(data);
-  if (amount <= 0 || !debitAccount || !creditAccount) {
+  const account = (code: string) => accounts.find((item) => String(item.code) === code && item.status !== "inactive");
+  const total = sourceAmount(data);
+  const net = asNumber(data.subtotal ?? total - asNumber(data.tax));
+  const tax = asNumber(data.tax);
+  const cogs = asNumber(data.cogsTotal);
+  const cashOrAr = account(data.paymentMethod === "credit" || data.customerId ? "1200" : data.paymentMethod === "card" ? "1100" : "1000");
+  if (total <= 0 || !cashOrAr) {
     throw new SourceCorrectionError(409, "يلزم مبلغ موجب وحسابات افتراضية نشطة مطابقة في دليل الحسابات.");
   }
-  return [
-    { accountId: String(debitAccount.id), debit: amount, credit: 0 },
-    { accountId: String(creditAccount.id), debit: 0, credit: amount },
-  ];
+  if (type === "sale") {
+    const sales = account("4000"); const outputVat = account("2100"); const inventory = account("1300"); const cogsAccount = account("6000");
+    if (!sales || !outputVat || !inventory || !cogsAccount) throw new SourceCorrectionError(409, "الحسابات الافتراضية للبيع غير مكتملة.");
+    return [
+      { accountId: String(cashOrAr.id), debit: total, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: net },
+      { accountId: String(outputVat.id), debit: 0, credit: tax }, { accountId: String(cogsAccount.id), debit: cogs, credit: 0 },
+      { accountId: String(inventory.id), debit: 0, credit: cogs },
+    ];
+  }
+  if (type === "purchase") {
+    const inventory = account("1300"); const inputVat = account("1400"); const settlement = account(data.paymentMethod === "credit" ? "2000" : "1000");
+    if (!inventory || !inputVat || !settlement) throw new SourceCorrectionError(409, "الحسابات الافتراضية للشراء غير مكتملة.");
+    return [{ accountId: String(inventory.id), debit: net, credit: 0 }, { accountId: String(inputVat.id), debit: tax, credit: 0 }, { accountId: String(settlement.id), debit: 0, credit: total }];
+  }
+  const expense = account("5100"); const cash = account("1000");
+  if (!expense || !cash) throw new SourceCorrectionError(409, "الحسابات الافتراضية للمصروف غير مكتملة.");
+  return [{ accountId: String(expense.id), debit: total, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: total }];
 }
 
 function sourceHasCredit(data: Record<string, unknown>, tableName: SourceTable): boolean {
@@ -665,7 +707,7 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
       if (source.data.status === "cancelled" || source.data.status === "canceled") {
         throw new SourceCorrectionError(409, "لا يمكن تعديل مستند ملغى.");
       }
-      if (source.data.status === "corrected") {
+      if (source.data.status === "corrected" && action !== "cancel") {
         throw new SourceCorrectionError(409, "سبق تصحيح هذا المستند.");
       }
 
@@ -695,8 +737,14 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
 
       const beforeData = { ...source.data };
       const effectData = action === "correct" ? { ...replacement } : {};
-      const afterData = action === "cancel"
-        ? { ...source.data, status: "cancelled", cancelledAt: new Date().toISOString(), cancellationReason: reason }
+      if (tableName === "purchaseOrders" && action === "correct" && requestBody.replacement && typeof requestBody.replacement === "object" && !Array.isArray(requestBody.replacement) && Object.hasOwn(requestBody.replacement, "items")) {
+        throw new SourceCorrectionError(409, "تصحيح كميات استلام الشراء يتطلب عكس الاستلام ثم استلاماً جديداً للحفاظ على طبقات FIFO.");
+      }
+      let afterData = action === "cancel"
+        ? {
+          ...source.data, status: "cancelled", cancelledAt: new Date().toISOString(), cancellationReason: reason,
+          ...(tableName === "invoices" ? { eInvoiceCancellationStatus: "cancellation_pending_credit_note" } : {}),
+        }
         : {
           ...replacement,
           status: "corrected",
@@ -729,6 +777,27 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
         )).for("update");
         if (!product) throw new SourceCorrectionError(409, "أحد المنتجات المرتبطة بالمستند غير موجود.");
         productRows.set(productId, { ...product.data, id: product.id });
+      }
+      // A receipt reversal may only remove stock that is still wholly present
+      // in its own FIFO layers.  Never silently pull units from newer layers.
+      if (tableName === "purchaseOrders" && action === "cancel") {
+        const receiptLayers = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "inventoryLayers"),
+          sql`${erpRecordsTable.data}->>'purchaseOrderId' = ${String(sourceId)}`,
+        )).for("update");
+        if (!receiptLayers.length) throw new SourceCorrectionError(409, "لا يمكن عكس استلام شراء قديم بلا طبقات FIFO قابلة للتتبع.");
+        for (const layer of receiptLayers) {
+          const original = asNumber(layer.data.originalQuantity);
+          const remaining = asNumber(layer.data.remainingQuantity);
+          if (original <= 0 || Math.abs(remaining - original) > 0.000001) {
+            throw new SourceCorrectionError(409, "لا يمكن عكس استلام شراء لأن بعض وحدات الدفعة استهلكت.");
+          }
+          await tx.update(erpRecordsTable).set({
+            data: { ...layer.data, remainingQuantity: 0, reversalOfPurchaseId: sourceId, sourceCorrectionOperationId: operationId, reversedAt: new Date().toISOString() },
+            updatedAt: new Date(),
+          }).where(eq(erpRecordsTable.id, layer.id));
+        }
       }
       for (const key of movementKeys) {
         const oldMovement = oldMovements.get(key);
@@ -790,29 +859,67 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
           sql`${erpRecordsTable.data}->>'invoiceId' = ${String(sourceId)}`,
         )).for("update");
         if (action === "cancel" || Object.hasOwn(requestBody.replacement && typeof requestBody.replacement === "object" ? requestBody.replacement : {}, "items")) {
-          for (const sale of sales) {
+          for (const sale of sales.filter((record) => !record.data.voidedAt)) {
+            const allocations = Array.isArray(sale.data.fifoAllocations) ? sale.data.fifoAllocations : [];
+            if (!allocations.length) throw new SourceCorrectionError(409, "لا يمكن عكس البيع لأن تخصيصات FIFO الأصلية غير متاحة.");
+            for (const rawAllocation of allocations) {
+              if (!rawAllocation || typeof rawAllocation !== "object" || Array.isArray(rawAllocation)) throw new SourceCorrectionError(409, "تخصيصات FIFO الأصلية غير صالحة.");
+              const allocation = rawAllocation as Record<string, unknown>;
+              const quantity = asNumber(allocation.quantity);
+              const unitCostExVat = asNumber(allocation.unitCostExVat);
+              if (quantity <= 0 || unitCostExVat < 0) throw new SourceCorrectionError(409, "تخصيصات FIFO الأصلية غير صالحة.");
+              await tx.insert(erpRecordsTable).values({
+                organizationId: currentAuth.organizationId,
+                tableName: "inventoryLayers",
+                data: {
+                  productId: sale.data.productId, warehouseId: sale.data.warehouseId, originalQuantity: quantity,
+                  remainingQuantity: quantity, unitCostExVat, restorationOfSaleId: sale.id,
+                  sourceCorrectionOperationId: operationId, restoredAt: new Date().toISOString(),
+                },
+              });
+            }
             await tx.update(erpRecordsTable).set({
               data: { ...sale.data, voidedAt: new Date().toISOString(), voidReason: reason, sourceCorrectionOperationId: operationId },
               updatedAt: new Date(),
             }).where(eq(erpRecordsTable.id, sale.id));
           }
           if (action === "correct" && Array.isArray(effectData.items)) {
+            const grouped = new Map<string, { productId: number; warehouseId: number; quantity: number; unitPriceExVat: number; vatRate: number }>();
             for (const rawItem of effectData.items) {
-              if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) continue;
+              if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) throw new SourceCorrectionError(400, "أحد أصناف الفاتورة المصححة غير صالح.");
               const item = rawItem as Record<string, unknown>;
               const productId = Number(item.productId);
+              const warehouseId = Number(item.warehouseId ?? effectData.warehouseId);
               const quantity = Number(item.quantity);
-              if (!Number.isInteger(productId) || productId <= 0 || !Number.isFinite(quantity) || quantity <= 0) continue;
+              const unitPriceExVat = asNumber(item.unitPriceExVat ?? item.unitPrice);
+              const vatRate = asNumber(item.vatRate ?? (Array.isArray(source.data.items) ? (source.data.items[0] as Record<string, unknown> | undefined)?.vatRate : 15) ?? 15);
+              if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(warehouseId) || warehouseId <= 0 || !Number.isFinite(quantity) || quantity <= 0 || unitPriceExVat < 0 || vatRate < 0) {
+                throw new SourceCorrectionError(400, "أحد أصناف الفاتورة المصححة غير صالح.");
+              }
+              const key = `${productId}:${warehouseId}:${unitPriceExVat}:${vatRate}`;
+              const prior = grouped.get(key);
+              grouped.set(key, { productId, warehouseId, quantity: (prior?.quantity ?? 0) + quantity, unitPriceExVat, vatRate });
+            }
+            const correctedItems: Array<Record<string, unknown>> = [];
+            for (const item of grouped.values()) {
+              const fifoAllocations = await consumeCorrectionFifo(tx, currentAuth.organizationId, item.productId, item.warehouseId, item.quantity);
+              const costAmount = Math.round(fifoAllocations.reduce((sum, allocation) => sum + asNumber(allocation.costAmount), 0) * 100) / 100;
+              const lineNet = Math.round(item.quantity * item.unitPriceExVat * 100) / 100;
+              const vatAmount = Math.round(lineNet * item.vatRate) / 100;
+              const lineGross = Math.round((lineNet + vatAmount) * 100) / 100;
+              const product = productRows.get(item.productId);
+              const snapshot = {
+                productId: item.productId, warehouseId: item.warehouseId, name: String(product?.name ?? `صنف #${item.productId}`),
+                quantity: item.quantity, unitPriceExVat: item.unitPriceExVat, vatRate: item.vatRate, vatAmount,
+                lineNet, lineGross, total: lineNet, unitCost: Math.round(costAmount / item.quantity * 100) / 100,
+                costAmount, fifoAllocations,
+              };
+              correctedItems.push(snapshot);
               await tx.insert(erpRecordsTable).values({
                 organizationId: currentAuth.organizationId,
                 tableName: "sales",
                 data: {
-                  invoiceId: sourceId,
-                  productId,
-                  warehouseId: Number(item.warehouseId ?? effectData.warehouseId),
-                  quantity,
-                  unitPrice: asNumber(item.unitPrice),
-                  total: asNumber(item.total),
+                  ...snapshot, invoiceId: sourceId,
                   issueDate: sourceDate(effectData),
                   correctionOfInvoiceId: sourceId,
                   sourceCorrectionOperationId: operationId,
@@ -820,16 +927,24 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
                 },
               });
             }
+            const subtotal = Math.round(correctedItems.reduce((sum, item) => sum + asNumber(item.lineNet), 0) * 100) / 100;
+            const tax = Math.round(correctedItems.reduce((sum, item) => sum + asNumber(item.vatAmount), 0) * 100) / 100;
+            const total = Math.round((subtotal + tax) * 100) / 100;
+            const cogsTotal = Math.round(correctedItems.reduce((sum, item) => sum + asNumber(item.costAmount), 0) * 100) / 100;
+            Object.assign(effectData, { items: correctedItems, subtotal, tax, total, cogsTotal, paid: effectData.paymentMethod === "credit" ? 0 : total });
+            afterData = { ...effectData, status: "corrected", correctedAt: new Date().toISOString(), correctionReason: reason, correctionOfId: sourceId };
           }
         }
       }
 
-      const receivableKey = tableName === "invoices" ? "invoiceId" : tableName === "purchaseOrders" ? "purchaseOrderId" : null;
+      const receivableKey = tableName === "invoices" ? "invoiceId" : tableName === "purchaseOrders" ? "purchaseId" : null;
       const receivables = receivableKey
         ? await tx.select().from(erpRecordsTable).where(and(
           eq(erpRecordsTable.organizationId, currentAuth.organizationId),
           eq(erpRecordsTable.tableName, "receivables"),
-          sql`${erpRecordsTable.data}->>'${sql.raw(receivableKey)}' = ${String(sourceId)}`,
+          tableName === "purchaseOrders"
+            ? sql`coalesce(${erpRecordsTable.data}->>'purchaseId', ${erpRecordsTable.data}->>'purchaseOrderId') = ${String(sourceId)}`
+            : sql`${erpRecordsTable.data}->>'invoiceId' = ${String(sourceId)}`,
         )).for("update")
         : [];
       const replacementAmount = sourceAmount(effectData);
@@ -885,7 +1000,34 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
         sql`${erpRecordsTable.data}->>'sourceId' = ${String(sourceId)}`,
         sql`coalesce(${erpRecordsTable.data}->>'adjustmentType', '') = ''`,
       )).for("update");
-      let originalJournal = baseJournals[0];
+      let correctedJournal: ErpRecord | undefined;
+      if (source.data.status === "corrected" && action === "cancel") {
+        const [latestCorrectionEvent] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "sourceCorrectionEvents"),
+          sql`${erpRecordsTable.data}->>'sourceTable' = ${tableName}`,
+          sql`${erpRecordsTable.data}->>'sourceId' = ${String(sourceId)}`,
+          sql`${erpRecordsTable.data}->>'action' = 'correct'`,
+        )).orderBy(sql`${erpRecordsTable.id} desc`).limit(1).for("update");
+        const correctionIds = Array.isArray(latestCorrectionEvent?.data.createdJournalIds)
+          ? latestCorrectionEvent.data.createdJournalIds.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+          : [];
+        if (!latestCorrectionEvent || !latestCorrectionEvent.clientOperationId || !correctionIds.length) {
+          throw new SourceCorrectionError(409, "تعذر تحديد آخر قيد تصحيح فعّال للمستند.");
+        }
+        const [linkedCorrection] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "journalEntries"),
+          inArray(erpRecordsTable.id, correctionIds),
+          sql`${erpRecordsTable.data}->>'sourceType' = ${sourceType}`,
+          sql`${erpRecordsTable.data}->>'sourceId' = ${String(sourceId)}`,
+          sql`${erpRecordsTable.data}->>'adjustmentType' = 'correction'`,
+          sql`${erpRecordsTable.data}->>'sourceCorrectionOperationId' = ${latestCorrectionEvent.clientOperationId}`,
+        )).limit(1).for("update");
+        if (!linkedCorrection) throw new SourceCorrectionError(409, "قيد التصحيح الفعّال المرتبط بالحدث غير متاح.");
+        correctedJournal = linkedCorrection;
+      }
+      let originalJournal = correctedJournal ?? baseJournals[0];
       if (!originalJournal) {
         const [createdSourceJournal] = await tx.insert(erpRecordsTable).values({
           organizationId: currentAuth.organizationId,
@@ -1068,9 +1210,10 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       const creditAccount = accounts.find((account) => String(account.code) === creditCode);
       const amount = asNumber(currentSource.data.total ?? currentSource.data.amount ?? currentSource.data.totalAmount);
       if (amount <= 0 || !debitAccount || !creditAccount) return "invalid" as const;
-      await tx.insert(erpRecordsTable).values({
+      const [createdJournal] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
         tableName: "journalEntries",
+        clientOperationId: `AUTO-${source.type.toUpperCase()}-${source.record.id}`,
         data: {
           number: `AUTO-${source.type.toUpperCase()}-${source.record.id}`,
           date: sourceDate,
@@ -1084,8 +1227,10 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
             { accountId: String(creditAccount.id), debit: 0, credit: amount },
           ],
         },
-      });
-      return "inserted" as const;
+      }).onConflictDoNothing({
+        target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+      }).returning();
+      return createdJournal ? "inserted" as const : "exists" as const;
     });
     if (!inserted) {
       const rejection = lockedWriteRejection(response);

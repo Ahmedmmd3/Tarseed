@@ -57,6 +57,9 @@ const actionLabels: Record<string, string> = {
   stock_transfer_cancelled: 'إلغاء تحويل مخزني',
   stock_transfer_received: 'استلام تحويل مخزني',
   stock_adjustment_recorded: 'تسجيل تسوية مخزنية',
+  purchase_inventory_received: 'استلام مشتريات مخزنية',
+  purchase_receipt_recorded: 'استلام مشتريات مخزنية',
+  automatic_accounting: 'قيود محاسبية تلقائية',
   erp_backup_restored: 'استعادة نسخة احتياطية',
   password_reset_delivery_failed: 'فشل إرسال رابط استعادة',
   password_reset_completed: 'إتمام استعادة كلمة المرور',
@@ -73,8 +76,8 @@ const actionLabels: Record<string, string> = {
 
 function categoryForAction(action: string): Exclude<LogCategory, 'all'> {
   if (action.includes('invoice') || action.includes('sale') || action.includes('pos') || action.includes('customer')) return 'sales';
-  if (action.includes('journal') || action.includes('account') || action.includes('receivable') || action.includes('financial') || action.includes('source_')) return 'accounting';
-  if (action.includes('stock') || action.includes('product') || action.includes('warehouse') || action.includes('inventory')) return 'inventory';
+  if (action.includes('journal') || action.includes('account') || action.includes('receivable') || action.includes('financial') || action.includes('source_') || action === 'automatic_accounting') return 'accounting';
+  if (action.includes('stock') || action.includes('product') || action.includes('warehouse') || action.includes('inventory') || action === 'purchase_inventory_received') return 'inventory';
   if (action.includes('member') || action.includes('password') || action === 'login') return 'team';
   return 'system';
 }

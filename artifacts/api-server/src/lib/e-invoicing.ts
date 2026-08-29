@@ -225,17 +225,23 @@ function calculateTotals(lines: InvoiceLine[], rate: number, pricesIncludeVat: b
   taxInclusiveAmount: number;
 } {
   const rateFraction = rate / 100;
-  const gross = lines.reduce((sum, line) => sum + Math.round(Number(line.total) * 100), 0) / 100;
-  if (pricesIncludeVat) {
-    const taxExclusiveAmount = Math.round((gross / (1 + rateFraction)) * 100) / 100;
-    return {
-      taxExclusiveAmount,
-      taxAmount: Math.round((gross - taxExclusiveAmount) * 100) / 100,
-      taxInclusiveAmount: gross,
-    };
-  }
-  const taxAmount = Math.round(gross * rateFraction * 100) / 100;
-  return { taxExclusiveAmount: gross, taxAmount, taxInclusiveAmount: gross + taxAmount };
+  // VAT is rounded at the invoice-line level (halala), not after aggregating
+  // the invoice. This keeps the signed ZATCA document equal to POS snapshots.
+  const totals = lines.reduce((sum, line) => {
+    const stated = Math.round(Number(line.total) * 100) / 100;
+    const net = pricesIncludeVat
+      ? Math.round((stated / (1 + rateFraction)) * 100) / 100
+      : stated;
+    const tax = pricesIncludeVat
+      ? Math.round((stated - net) * 100) / 100
+      : Math.round(net * rateFraction * 100) / 100;
+    return { net: sum.net + net, tax: sum.tax + tax, gross: sum.gross + (pricesIncludeVat ? stated : net + tax) };
+  }, { net: 0, tax: 0, gross: 0 });
+  return {
+    taxExclusiveAmount: Math.round(totals.net * 100) / 100,
+    taxAmount: Math.round(totals.tax * 100) / 100,
+    taxInclusiveAmount: Math.round(totals.gross * 100) / 100,
+  };
 }
 
 function validateInput(input: InvoiceInput): void {

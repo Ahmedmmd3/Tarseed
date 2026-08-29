@@ -9,7 +9,7 @@ function unique(value) {
   return `${value}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-async function request(path, { method = "GET", body, cookie, dataGeneration } = {}) {
+async function request(path, { method = "GET", body, cookie, dataGeneration, headers = {} } = {}) {
   const generation = dataGeneration ?? generationByCookie.get(cookie);
   const response = await fetch(`${apiBase}${path}`, {
     method,
@@ -18,6 +18,7 @@ async function request(path, { method = "GET", body, cookie, dataGeneration } = 
       ...(cookie ? { Cookie: cookie } : {}),
       ...(Number.isSafeInteger(generation) ? { "X-Wudooh-Data-Generation": String(generation) } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
+      ...headers,
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -34,18 +35,30 @@ function cookieFrom(response) {
 async function registerOwner() {
   const email = `${unique("backup-owner")}@example.test`;
   const password = "Safe-test-password-123";
-  const { response, payload } = await request("/auth/register", {
+  const phone = `05${crypto.randomUUID().replaceAll(/\D/g, "").slice(0, 8).padEnd(8, "0")}`;
+  const authHeaders = { "X-Forwarded-For": `198.51.100.${Math.floor(Math.random() * 200) + 1}` };
+  const registration = await request("/auth/register", {
     method: "POST",
+    headers: authHeaders,
     body: {
       projectName: unique("منشأة النسخ"),
       name: "مالك النسخ",
       email,
+      phone,
       password,
     },
   });
-  assert.equal(response.status, 201, JSON.stringify(payload));
-  const cookie = cookieFrom(response);
-  generationByCookie.set(cookie, payload.user.dataGeneration);
+  assert.equal(registration.response.status, 202, JSON.stringify(registration.payload));
+  const emailVerification = await request("/auth/email-verification/verify", {
+    method: "POST", headers: authHeaders, body: { email, code: process.env.EMAIL_VERIFICATION_TEST_CODE },
+  });
+  assert.equal(emailVerification.response.status, 200, JSON.stringify(emailVerification.payload));
+  const phoneVerification = await request("/auth/phone-verification/verify", {
+    method: "POST", headers: authHeaders, body: { email, code: process.env.PHONE_VERIFICATION_TEST_CODE },
+  });
+  assert.equal(phoneVerification.response.status, 200, JSON.stringify(phoneVerification.payload));
+  const cookie = cookieFrom(phoneVerification.response);
+  generationByCookie.set(cookie, phoneVerification.payload.user.dataGeneration);
   return { cookie, email, password };
 }
 
@@ -276,6 +289,7 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
 
   const renewedLogin = await request("/auth/login", {
     method: "POST",
+    headers: { "X-Forwarded-For": `198.51.100.${Math.floor(Math.random() * 200) + 1}` },
     body: { email, password },
   });
   assert.equal(renewedLogin.response.status, 200, JSON.stringify(renewedLogin.payload));

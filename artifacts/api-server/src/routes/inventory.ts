@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db, eInvoiceDocumentsTable, eInvoiceUnitsTable, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { configurationIsComplete, decryptEInvoiceSecret, generateInvoiceDocument, type SellerProfile } from "../lib/e-invoicing";
 import { savePrivateInvoiceXml } from "../lib/private-object-store";
-import { lockAndValidateDataGeneration, lockedWriteRejection, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
 
@@ -122,6 +122,105 @@ function priceOf(product: ErpRecord): number {
   return price;
 }
 
+function costOf(product: ErpRecord): number {
+  const cost = Number(product.data.costPrice ?? product.data.purchasePrice ?? product.data.cost ?? 0);
+  if (!Number.isFinite(cost) || cost < 0) throw new InventoryRouteError(`تكلفة المنتج «${String(product.data.name ?? product.id)}» غير صالحة.`, 409);
+  return cost;
+}
+
+function money(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function positiveMoney(value: unknown, label: string): number {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) throw new InventoryRouteError(`${label} غير صالح.`, 400);
+  return money(number);
+}
+
+function fingerprint(value: unknown): string {
+  const stable = (item: unknown): string => Array.isArray(item) ? `[${item.map(stable).join(",")}]`
+    : item && typeof item === "object" ? `{${Object.entries(item as RecordData).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(",")}}`
+      : JSON.stringify(item) ?? "null";
+  return createHash("sha256").update(stable(value)).digest("hex");
+}
+
+const DEFAULT_ACCOUNTS = [
+  ["1000", "الصندوق", "asset"], ["1100", "البنك", "asset"], ["1200", "العملاء", "asset"],
+  ["1300", "المخزون", "asset"], ["1400", "ضريبة مدخلات", "asset"], ["2000", "الموردين", "liability"],
+  ["2100", "ضريبة مخرجات", "liability"], ["4000", "المبيعات", "revenue"], ["6000", "تكلفة المبيعات", "expense"],
+] as const;
+
+async function accountsByCode(tx: Transaction, organizationId: number): Promise<Map<string, ErpRecord>> {
+  await tx.insert(erpRecordsTable).values(DEFAULT_ACCOUNTS.map(([code, name, type]) => ({
+    organizationId, tableName: "accounts", data: { code, name, type, parent: null, openingBalance: 0, status: "active" },
+  }))).onConflictDoNothing();
+  const rows = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "accounts"))).for("update");
+  const result = new Map(rows.map((row) => [String(row.data.code), row]));
+  if (DEFAULT_ACCOUNTS.some(([code]) => !result.get(code) || result.get(code)?.data.status === "inactive")) {
+    throw new InventoryRouteError("تعذر العثور على الحسابات الافتراضية النشطة.", 409);
+  }
+  return result;
+}
+
+async function postJournal(tx: Transaction, organizationId: number, sourceType: "sale" | "purchase", sourceId: number, date: string, description: string, lines: Array<{ accountId: string; debit: number; credit: number }>): Promise<ErpRecord> {
+  const debit = money(lines.reduce((sum, line) => sum + line.debit, 0));
+  const credit = money(lines.reduce((sum, line) => sum + line.credit, 0));
+  if (debit !== credit) throw new InventoryRouteError("القيد المحاسبي غير متزن.", 500);
+  const [journal] = await tx.insert(erpRecordsTable).values({ organizationId, tableName: "journalEntries", data: { date, description, status: "posted", sourceType, sourceId, lines } }).returning();
+  return journal;
+}
+
+async function consumeFifo(tx: Transaction, organizationId: number, product: ErpRecord, warehouseId: number, quantity: number): Promise<Array<RecordData>> {
+  let remaining = quantity;
+  // Global lock order for every consumer is product -> all product balances ->
+  // product/location layers. Callers already lock the product; re-locking the
+  // balances here is harmless and prevents layers/balance deadlocks.
+  const balances = await lockBalancesForProduct(tx, organizationId, product.id);
+  const balanceQuantity = quantityOf(balanceFor(balances, warehouseId));
+  const layers = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "inventoryLayers"),
+    sql`${erpRecordsTable.data}->>'productId' = ${String(product.id)}`, sql`${erpRecordsTable.data}->>'warehouseId' = ${String(warehouseId)}`,
+  )).for("update");
+  const layerQuantity = layers.reduce((sum, layer) => {
+    const value = Number(layer.data.remainingQuantity);
+    if (!Number.isFinite(value) || value < 0) throw new InventoryRouteError("تلف في بيانات طبقات تكلفة المخزون.", 409);
+    return sum + value;
+  }, 0);
+  if (layerQuantity > balanceQuantity + 0.000001) {
+    throw new InventoryRouteError("تلف في اتساق المخزون: مجموع طبقات FIFO أكبر من رصيد الموقع.", 409);
+  }
+  // A tenant may have legacy stock and later receipt layers. Migrate exactly
+  // the uncovered balance and explicitly prioritize it ahead of all receipts.
+  const legacyQuantity = balanceQuantity - layerQuantity;
+  if (legacyQuantity > 0.000001) {
+    const unitCost = costOf(product);
+    const [layer] = await tx.insert(erpRecordsTable).values({ organizationId, tableName: "inventoryLayers", data: { productId: product.id, warehouseId, originalQuantity: legacyQuantity, remainingQuantity: legacyQuantity, unitCostExVat: unitCost, fifoPriority: 0, layerType: "opening_migration", migratedAt: new Date().toISOString() } }).returning();
+    layers.push(layer);
+  }
+  layers.sort((left, right) => {
+    const leftPriority = left.data.fifoPriority === 0 || left.data.layerType === "opening_migration" || left.data.migratedAt ? 0 : 1;
+    const rightPriority = right.data.fifoPriority === 0 || right.data.layerType === "opening_migration" || right.data.migratedAt ? 0 : 1;
+    if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+    const leftDate = String(left.data.receivedDate ?? left.createdAt.toISOString());
+    const rightDate = String(right.data.receivedDate ?? right.createdAt.toISOString());
+    return leftDate.localeCompare(rightDate) || left.id - right.id;
+  });
+  const allocations: Array<RecordData> = [];
+  for (const layer of layers) {
+    const available = Number(layer.data.remainingQuantity);
+    if (!Number.isFinite(available) || available <= 0) continue;
+    const taken = Math.min(remaining, available);
+    const unitCost = positiveMoney(layer.data.unitCostExVat, "تكلفة طبقة المخزون");
+    await updateData(tx, layer, { ...layer.data, remainingQuantity: available - taken });
+    allocations.push({ layerId: layer.id, quantity: taken, unitCostExVat: unitCost, costAmount: money(taken * unitCost) });
+    remaining -= taken;
+    if (!remaining) break;
+  }
+  if (remaining) throw new InventoryRouteError("طبقات تكلفة المخزون لا تكفي للكمية المطلوبة.");
+  return allocations;
+}
+
 function requiredText(value: unknown, label: string, maxLength: number): string {
   if (typeof value !== "string") return "";
   const normalized = value.trim();
@@ -145,6 +244,15 @@ function isValidDateKey(value: string): boolean {
   return date.getUTCFullYear() === year
     && date.getUTCMonth() === month - 1
     && date.getUTCDate() === day;
+}
+
+async function requireOpenFinancialDate(tx: Transaction, organizationId: number, date: string): Promise<void> {
+  const closures = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "financialClosures"),
+  ));
+  if (closures.some((closure) => closure.data.status === "closed" && date >= String(closure.data.from ?? "") && date <= String(closure.data.to ?? ""))) {
+    throw new InventoryRouteError("الفترة المالية مقفلة ولا يمكن تسجيل حركة مخزون فيها.");
+  }
 }
 
 function creditDueDate(value: unknown, issueDate: string): string {
@@ -212,6 +320,26 @@ async function runAction(response: Response, action: () => Promise<RecordData>):
   }
 }
 
+router.get("/inventory/settings", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireSalesOrInventory, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  await runAction(response, async () => {
+    const unit = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || (currentAuth.roleId !== "owner" && currentAuth.permissions.inventory !== true && currentAuth.permissions.sales !== true)) {
+        throw new InventoryRouteError("ليس لديك صلاحية لتسجيل المبيعات.", 403);
+      }
+      await tx.insert(eInvoiceUnitsTable).values({ organizationId: currentAuth.organizationId }).onConflictDoNothing();
+      const [record] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, currentAuth.organizationId)).for("update");
+      if (!record) throw new InventoryRouteError("تعذر تجهيز إعدادات الضريبة.", 500);
+      return record;
+    });
+    const vatRate = Number(unit.vatRate);
+    if (!Number.isFinite(vatRate) || vatRate < 0) throw new InventoryRouteError("نسبة ضريبة القيمة المضافة غير صالحة.", 409);
+    return { vatRate, pricesIncludeVat: unit.pricesIncludeVat };
+  });
+});
+
 router.post("/inventory/transfers", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
@@ -220,6 +348,7 @@ router.post("/inventory/transfers", requireAuth, requireSubscriptionAccess, requ
     const fromWarehouseId = integer(body.fromWarehouseId, "موقع المصدر");
     const toWarehouseId = integer(body.toWarehouseId, "موقع الوجهة");
     const quantity = integer(body.quantity, "كمية التحويل");
+    const date = saleDate(body.date);
     if (fromWarehouseId === toWarehouseId) throw new InventoryRouteError("يجب أن يختلف موقع الوجهة عن المصدر.", 400);
     requireLocations(auth, [fromWarehouseId, toWarehouseId]);
 
@@ -234,7 +363,7 @@ router.post("/inventory/transfers", requireAuth, requireSubscriptionAccess, requ
       const [created] = await tx.insert(erpRecordsTable).values({
         organizationId: auth.organizationId,
         tableName: "stockTransfers",
-        data: { productId, fromWarehouseId, toWarehouseId, quantity, status: "pending", date: String(body.date ?? ""), note: String(body.note ?? "") },
+        data: { productId, fromWarehouseId, toWarehouseId, quantity, status: "pending", date, note: String(body.note ?? "") },
       }).returning();
       await audit(tx, auth, "stock_transfer_created", String(created.id));
       return created;
@@ -247,8 +376,10 @@ router.post("/inventory/transfers/:id/approve", requireAuth, requireSubscription
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
+    const approvalDate = saleDate(request.body && typeof request.body === "object" && !Array.isArray(request.body) ? (request.body as RecordData).date : undefined);
     const transfer = await db.transaction(async (tx) => {
       await requireLockedDataGeneration(tx, response);
+      await requireOpenFinancialDate(tx, auth.organizationId, approvalDate);
       const current = await lockRecord(tx, auth.organizationId, "stockTransfers", transferId);
       const productId = integer(current.data.productId, "المنتج");
       const fromWarehouseId = integer(current.data.fromWarehouseId, "موقع المصدر");
@@ -262,8 +393,9 @@ router.post("/inventory/transfers/:id/approve", requireAuth, requireSubscription
       const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
       const source = balanceFor(balances, fromWarehouseId);
       if (!source || quantityOf(source) < quantity) throw new InventoryRouteError("الرصيد في المصدر لم يعد كافياً للموافقة.");
+      const fifoAllocations = await consumeFifo(tx, auth.organizationId, product, fromWarehouseId, quantity);
       await updateData(tx, source, { ...source.data, quantity: quantityOf(source) - quantity });
-      const updated = await updateData(tx, current, { ...current.data, status: "approved", approvedAt: new Date().toISOString() });
+      const updated = await updateData(tx, current, { ...current.data, status: "approved", fifoAllocations, approvalDate, approvedAt: new Date().toISOString() });
       await reconcileProductTotal(tx, auth.organizationId, product);
       await audit(tx, auth, "stock_transfer_approved", String(updated.id));
       return updated;
@@ -296,8 +428,10 @@ router.post("/inventory/transfers/:id/receive", requireAuth, requireSubscription
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
     const transferId = integer(request.params.id, "معرّف التحويل");
+    const receiptDate = saleDate(request.body && typeof request.body === "object" && !Array.isArray(request.body) ? (request.body as RecordData).date : undefined);
     const transfer = await db.transaction(async (tx) => {
       await requireLockedDataGeneration(tx, response);
+      await requireOpenFinancialDate(tx, auth.organizationId, receiptDate);
       const current = await lockRecord(tx, auth.organizationId, "stockTransfers", transferId);
       const productId = integer(current.data.productId, "المنتج");
       const fromWarehouseId = integer(current.data.fromWarehouseId, "موقع المصدر");
@@ -319,7 +453,18 @@ router.post("/inventory/transfers/:id/receive", requireAuth, requireSubscription
           data: { productId, warehouseId: toWarehouseId, quantity },
         });
       }
-      const updated = await updateData(tx, current, { ...current.data, status: "received", receivedAt: new Date().toISOString() });
+      const allocations = Array.isArray(current.data.fifoAllocations) ? current.data.fifoAllocations : [];
+      if (!allocations.length) {
+        throw new InventoryRouteError("تحويل المخزون لا يحتوي على طبقات تكلفة صالحة.");
+      }
+      for (const allocation of allocations) {
+        if (!allocation || typeof allocation !== "object" || Array.isArray(allocation)) throw new InventoryRouteError("تخصيصات تكلفة التحويل غير صالحة.");
+        const item = allocation as RecordData;
+        const movedQuantity = integer(item.quantity, "كمية طبقة التحويل");
+        const unitCostExVat = positiveMoney(item.unitCostExVat, "تكلفة طبقة التحويل");
+        await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryLayers", data: { productId, warehouseId: toWarehouseId, originalQuantity: movedQuantity, remainingQuantity: movedQuantity, unitCostExVat, transferId: current.id, receivedDate: new Date().toISOString() } });
+      }
+      const updated = await updateData(tx, current, { ...current.data, status: "received", receiptDate, receivedAt: new Date().toISOString() });
       await reconcileProductTotal(tx, auth.organizationId, product);
       await audit(tx, auth, "stock_transfer_received", String(updated.id));
       return updated;
@@ -343,11 +488,12 @@ router.post("/inventory/sales", requireAuth, requireSubscriptionAccess, requireC
       const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
       const balance = balanceFor(balances, warehouseId);
       if (!balance || quantityOf(balance) < quantity) throw new InventoryRouteError("الرصيد في موقع البيع لم يعد كافياً.");
+      const fifoAllocations = await consumeFifo(tx, auth.organizationId, product, warehouseId, quantity);
       await updateData(tx, balance, { ...balance.data, quantity: quantityOf(balance) - quantity });
       const [created] = await tx.insert(erpRecordsTable).values({
         organizationId: auth.organizationId,
         tableName: "sales",
-        data: { productId, warehouseId, quantity, createdAt: new Date().toISOString() },
+        data: { productId, warehouseId, quantity, fifoAllocations, createdAt: new Date().toISOString() },
       }).returning();
       await reconcileProductTotal(tx, auth.organizationId, product);
       await audit(tx, auth, "inventory_sale_recorded", String(created.id));
@@ -378,6 +524,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
       throw new InventoryRouteError("الفاتورة الضريبية تتطلب اسم العميل وعنوانه مع رقمه الضريبي.", 400);
     }
     const clientOperationId = requiredText(body.clientOperationId, "معرّف العملية", 200);
+    if (!clientOperationId) throw new InventoryRouteError("معرّف العملية مطلوب.", 400);
     const rawItems = Array.isArray(body.items) ? body.items : [];
     if (!rawItems.length || rawItems.length > 100) {
       throw new InventoryRouteError("أضف صنفاً واحداً على الأقل إلى السلة.", 400);
@@ -396,13 +543,23 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
 
     const result = await db.transaction(async (tx) => {
       await requireLockedDataGeneration(tx, response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || (currentAuth.roleId !== "owner" && currentAuth.permissions.inventory !== true && currentAuth.permissions.sales !== true)) {
+        throw new InventoryRouteError("تغيرت صلاحيات المستخدم أثناء تنفيذ البيع.", 403);
+      }
+      const requestFingerprint = fingerprint({ warehouseId, issueDate, paymentMethod, dueDate, customerName, customerVatNumber, customerAddress, items: rawItems });
       if (clientOperationId) {
         const [existing] = await tx.select().from(erpRecordsTable).where(and(
           eq(erpRecordsTable.organizationId, auth.organizationId),
           eq(erpRecordsTable.tableName, "invoices"),
           eq(erpRecordsTable.clientOperationId, clientOperationId),
         )).limit(1);
-        if (existing) return { invoice: existing, created: false };
+        if (existing) {
+          if (existing.data.requestFingerprint !== requestFingerprint) {
+            throw new InventoryRouteError("معرّف العملية مستخدم لطلب مختلف.");
+          }
+          return { invoice: existing, created: false };
+        }
       }
 
       const closures = await tx.select().from(erpRecordsTable).where(and(
@@ -415,6 +572,14 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         throw new InventoryRouteError("الفترة المالية مقفلة ولا يمكن تسجيل بيع فيها.");
       }
 
+      await tx.insert(eInvoiceUnitsTable).values({ organizationId: auth.organizationId }).onConflictDoNothing();
+      const [unit] = await tx.select().from(eInvoiceUnitsTable).where(
+        eq(eInvoiceUnitsTable.organizationId, auth.organizationId),
+      ).for("update");
+      if (!unit) throw new InventoryRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
+      const vatRate = Number(unit.vatRate);
+      if (!Number.isFinite(vatRate) || vatRate < 0) throw new InventoryRouteError("نسبة ضريبة القيمة المضافة غير صالحة.", 409);
+      const pricesIncludeVat = unit.pricesIncludeVat;
       await lockWarehouses(tx, auth.organizationId, [warehouseId]);
       const lines: Array<RecordData> = [];
       for (const [productId, quantity] of [...quantities.entries()].sort(([left], [right]) => left - right)) {
@@ -425,19 +590,36 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           throw new InventoryRouteError(`الرصيد المتاح للصنف «${String(product.data.name ?? product.id)}» لم يعد كافياً.`);
         }
         const unitPrice = priceOf(product);
+        const grossPrice = money(unitPrice * quantity);
+        const lineNet = pricesIncludeVat ? money(grossPrice / (1 + vatRate / 100)) : grossPrice;
+        const vatAmount = pricesIncludeVat ? money(grossPrice - lineNet) : money(lineNet * vatRate / 100);
+        const lineGross = money(lineNet + vatAmount);
+        const allocations = await consumeFifo(tx, auth.organizationId, product, warehouseId, quantity);
+        const costAmount = money(allocations.reduce((sum, allocation) => sum + Number(allocation.costAmount), 0));
         lines.push({
           productId,
           name: String(product.data.name ?? `صنف #${productId}`),
           sku: String(product.data.sku ?? product.data.code ?? ""),
           quantity,
           unitPrice,
-          total: unitPrice * quantity,
+          unitPriceExVat: money(lineNet / quantity),
+          vatRate,
+          vatAmount,
+          lineNet,
+          lineGross,
+          total: pricesIncludeVat ? grossPrice : lineNet,
+          unitCost: money(costAmount / quantity),
+          costAmount,
+          fifoAllocations: allocations,
           product,
           balance,
         });
       }
 
-      const subtotal = lines.reduce((sum, line) => sum + Number(line.total), 0);
+      const subtotal = money(lines.reduce((sum, line) => sum + Number(line.lineNet), 0));
+      const tax = money(lines.reduce((sum, line) => sum + Number(line.vatAmount), 0));
+      const total = money(subtotal + tax);
+      const cogsTotal = money(lines.reduce((sum, line) => sum + Number(line.costAmount), 0));
       const [draftInvoice] = await tx.insert(erpRecordsTable).values({
         organizationId: auth.organizationId,
         tableName: "invoices",
@@ -454,9 +636,11 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           dueDate,
           items: lines.map(({ product, balance, ...line }) => line),
           subtotal,
-          tax: 0,
-          total: subtotal,
-          paid: paymentMethod === "credit" ? 0 : subtotal,
+          tax,
+          total,
+          cogsTotal,
+          requestFingerprint,
+          paid: paymentMethod === "credit" ? 0 : total,
           createdAt: new Date().toISOString(),
         },
       }).onConflictDoNothing({
@@ -470,14 +654,12 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           eq(erpRecordsTable.clientOperationId, clientOperationId),
         )).limit(1);
         if (!existing) throw new InventoryRouteError("تعذر حفظ الفاتورة.", 500);
+        if (existing.data.requestFingerprint !== requestFingerprint) {
+          throw new InventoryRouteError("معرّف العملية مستخدم لطلب مختلف.");
+        }
         return { invoice: existing, created: false };
       }
 
-      await tx.insert(eInvoiceUnitsTable).values({ organizationId: auth.organizationId }).onConflictDoNothing();
-      const [unit] = await tx.select().from(eInvoiceUnitsTable).where(
-        eq(eInvoiceUnitsTable.organizationId, auth.organizationId),
-      ).for("update");
-      if (!unit) throw new InventoryRouteError("تعذر تجهيز وحدة الفوترة الإلكترونية.", 500);
       const seller = sellerProfile(unit);
       const documentType = customerVatNumber ? "standard" : "simplified";
       const invoiceNumber = `POS-${draftInvoice.id}`;
@@ -539,9 +721,9 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
       const invoice = await updateData(tx, draftInvoice, {
         ...draftInvoice.data,
         number: invoiceNumber,
-        tax: generated?.taxAmount ?? 0,
-        total: generated?.taxInclusiveAmount ?? subtotal,
-        paid: paymentMethod === "credit" ? 0 : (generated?.taxInclusiveAmount ?? subtotal),
+        tax,
+        total,
+        paid: paymentMethod === "credit" ? 0 : total,
         eInvoiceDocumentId: eInvoice.id,
         eInvoiceStatus: generated ? (generated.signatureValid ? "pending_compliance" : "pending_credentials") : "pending_configuration",
         eInvoiceType: documentType,
@@ -549,7 +731,6 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         qrPayload: generated?.qrPayload ?? "",
       });
       if (paymentMethod === "credit" && dueDate) {
-        const total = generated?.taxInclusiveAmount ?? subtotal;
         await tx.insert(erpRecordsTable).values({
           organizationId: auth.organizationId,
           tableName: "receivables",
@@ -582,13 +763,31 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
             warehouseId,
             quantity: line.quantity,
             unitPrice: line.unitPrice,
-            total: line.total,
+            unitPriceExVat: line.unitPriceExVat,
+            vatRate: line.vatRate,
+            vatAmount: line.vatAmount,
+            lineNet: line.lineNet,
+            lineGross: line.lineGross,
+            unitCost: line.unitCost,
+            costAmount: line.costAmount,
+            fifoAllocations: line.fifoAllocations,
+            total: line.lineGross,
             issueDate,
             createdAt: new Date().toISOString(),
           },
         });
         await reconcileProductTotal(tx, auth.organizationId, product);
       }
+      const accounts = await accountsByCode(tx, auth.organizationId);
+      const cashAccount = paymentMethod === "card" ? accounts.get("1100")! : paymentMethod === "credit" ? accounts.get("1200")! : accounts.get("1000")!;
+      const journal = await postJournal(tx, auth.organizationId, "sale", invoice.id, issueDate, `فاتورة بيع ${invoiceNumber}`, [
+        { accountId: String(cashAccount.id), debit: total, credit: 0 },
+        { accountId: String(accounts.get("4000")!.id), debit: 0, credit: subtotal },
+        { accountId: String(accounts.get("2100")!.id), debit: 0, credit: tax },
+        { accountId: String(accounts.get("6000")!.id), debit: cogsTotal, credit: 0 },
+        { accountId: String(accounts.get("1300")!.id), debit: 0, credit: cogsTotal },
+      ]);
+      await audit(tx, auth, "automatic_accounting", `${invoice.id}:${journal.id}`);
       await audit(tx, auth, "pos_checkout_completed", String(invoice.id));
       await audit(tx, auth, "einvoice_issued", String(eInvoice.id));
       return { invoice, created: true };
@@ -601,6 +800,84 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
   });
 });
 
+router.post("/inventory/purchase-receipts", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  await runAction(response, async () => {
+    const body = bodyOf(request);
+    const orderNumber = requiredText(body.orderNumber, "رقم أمر الشراء", 100);
+    const supplierName = requiredText(body.supplierName, "اسم المورد", 160);
+    const date = saleDate(body.date);
+    const warehouseId = integer(body.warehouseId, "الموقع");
+    const paymentMethod = body.paymentMethod === "cash" || body.paymentMethod === "credit" ? body.paymentMethod : "";
+    const clientOperationId = requiredText(body.clientOperationId, "معرّف العملية", 200);
+    if (!orderNumber || !supplierName || !paymentMethod || !clientOperationId) throw new InventoryRouteError("بيانات استلام الشراء غير مكتملة.", 400);
+    const dueDate = paymentMethod === "credit" ? creditDueDate(body.dueDate, date) : undefined;
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!rawItems.length || rawItems.length > 100) throw new InventoryRouteError("أضف صنفاً واحداً على الأقل.", 400);
+    const items = rawItems.map((raw): RecordData => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new InventoryRouteError("أحد أصناف الاستلام غير صحيح.", 400);
+      const item = raw as RecordData;
+      return { productId: integer(item.productId, "المنتج"), quantity: integer(item.quantity, "الكمية"), unitCostExVat: positiveMoney(item.unitCostExVat, "تكلفة الوحدة") };
+    });
+    requireLocations(auth, [warehouseId]);
+    const purchase = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || (currentAuth.roleId !== "owner" && currentAuth.permissions.inventory !== true)) {
+        throw new InventoryRouteError("تغيرت صلاحيات المستخدم أثناء تنفيذ الاستلام.", 403);
+      }
+      const requestFingerprint = fingerprint({ orderNumber, supplierName, date, warehouseId, paymentMethod, dueDate, items });
+      const [replay] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "purchaseOrders"), eq(erpRecordsTable.clientOperationId, clientOperationId))).limit(1);
+      if (replay) {
+        if (replay.data.requestFingerprint !== requestFingerprint) throw new InventoryRouteError("معرّف العملية مستخدم لطلب مختلف.");
+        return replay;
+      }
+      const closures = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "financialClosures")));
+      if (closures.some((closure) => closure.data.status === "closed" && date >= String(closure.data.from ?? "") && date <= String(closure.data.to ?? ""))) throw new InventoryRouteError("الفترة المالية مقفلة ولا يمكن تسجيل شراء فيها.");
+      await lockWarehouses(tx, auth.organizationId, [warehouseId]);
+      await tx.insert(eInvoiceUnitsTable).values({ organizationId: auth.organizationId }).onConflictDoNothing();
+      const [unit] = await tx.select().from(eInvoiceUnitsTable).where(eq(eInvoiceUnitsTable.organizationId, auth.organizationId)).for("update");
+      const vatRate = Number(unit?.vatRate);
+      if (!Number.isFinite(vatRate) || vatRate < 0) throw new InventoryRouteError("نسبة ضريبة القيمة المضافة غير صالحة.", 409);
+      const snapshots: RecordData[] = [];
+      for (const item of items.sort((a, b) => Number(a.productId) - Number(b.productId))) {
+        const product = await lockRecord(tx, auth.organizationId, "products", Number(item.productId));
+        const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
+        const balance = balanceFor(balances, warehouseId);
+        const quantity = Number(item.quantity);
+        const unitCostExVat = Number(item.unitCostExVat);
+        if (balance) await updateData(tx, balance, { ...balance.data, quantity: quantityOf(balance) + quantity });
+        else await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryBalances", data: { productId: product.id, warehouseId, quantity } });
+        const [layer] = await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryLayers", data: { productId: product.id, warehouseId, originalQuantity: quantity, remainingQuantity: quantity, unitCostExVat, receivedDate: date } }).returning();
+        const lineNet = money(quantity * unitCostExVat);
+        const vatAmount = money(lineNet * vatRate / 100);
+        snapshots.push({ productId: product.id, name: String(product.data.name ?? `صنف #${product.id}`), quantity, unitCostExVat, vatRate, lineNet, vatAmount, lineGross: money(lineNet + vatAmount), fifoLayerId: layer.id });
+        await reconcileProductTotal(tx, auth.organizationId, product);
+      }
+      const subtotal = money(snapshots.reduce((sum, item) => sum + Number(item.lineNet), 0));
+      const tax = money(snapshots.reduce((sum, item) => sum + Number(item.vatAmount), 0));
+      const total = money(snapshots.reduce((sum, item) => sum + Number(item.lineGross), 0));
+      const [created] = await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "purchaseOrders", clientOperationId, data: { orderNumber, supplierName, date, warehouseId, paymentMethod, dueDate, status: "received", received: true, items: snapshots, subtotal, tax, total, paid: paymentMethod === "cash" ? total : 0, requestFingerprint, createdAt: new Date().toISOString() } }).returning();
+      for (const snapshot of snapshots) {
+        const layerId = Number(snapshot.fifoLayerId);
+        const [layer] = await tx.select().from(erpRecordsTable).where(and(eq(erpRecordsTable.id, layerId), eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "inventoryLayers"))).for("update");
+        if (layer) await updateData(tx, layer, { ...layer.data, purchaseOrderId: created.id });
+      }
+      const accounts = await accountsByCode(tx, auth.organizationId);
+      const journal = await postJournal(tx, auth.organizationId, "purchase", created.id, date, `استلام شراء ${orderNumber}`, [
+        { accountId: String(accounts.get("1300")!.id), debit: subtotal, credit: 0 },
+        { accountId: String(accounts.get("1400")!.id), debit: tax, credit: 0 },
+        { accountId: String((paymentMethod === "cash" ? accounts.get("1000") : accounts.get("2000"))!.id), debit: 0, credit: total },
+      ]);
+      await audit(tx, auth, "automatic_accounting", `${created.id}:${journal.id}`);
+      if (paymentMethod === "credit") await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "receivables", data: { purchaseId: created.id, party: supplierName, supplierName, type: "payable", reference: orderNumber, date, dueDate, amount: total, paid: 0, status: "unpaid" } });
+      await audit(tx, auth, "purchase_receipt_recorded", String(created.id));
+      return created;
+    });
+    return { purchase: output(purchase, auth.organizationId) };
+  });
+});
+
 router.post("/inventory/adjustments", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {
@@ -608,14 +885,33 @@ router.post("/inventory/adjustments", requireAuth, requireSubscriptionAccess, re
     const productId = integer(body.productId, "المنتج");
     const warehouseId = integer(body.warehouseId, "الموقع");
     const actualQuantity = nonNegativeInteger(body.actualQuantity, "الكمية الفعلية");
+    const adjustmentDate = saleDate(body.date);
     requireLocations(auth, [warehouseId]);
     const adjustment = await db.transaction(async (tx) => {
       await requireLockedDataGeneration(tx, response);
+      await requireOpenFinancialDate(tx, auth.organizationId, adjustmentDate);
       const product = await lockRecord(tx, auth.organizationId, "products", productId);
       await lockWarehouses(tx, auth.organizationId, [warehouseId]);
       const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
       const balance = balanceFor(balances, warehouseId);
       const previousQuantity = quantityOf(balance);
+      const delta = actualQuantity - previousQuantity;
+      let fifoAllocations: Array<RecordData> = [];
+      let addedLayerId: number | undefined;
+      if (delta > 0) {
+        if (!Object.hasOwn(body, "unitCostExVat")) {
+          throw new InventoryRouteError("تسوية الزيادة تتطلب تكلفة الوحدة قبل الضريبة.", 400);
+        }
+        const unitCostExVat = positiveMoney(body.unitCostExVat, "تكلفة الوحدة قبل الضريبة");
+        const [layer] = await tx.insert(erpRecordsTable).values({
+          organizationId: auth.organizationId,
+          tableName: "inventoryLayers",
+          data: { productId, warehouseId, originalQuantity: delta, remainingQuantity: delta, unitCostExVat, adjustmentDate, adjustmentReason: String(body.reason ?? "") },
+        }).returning();
+        addedLayerId = layer.id;
+      } else if (delta < 0) {
+        fifoAllocations = await consumeFifo(tx, auth.organizationId, product, warehouseId, -delta);
+      }
       if (balance) {
         await updateData(tx, balance, { ...balance.data, quantity: actualQuantity });
       } else {
@@ -628,7 +924,7 @@ router.post("/inventory/adjustments", requireAuth, requireSubscriptionAccess, re
       const [created] = await tx.insert(erpRecordsTable).values({
         organizationId: auth.organizationId,
         tableName: "stockAdjustments",
-        data: { productId, warehouseId, previousQuantity, actualQuantity, delta: actualQuantity - previousQuantity, reason: String(body.reason ?? ""), date: String(body.date ?? "") },
+        data: { productId, warehouseId, previousQuantity, actualQuantity, delta, reason: String(body.reason ?? ""), date: adjustmentDate, ...(addedLayerId ? { addedLayerId } : {}), ...(fifoAllocations.length ? { fifoAllocations } : {}) },
       }).returning();
       await reconcileProductTotal(tx, auth.organizationId, product);
       await audit(tx, auth, "stock_adjustment_recorded", String(created.id));

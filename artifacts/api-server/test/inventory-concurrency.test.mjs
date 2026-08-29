@@ -30,19 +30,34 @@ async function registerOwner() {
   const email = `${unique("inventory") }@example.test`;
   const password = "Safe-test-password-123";
   const phone = `05${String(Math.floor(Math.random() * 100_000_000)).padStart(8, "0")}`;
-  const { response, payload } = await request("/auth/register", {
+  const authHeaders = { "X-Forwarded-For": `198.51.100.${Math.floor(Math.random() * 200) + 1}` };
+  const registration = await request("/auth/register", {
     method: "POST",
+    headers: authHeaders,
     body: { projectName: unique("منشأة اختبار"), name: "مالك الاختبار", email, phone, password },
   });
-  assert.equal(response.status, 201, JSON.stringify(payload));
-  const cookie = cookieFrom(response);
-  generationByCookie.set(cookie, payload.user.dataGeneration);
+  assert.equal(registration.response.status, 202, JSON.stringify(registration.payload));
+  const emailVerification = await request("/auth/email-verification/verify", {
+    method: "POST",
+    headers: authHeaders,
+    body: { email, code: process.env.EMAIL_VERIFICATION_TEST_CODE },
+  });
+  assert.equal(emailVerification.response.status, 200, JSON.stringify(emailVerification.payload));
+  const phoneVerification = await request("/auth/phone-verification/verify", {
+    method: "POST",
+    headers: authHeaders,
+    body: { email, code: process.env.PHONE_VERIFICATION_TEST_CODE },
+  });
+  assert.equal(phoneVerification.response.status, 200, JSON.stringify(phoneVerification.payload));
+  const cookie = cookieFrom(phoneVerification.response);
+  generationByCookie.set(cookie, phoneVerification.payload.user.dataGeneration);
   return { email, password, cookie };
 }
 
 async function login(email, password) {
   const { response, payload } = await request("/auth/login", {
     method: "POST",
+    headers: { "X-Forwarded-For": `198.51.100.${Math.floor(Math.random() * 200) + 1}` },
     body: { email, password },
   });
   assert.equal(response.status, 200, JSON.stringify(payload));
@@ -89,6 +104,7 @@ async function createScenario({ initialQuantity, transferQuantity }) {
     productId: productPayload.record.id,
     warehouseId: source.id,
     actualQuantity: initialQuantity,
+    unitCostExVat: 5,
     reason: "رصيد افتتاحي للاختبار",
   });
   assert.equal(seed.response.status, 200, JSON.stringify(seed.payload));
@@ -159,6 +175,7 @@ test("التسوية والتحويل المتزامنان يعيدان اشتق
       productId: scenario.productId,
       warehouseId: scenario.sourceId,
       actualQuantity: 12,
+      unitCostExVat: 5,
       reason: "جرد نهاية الوردية",
     }),
     post(scenario.secondCookie, `/inventory/transfers/${scenario.transferId}/approve`),
@@ -211,6 +228,7 @@ test("إلغاء الفاتورة يعيد المخزون والذمم وينش�
     productId: product.payload.record.id,
     warehouseId: warehouse.id,
     actualQuantity: 8,
+    unitCostExVat: 10,
     reason: "رصيد اختبار الإلغاء",
   });
   assert.equal(seed.response.status, 200, JSON.stringify(seed.payload));
@@ -265,6 +283,11 @@ test("إلغاء الفاتورة يعيد المخزون والذمم وينش�
   const sourceJournals = journals.payload.records.filter((record) => record.sourceType === "sale" && record.sourceId === invoiceId);
   assert.equal(sourceJournals.filter((record) => record.adjustmentType === "reversal").length, 1);
   assert.equal(sourceJournals.filter((record) => !record.adjustmentType).length, 1);
+  const resale = await post(owner.cookie, "/inventory/checkout", {
+    warehouseId: warehouse.id, issueDate: "2026-08-30", paymentMethod: "cash", clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 1 }],
+  });
+  assert.equal(resale.response.status, 200, JSON.stringify(resale.payload));
 });
 
 test("تمنع مسارات CRUD العامة تجاوز البيع الذري وفواتيره", async () => {
@@ -308,6 +331,7 @@ test("يرفض الخادم المواقع غير الموجودة أو التا
     productId: scenario.productId,
     warehouseId: 999999999,
     actualQuantity: 1,
+    unitCostExVat: 5,
     reason: "موقع غير موجود",
   });
   assert.equal(nonexistent.response.status, 404, JSON.stringify(nonexistent.payload));
@@ -320,7 +344,168 @@ test("يرفض الخادم المواقع غير الموجودة أو التا
     productId: scenario.productId,
     warehouseId: foreignWarehouseId,
     actualQuantity: 1,
+    unitCostExVat: 5,
     reason: "موقع تابع لمنشأة أخرى",
   });
   assert.equal(foreign.response.status, 404, JSON.stringify(foreign.payload));
+});
+
+test("استلام دفعتين يحسب VAT ويستهلك FIFO ويؤرشف القيود وإعادة الطلب", async () => {
+  const owner = await registerOwner();
+  const { payload: locationPayload } = await request("/data/warehouses", { cookie: owner.cookie });
+  const warehouse = locationPayload.records[0];
+  const product = await post(owner.cookie, "/data/products", { name: unique("FIFO VAT"), stock: 0, sellPrice: 10 });
+  assert.equal(product.response.status, 201, JSON.stringify(product.payload));
+  const firstOperation = crypto.randomUUID();
+  const firstBody = {
+    orderNumber: unique("PO-1"), supplierName: "مورد الاختبار", date: "2026-10-01", warehouseId: warehouse.id,
+    paymentMethod: "cash", clientOperationId: firstOperation,
+    items: [{ productId: product.payload.record.id, quantity: 2, unitCostExVat: 3 }],
+  };
+  const first = await post(owner.cookie, "/inventory/purchase-receipts", firstBody);
+  assert.equal(first.response.status, 200, JSON.stringify(first.payload));
+  assert.equal(first.payload.purchase.tax, 0.9);
+  assert.equal(first.payload.purchase.items[0].lineGross, 6.9);
+  const replay = await post(owner.cookie, "/inventory/purchase-receipts", firstBody);
+  assert.equal(replay.response.status, 200, JSON.stringify(replay.payload));
+  assert.equal(replay.payload.purchase.id, first.payload.purchase.id);
+  const mismatch = await post(owner.cookie, "/inventory/purchase-receipts", { ...firstBody, supplierName: "مورد آخر" });
+  assert.equal(mismatch.response.status, 409, JSON.stringify(mismatch.payload));
+  const second = await post(owner.cookie, "/inventory/purchase-receipts", {
+    orderNumber: unique("PO-2"), supplierName: "مورد الاختبار", date: "2026-10-02", warehouseId: warehouse.id,
+    paymentMethod: "credit", dueDate: "2026-11-02", clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 2, unitCostExVat: 7 }],
+  });
+  assert.equal(second.response.status, 200, JSON.stringify(second.payload));
+  const checkout = await post(owner.cookie, "/inventory/checkout", {
+    warehouseId: warehouse.id, issueDate: "2026-10-03", paymentMethod: "cash", clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 3 }],
+  });
+  assert.equal(checkout.response.status, 200, JSON.stringify(checkout.payload));
+  const line = checkout.payload.invoice.items[0];
+  assert.equal(line.lineNet, 30);
+  assert.equal(line.vatAmount, 4.5);
+  assert.equal(line.lineGross, 34.5);
+  assert.deepEqual(line.fifoAllocations.map((allocation) => allocation.unitCostExVat), [3, 7]);
+  assert.equal(line.costAmount, 13);
+  const correction = await request(`/accounting/sources/invoices/${checkout.payload.invoice.id}/correct`, {
+    method: "POST", cookie: owner.cookie, headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      reason: "تصحيح كمية وطريقة دفع",
+      effectiveDate: "2026-10-03",
+      replacement: {
+        paymentMethod: "card",
+        items: [{ productId: product.payload.record.id, warehouseId: warehouse.id, quantity: 1, unitPriceExVat: 10, vatRate: 15 }],
+      },
+    },
+  });
+  assert.equal(correction.response.status, 201, JSON.stringify(correction.payload));
+  assert.equal(correction.payload.source.cogsTotal, 7);
+  assert.equal(correction.payload.source.items[0].fifoAllocations[0].unitCostExVat, 7);
+  const accounts = await request("/data/accounts", { cookie: owner.cookie });
+  const bank = accounts.payload.records.find((account) => account.code === "1100");
+  assert.ok(correction.payload.correction.lines.some((journalLine) => journalLine.accountId === String(bank.id) && journalLine.debit === 11.5));
+  const cancelCorrected = await request(`/accounting/sources/invoices/${checkout.payload.invoice.id}/cancel`, {
+    method: "POST", cookie: owner.cookie, headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { reason: "اختبار إلغاء الفاتورة المصححة", effectiveDate: "2026-10-03" },
+  });
+  assert.equal(cancelCorrected.response.status, 201, JSON.stringify(cancelCorrected.payload));
+  const adjustment = await post(owner.cookie, "/inventory/adjustments", {
+    productId: product.payload.record.id, warehouseId: warehouse.id, actualQuantity: 0, reason: "اختبار نقص FIFO",
+  });
+  assert.equal(adjustment.response.status, 200, JSON.stringify(adjustment.payload));
+  // طبقة الـ3 ر.س التي أعادها التصحيح أقدم من طبقة الـ7 ر.س التي أعادها
+  // الإلغاء اللاحق، لذلك تبدأ التسوية منها وفق ترتيب FIFO append-only.
+  assert.equal(adjustment.payload.adjustment.fifoAllocations[0].unitCostExVat, 3);
+  const journals = await request("/data/journalEntries", { cookie: owner.cookie });
+  const correctedSaleJournals = journals.payload.records.filter((journal) => journal.sourceType === "sale" && journal.sourceId === checkout.payload.invoice.id);
+  const netByAccount = new Map();
+  for (const journal of correctedSaleJournals) {
+    for (const journalLine of journal.lines) {
+      netByAccount.set(journalLine.accountId, (netByAccount.get(journalLine.accountId) ?? 0) + Number(journalLine.debit) - Number(journalLine.credit));
+    }
+  }
+  for (const code of ["1100", "4000", "2100", "6000", "1300"]) {
+    const account = accounts.payload.records.find((candidate) => candidate.code === code);
+    assert.ok(account, `الحساب ${code} مطلوب`);
+    assert.ok(Math.abs(netByAccount.get(String(account.id)) ?? 0) < 0.000001, `يجب أن يكون صافي O,-O,C,-C صفراً للحساب ${code}`);
+  }
+  const sourceJournals = journals.payload.records.filter((journal) =>
+    [first.payload.purchase.id, second.payload.purchase.id, checkout.payload.invoice.id].includes(journal.sourceId) && !journal.adjustmentType);
+  assert.equal(sourceJournals.length, 3);
+  for (const journal of sourceJournals) {
+    const debit = journal.lines.reduce((sum, line) => sum + Number(line.debit), 0);
+    const credit = journal.lines.reduce((sum, line) => sum + Number(line.credit), 0);
+    assert.equal(debit, credit);
+  }
+  const cancellable = await post(owner.cookie, "/inventory/purchase-receipts", {
+    orderNumber: unique("PO-cancel"), supplierName: "مورد آجل", date: "2026-10-04", warehouseId: warehouse.id,
+    paymentMethod: "credit", dueDate: "2026-11-04", clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 1, unitCostExVat: 9 }],
+  });
+  assert.equal(cancellable.response.status, 200, JSON.stringify(cancellable.payload));
+  const cancelPurchase = await request(`/accounting/sources/purchaseOrders/${cancellable.payload.purchase.id}/cancel`, {
+    method: "POST", cookie: owner.cookie, headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { reason: "إلغاء استلام غير مستهلك", effectiveDate: "2026-10-04" },
+  });
+  assert.equal(cancelPurchase.response.status, 201, JSON.stringify(cancelPurchase.payload));
+  const payables = await request("/data/receivables", { cookie: owner.cookie });
+  assert.equal(payables.payload.records.find((record) => record.purchaseId === cancellable.payload.purchase.id).status, "cancelled");
+  const consumedCancellation = await request(`/accounting/sources/purchaseOrders/${first.payload.purchase.id}/cancel`, {
+    method: "POST", cookie: owner.cookie, headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { reason: "يجب رفض دفعة مستهلكة", effectiveDate: "2026-10-04" },
+  });
+  assert.equal(consumedCancellation.response.status, 409, JSON.stringify(consumedCancellation.payload));
+  const closure = await post(owner.cookie, "/accounting/close", { from: "2026-10-01", to: "2026-10-31" });
+  assert.equal(closure.response.status, 201, JSON.stringify(closure.payload));
+  const closedPurchase = await post(owner.cookie, "/inventory/purchase-receipts", {
+    orderNumber: unique("PO-closed"), supplierName: "مورد الاختبار", date: "2026-10-10", warehouseId: warehouse.id,
+    paymentMethod: "cash", clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 1, unitCostExVat: 2 }],
+  });
+  assert.equal(closedPurchase.response.status, 409, JSON.stringify(closedPurchase.payload));
+});
+
+test("يرحّل الرصيد القديم المختلط قبل طبقات الشراء الأحدث", async () => {
+  const owner = await registerOwner();
+  const locations = await request("/data/warehouses", { cookie: owner.cookie });
+  const warehouse = locations.payload.records[0];
+  const product = await post(owner.cookie, "/data/products", {
+    name: unique("مخزون قديم مختلط"), stock: 0, sellPrice: 20, costPrice: 2,
+  });
+  const opening = await post(owner.cookie, "/inventory/adjustments", {
+    productId: product.payload.record.id, warehouseId: warehouse.id, actualQuantity: 5,
+    unitCostExVat: 2, reason: "رصيد قديم سيحاكي النسخة السابقة", date: "2026-12-01",
+  });
+  assert.equal(opening.response.status, 200, JSON.stringify(opening.payload));
+  const receipt = await post(owner.cookie, "/inventory/purchase-receipts", {
+    orderNumber: unique("PO-mixed"), supplierName: "مورد الدفعة الجديدة", date: "2026-12-02",
+    warehouseId: warehouse.id, paymentMethod: "cash", clientOperationId: crypto.randomUUID(),
+    items: [{ productId: product.payload.record.id, quantity: 2, unitCostExVat: 9 }],
+  });
+  assert.equal(receipt.response.status, 200, JSON.stringify(receipt.payload));
+
+  const exported = await request("/backup/export", { cookie: owner.cookie });
+  assert.equal(exported.response.status, 200, JSON.stringify(exported.payload));
+  const legacyBackup = {
+    ...exported.payload,
+    records: exported.payload.records.filter((record) =>
+      !["journalEntries", "purchaseOrders", "receivables", "invoices", "sales"].includes(record.tableName)
+      && !(record.tableName === "inventoryLayers"
+        && record.data?.productId === product.payload.record.id
+        && record.data?.adjustmentReason === "رصيد قديم سيحاكي النسخة السابقة"),
+    ),
+  };
+  const restored = await request("/backup/restore", { method: "POST", cookie: owner.cookie, body: legacyBackup });
+  assert.equal(restored.response.status, 200, JSON.stringify(restored.payload));
+  generationByCookie.set(owner.cookie, restored.payload.dataGeneration);
+
+  const sale = await post(owner.cookie, "/inventory/checkout", {
+    warehouseId: warehouse.id, issueDate: "2026-12-03", paymentMethod: "cash",
+    clientOperationId: crypto.randomUUID(), items: [{ productId: product.payload.record.id, quantity: 6 }],
+  });
+  assert.equal(sale.response.status, 200, JSON.stringify(sale.payload));
+  const allocations = sale.payload.invoice.items[0].fifoAllocations;
+  assert.deepEqual(allocations.map((allocation) => allocation.unitCostExVat), [2, 9]);
+  assert.deepEqual(allocations.map((allocation) => allocation.quantity), [5, 1]);
 });

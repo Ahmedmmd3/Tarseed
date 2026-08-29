@@ -15,7 +15,7 @@ type Warehouse = { id: number | string; name: string; status?: string };
 type InventoryBalance = { productId: number | string; warehouseId: number | string; quantity: number | string };
 type CartItem = { product: Product; quantity: number };
 type RecordsPayload<T> = { records?: T[]; error?: string };
-type CheckoutPayload = { invoice?: { id: string | number; number: string; total: number | string; dueDate?: string }; error?: string };
+type CheckoutPayload = { invoice?: { id: string | number; number: string; total: number | string; subtotal?: number | string; tax?: number | string; dueDate?: string }; error?: string };
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
@@ -40,8 +40,10 @@ export default function POS() {
   const [customerAddress, setCustomerAddress] = useState('');
   const [dueDate, setDueDate] = useState('');
 
+  const [vatRate, setVatRate] = useState(0.15);
+  const [pricesIncludeVat, setPricesIncludeVat] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [invoice, setInvoice] = useState<{ id: string | number; number: string; total: number } | null>(null);
+  const [invoice, setInvoice] = useState<{ id: string | number; number: string; total: number; subtotal?: number; tax?: number } | null>(null);
   const [pendingOperationId, setPendingOperationId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -54,10 +56,11 @@ export default function POS() {
       setLoading(true);
       setError('');
       const headers = { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) };
-      const [prodRes, whRes, balRes] = await Promise.all([
+      const [prodRes, whRes, balRes, billingRes] = await Promise.all([
         fetch('/api/data/products', { credentials: 'include', headers }),
         fetch('/api/data/warehouses', { credentials: 'include', headers }),
         fetch('/api/data/inventoryBalances', { credentials: 'include', headers }),
+        fetch('/api/inventory/settings', { credentials: 'include', headers }).catch(() => null),
       ]);
       const [prodData, whData, balData] = await Promise.all([
         prodRes.json() as Promise<RecordsPayload<Product>>,
@@ -67,6 +70,12 @@ export default function POS() {
       if (!prodRes.ok) throw new Error(prodData.error ?? 'تعذر تحميل المنتجات.');
       if (!whRes.ok) throw new Error(whData.error ?? 'تعذر تحميل المستودعات.');
       if (!balRes.ok) throw new Error(balData.error ?? 'تعذر تحميل الأرصدة.');
+
+      if (billingRes && billingRes.ok) {
+        const billingData = await billingRes.json();
+        if (billingData.vatRate !== undefined) setVatRate(Number(billingData.vatRate) / 100);
+        if (billingData.pricesIncludeVat !== undefined) setPricesIncludeVat(Boolean(billingData.pricesIncludeVat));
+      }
 
       const productsList = prodData.records ?? [];
       const warehousesList = (whData.records ?? []).filter((warehouse) => warehouse.status !== 'inactive');
@@ -149,7 +158,11 @@ export default function POS() {
 
   const clearCart = () => setCart([]);
 
-  const subtotal = cart.reduce((sum, item) => sum + getPrice(item.product) * item.quantity, 0);
+  const listedTotal = cart.reduce((sum, item) => sum + getPrice(item.product) * item.quantity, 0);
+  const subtotal = pricesIncludeVat ? listedTotal / (1 + vatRate) : listedTotal;
+  const tax = pricesIncludeVat ? listedTotal - subtotal : subtotal * vatRate;
+  const finalTotal = pricesIncludeVat ? listedTotal : subtotal + tax;
+
   const cartHasInsufficientStock = cart.some((item) => item.quantity > getStock(item.product));
   const cartTotalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -199,7 +212,12 @@ export default function POS() {
         }
         throw new Error(data.error ?? 'تعذر إتمام عملية البيع.');
       }
-      setInvoice({ ...data.invoice, total: Number(data.invoice.total) || subtotal });
+      setInvoice({
+        ...data.invoice,
+        total: data.invoice.total === undefined ? finalTotal : Number(data.invoice.total),
+        subtotal: data.invoice.subtotal === undefined ? subtotal : Number(data.invoice.subtotal),
+        tax: data.invoice.tax === undefined ? tax : Number(data.invoice.tax)
+      });
       setCart([]);
       setCustomerName('');
       setCustomerVatNumber('');
@@ -224,8 +242,16 @@ export default function POS() {
         <div className="w-full max-w-sm rounded-2xl border border-slate-100 bg-slate-50 p-6 text-center">
           <p className="text-sm font-semibold text-slate-500">رقم الفاتورة</p>
           <p className="mt-1 text-2xl font-bold text-slate-900">{invoice.number}</p>
+          <div className="mt-4 flex justify-between text-sm text-slate-600 border-t border-slate-200 pt-4">
+            <span>المجموع</span>
+            <span className="font-bold">{formatCurrency(invoice.subtotal ?? 0)}</span>
+          </div>
+          <div className="mt-2 flex justify-between text-sm text-slate-600">
+            <span>ضريبة القيمة المضافة</span>
+            <span className="font-bold">{formatCurrency(invoice.tax ?? 0)}</span>
+          </div>
           <div className="mt-4 border-t border-slate-200 pt-4">
-            <p className="text-sm font-semibold text-slate-500">الإجمالي</p>
+            <p className="text-sm font-semibold text-slate-500">الإجمالي الشامل للضريبة</p>
             <p className="mt-1 text-3xl font-black text-teal-600">{formatCurrency(invoice.total)}</p>
           </div>
         </div>
@@ -318,9 +344,17 @@ export default function POS() {
       <div className={`border-t border-slate-100 bg-slate-50 shrink-0 ${isMobileView ? 'p-4 pb-[max(env(safe-area-inset-bottom),1.5rem)]' : 'p-5'}`}>
          {error && products.length > 0 && <p className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700" role="alert" data-testid="status-pos-message">{error}</p>}
          {cartHasInsufficientStock && <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800" role="alert" data-testid="status-insufficient-stock">تحتوي السلة على كمية أكبر من الرصيد المتاح. عدّل الكميات.</p>}
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-sm font-bold text-slate-600">المجموع (قبل الضريبة)</span>
+          <span className="text-base font-bold text-slate-900" data-testid="text-cart-subtotal">{formatCurrency(subtotal)}</span>
+        </div>
         <div className="mb-4 flex items-center justify-between">
-          <span className="text-sm font-bold text-slate-600">المجموع النهائي</span>
-          <span className="text-2xl font-black text-slate-900" data-testid="text-cart-total">{formatCurrency(subtotal)}</span>
+          <span className="text-sm font-bold text-slate-600">ضريبة القيمة المضافة ({(vatRate * 100).toFixed(0)}%)</span>
+          <span className="text-base font-bold text-slate-900" data-testid="text-cart-tax">{formatCurrency(tax)}</span>
+        </div>
+        <div className="mb-5 flex items-center justify-between rounded-xl bg-teal-50 p-3">
+          <span className="text-sm font-black text-teal-900">الإجمالي المستحق</span>
+          <span className="text-2xl font-black text-teal-700" data-testid="text-cart-total">{formatCurrency(finalTotal)}</span>
         </div>
 
         <div className="mb-5 space-y-4">
@@ -504,7 +538,7 @@ export default function POS() {
                      <ShoppingCart className="h-6 w-6" />
                      <span className="mt-1">السلة ({cartTotalItems})</span>
                    </div>
-                   <span className="mt-1">{formatCurrency(subtotal)}</span>
+                   <span className="mt-1">{formatCurrency(finalTotal)}</span>
                 </div>
               </Button>
             </SheetTrigger>

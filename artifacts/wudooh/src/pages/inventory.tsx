@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-type CatalogRecord = { id: number | string; name?: string; status?: string };
+type CatalogRecord = { id: number | string; name?: string; status?: string; cost?: number | string };
 type Balance = { id: number | string; productId: number | string; warehouseId: number | string; quantity: number | string };
 type Transfer = { id: number | string; productId: number | string; fromWarehouseId: number | string; toWarehouseId: number | string; quantity: number | string; status?: string; date?: string; note?: string };
 type Adjustment = { id: number | string; productId: number | string; warehouseId: number | string; actualQuantity: number | string; delta?: number | string; reason?: string; date?: string };
@@ -21,15 +21,31 @@ function labelFor(records: CatalogRecord[], id: string | number): string {
   return records.find((record) => String(record.id) === String(id))?.name ?? `#${id}`;
 }
 
+function formatCurrency(amount: number) {
+  return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }).format(amount);
+}
+
 function InventoryBalances({ data, products, warehouses, loading }: { data: Balance[]; products: CatalogRecord[]; warehouses: CatalogRecord[]; loading: boolean }) {
   if (loading) return <LoadingState />;
   return (
     <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
       <Table className="min-w-[480px]">
-        <TableHeader><TableRow><TableHead>المنتج</TableHead><TableHead>الموقع</TableHead><TableHead>الكمية</TableHead></TableRow></TableHeader>
+        <TableHeader><TableRow><TableHead>المنتج</TableHead><TableHead>الموقع</TableHead><TableHead>الكمية</TableHead><TableHead>القيمة التقريبية</TableHead></TableRow></TableHeader>
         <TableBody>
-          {data.map((item) => <TableRow key={item.id}><TableCell>{labelFor(products, item.productId)}</TableCell><TableCell>{labelFor(warehouses, item.warehouseId)}</TableCell><TableCell className="font-bold text-teal-700">{item.quantity}</TableCell></TableRow>)}
-          {!data.length && <EmptyRow columns={3} text="لا توجد أرصدة ظاهرة ضمن نطاق مواقعك." />}
+          {data.map((item) => {
+            const product = products.find(p => String(p.id) === String(item.productId));
+            const cost = product?.cost ? Number(product.cost) : 0;
+            const approxValue = cost * Number(item.quantity);
+            return (
+              <TableRow key={item.id}>
+                <TableCell>{product?.name ?? `#${item.productId}`}</TableCell>
+                <TableCell>{labelFor(warehouses, item.warehouseId)}</TableCell>
+                <TableCell className="font-bold text-teal-700">{item.quantity}</TableCell>
+                <TableCell className="text-slate-500">{cost > 0 ? formatCurrency(approxValue) : '—'}</TableCell>
+              </TableRow>
+            );
+          })}
+          {!data.length && <EmptyRow columns={4} text="لا توجد أرصدة ظاهرة ضمن نطاق مواقعك." />}
         </TableBody>
       </Table>
     </div>
