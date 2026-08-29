@@ -99,7 +99,6 @@ function maskedPhone(phone: string): string {
 
 function pendingVerification(user: TeamUser): "email" | "phone" | null {
   if (!user.emailVerifiedAt && user.status === "pending_email_verification") return "email";
-  if (user.phone && !user.phoneVerifiedAt) return "phone";
   return null;
 }
 
@@ -579,20 +578,11 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
     });
     return;
   }
-  if (!isSmsDeliveryConfigured()) {
-    response.status(503).json({ error: "إرسال رموز الجوال غير مهيأ حالياً. حاول لاحقاً." });
-    return;
-  }
-
   const passwordHash = await hashPassword(validation.data.password);
   const { password: _password, ...ownerData } = validation.data;
   const verificationCode = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.EMAIL_VERIFICATION_TEST_CODE ?? "")
     ? process.env.EMAIL_VERIFICATION_TEST_CODE as string
     : createEmailVerificationCode();
-  const phoneVerificationCode = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.PHONE_VERIFICATION_TEST_CODE ?? "")
-    ? process.env.PHONE_VERIFICATION_TEST_CODE as string
-    : createPhoneVerificationCode();
-
   type RegistrationResult =
     | { kind: "created"; userId: number; organizationId: number }
     | {
@@ -602,7 +592,6 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
         name: string;
         phone: string | null;
         emailCode: string | null;
-        phoneCode: string | null;
       }
     | { kind: "existing" };
   let result: RegistrationResult | null = null;
@@ -639,26 +628,6 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
             }
           }
 
-          const [existingPhoneCode] = await tx.select().from(phoneVerificationCodesTable)
-            .where(eq(phoneVerificationCodesTable.userId, existing.id))
-            .for("update");
-          const maySendPhone = Boolean(existing.phone && !existing.phoneVerifiedAt)
-            && (!existingPhoneCode || now.getTime() - existingPhoneCode.lastSentAt.getTime() >= PHONE_VERIFICATION_RESEND_SECONDS * 1000);
-          if (maySendPhone && existing.phone) {
-            const values = {
-              phone: existing.phone,
-              codeHash: hashPhoneVerificationCode(phoneVerificationCode),
-              expiresAt: new Date(now.getTime() + PHONE_VERIFICATION_MINUTES * 60 * 1000),
-              usedAt: null,
-              attemptCount: 0,
-              lastSentAt: now,
-            };
-            if (existingPhoneCode) {
-              await tx.update(phoneVerificationCodesTable).set(values).where(eq(phoneVerificationCodesTable.id, existingPhoneCode.id));
-            } else {
-              await tx.insert(phoneVerificationCodesTable).values({ userId: existing.id, ...values });
-            }
-          }
           return {
             kind: "pending",
             userId: existing.id,
@@ -666,7 +635,6 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
             name: existing.name,
             phone: existing.phone,
             emailCode: maySendEmail ? verificationCode : null,
-            phoneCode: maySendPhone ? phoneVerificationCode : null,
           };
         }
 
@@ -696,12 +664,6 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           userId: user.id,
           codeHash: hashEmailVerificationCode(verificationCode),
           expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
-        });
-        await tx.insert(phoneVerificationCodesTable).values({
-          userId: user.id,
-          phone,
-          codeHash: hashPhoneVerificationCode(phoneVerificationCode),
-          expiresAt: new Date(Date.now() + PHONE_VERIFICATION_MINUTES * 60 * 1000),
         });
         await tx.insert(erpRecordsTable).values([
           {
@@ -743,33 +705,6 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
       operation: "registration_pending_verification_delivery",
     });
   }
-  try {
-    if (result.kind === "created") {
-      await sendPhoneVerificationCode({ phone, code: phoneVerificationCode });
-    } else if (result.kind === "pending" && result.phone && result.phoneCode) {
-      await sendPhoneVerificationCode({ phone: result.phone, code: result.phoneCode });
-    }
-  } catch (error) {
-    if (result.kind === "created") {
-      await db.delete(organizationsTable).where(eq(organizationsTable.id, result.organizationId));
-    } else if (result.kind === "pending") {
-      await db.delete(phoneVerificationCodesTable).where(eq(phoneVerificationCodesTable.userId, result.userId));
-    }
-    request.log.error(
-      {
-        err: error,
-        userId: result.kind === "existing" ? null : result.userId,
-        provider: "twilio",
-        operation: "registration_phone_verification_delivery",
-      },
-      "Unable to deliver registration phone verification code",
-    );
-    const remainingDelay = REGISTRATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
-    if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
-    response.status(503).json({ error: "تعذر إرسال رمز الجوال حالياً. حاول لاحقاً." });
-    return;
-  }
-
   const remainingDelay = REGISTRATION_RESPONSE_FLOOR_MS - (Date.now() - startedAt);
   if (remainingDelay > 0) await new Promise((resolve) => setTimeout(resolve, remainingDelay));
   response.status(202).json({
@@ -777,6 +712,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
     email: validation.data.email,
     phone: maskedPhone(phone),
     expiresInSeconds: EMAIL_VERIFICATION_MINUTES * 60,
+    phoneVerificationRequired: false,
   });
 });
 
@@ -830,12 +766,14 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
       return null;
     }
     const verification = pendingVerification(user);
-    const allowLegacyEmailAccess = verification === "phone"
-      && user.status === "active"
-      && isEmail(email)
-      && !isSmsDeliveryConfigured();
-    if (verification && !allowLegacyEmailAccess) {
-      return { kind: "unverified" as const, verification, email: user.email, phone: user.phone };
+    const phoneLoginNeedsVerification = Boolean(phone && user.phone && !user.phoneVerifiedAt);
+    if (verification || phoneLoginNeedsVerification) {
+      return {
+        kind: "unverified" as const,
+        verification: verification ?? "phone",
+        email: user.email,
+        phone: user.phone,
+      };
     }
     if (user.status !== "active") return null;
     const token = createSessionToken();
@@ -924,10 +862,9 @@ router.post("/auth/email-verification/verify", async (request: Request, response
       .where(eq(organizationsTable.id, user.organizationId))
       .for("update");
     if (!organization) return { kind: "invalid" as const };
-    const needsPhoneVerification = Boolean(user.phone && !user.phoneVerifiedAt);
     const [activatedUser] = await tx.update(teamUsersTable)
       .set({
-        status: needsPhoneVerification ? "pending_phone_verification" : "active",
+        status: "active",
         emailVerifiedAt: now,
         updatedAt: now,
       })
@@ -936,9 +873,6 @@ router.post("/auth/email-verification/verify", async (request: Request, response
     await tx.update(emailVerificationCodesTable)
       .set({ usedAt: now })
       .where(eq(emailVerificationCodesTable.id, verification.id));
-    if (needsPhoneVerification) {
-      return { kind: "phone_pending" as const, user: activatedUser };
-    }
     const token = createSessionToken();
     await tx.insert(authSessionsTable).values({
       userId: user.id,
@@ -958,15 +892,6 @@ router.post("/auth/email-verification/verify", async (request: Request, response
     response.status(400).json({ error: "رمز التفعيل غير صحيح أو انتهت صلاحيته." });
     return;
   }
-  if (result.kind === "phone_pending") {
-    response.json({
-      phoneVerificationRequired: true,
-      email,
-      phone: result.user.phone ? maskedPhone(result.user.phone) : null,
-    });
-    return;
-  }
-
   setSession(response, result.token);
   response.json({ user: safeUser(result.user, {
     projectName: result.organization.name,

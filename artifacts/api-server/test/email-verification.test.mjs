@@ -79,7 +79,7 @@ after(async () => {
   await new Promise((resolve) => server.close(resolve));
 });
 
-test("لا يصدر جلسة حتى ينجح رمز البريد ورمز الجوال", async () => {
+test("يفعّل الحساب بالبريد فقط ويؤجل توثيق الجوال", async () => {
   const email = `pending-${suffix}@example.test`;
   const phone = mobile();
   const created = await registration(email, phone);
@@ -108,8 +108,14 @@ test("لا يصدر جلسة حتى ينجح رمز البريد ورمز الج
     body: { email, code: verificationCode },
   });
   assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
-  assert.equal(sessionCookie(verified.response), null);
-  assert.equal(verified.payload.phoneVerificationRequired, true);
+  assert.ok(sessionCookie(verified.response));
+  assert.equal(verified.payload.phoneVerificationRequired, undefined);
+  assert.equal(verified.payload.user.email, email);
+  assert.ok(verified.payload.user.emailVerifiedAt);
+  assert.equal(verified.payload.user.phoneVerifiedAt, null);
+
+  const [activatedUser] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, user.id));
+  assert.equal(activatedUser.status, "active");
 
   const loginBeforePhoneVerification = await request("/auth/login", {
     body: { identifier: phone, password },
@@ -117,6 +123,10 @@ test("لا يصدر جلسة حتى ينجح رمز البريد ورمز الج
   assert.equal(loginBeforePhoneVerification.response.status, 403, JSON.stringify(loginBeforePhoneVerification.payload));
   assert.equal(loginBeforePhoneVerification.payload.code, "phone_verification_required");
 
+  const resent = await request("/auth/phone-verification/resend", {
+    body: { email },
+  });
+  assert.equal(resent.response.status, 202, JSON.stringify(resent.payload));
   const phoneVerified = await request("/auth/phone-verification/verify", {
     body: { email, code: phoneVerificationCode },
   });
@@ -143,11 +153,10 @@ test("يبقي الرقم القديم حتى توثيق الجديد ثم ين�
   const newPhone = mobile();
   await registration(email, oldPhone);
   const user = await trackOrganization(email);
-  await request("/auth/email-verification/verify", { body: { email, code: verificationCode } });
-  const initialVerification = await request("/auth/phone-verification/verify", {
-    body: { email, code: phoneVerificationCode },
+  const emailVerification = await request("/auth/email-verification/verify", {
+    body: { email, code: verificationCode },
   });
-  const cookie = sessionCookie(initialVerification.response);
+  const cookie = sessionCookie(emailVerification.response);
   assert.ok(cookie);
 
   const requested = await request("/auth/phone-change/request", {
@@ -157,7 +166,7 @@ test("يبقي الرقم القديم حتى توثيق الجديد ثم ين�
   assert.equal(requested.response.status, 202, JSON.stringify(requested.payload));
   const [beforeVerification] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, user.id));
   assert.equal(beforeVerification.phone, `+966${oldPhone.slice(1)}`);
-  assert.ok(beforeVerification.phoneVerifiedAt);
+  assert.equal(beforeVerification.phoneVerifiedAt, null);
 
   const verified = await request("/auth/phone-change/verify", {
     cookie,
@@ -204,6 +213,7 @@ test("يرفض كلمة المرور الضعيفة ويقبل الجوال ال
     email: duplicateEmail,
     phone: first.payload.phone,
     expiresInSeconds: 600,
+    phoneVerificationRequired: false,
   });
   assert.equal(sessionCookie(duplicate.response), null);
   const [unchangedUser] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, firstUser.id));
@@ -212,14 +222,16 @@ test("يرفض كلمة المرور الضعيفة ويقبل الجوال ال
   assert.equal(unchangedUser.name, firstUser.name);
 });
 
-test("لا يترك حساباً معلقاً إذا فشل إرسال رمز الجوال", async () => {
+test("لا يعتمد التسجيل على توفر إرسال رمز الجوال", async () => {
   const email = `sms-failure-${suffix}@example.test`;
   process.env.SMS_DELIVERY_TEST_FAIL = "1";
   try {
-    const failed = await registration(email, mobile());
-    assert.equal(failed.response.status, 503, JSON.stringify(failed.payload));
+    const created = await registration(email, mobile());
+    assert.equal(created.response.status, 202, JSON.stringify(created.payload));
     const users = await db.select().from(teamUsersTable).where(eq(teamUsersTable.email, email));
-    assert.equal(users.length, 0);
+    assert.equal(users.length, 1);
+    assert.equal(users[0].status, "pending_email_verification");
+    organizationIds.push(users[0].organizationId);
   } finally {
     delete process.env.SMS_DELIVERY_TEST_FAIL;
   }
@@ -238,10 +250,6 @@ test("يوحّد رد التسجيل للحساب النشط دون تعديل �
     body: { email, code: verificationCode },
   });
   assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
-  const phoneVerified = await request("/auth/phone-verification/verify", {
-    body: { email, code: phoneVerificationCode },
-  });
-  assert.equal(phoneVerified.response.status, 200, JSON.stringify(phoneVerified.payload));
   const [activeSnapshot] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, user.id));
   const duplicate = await registration(email, phone);
   assert.equal(duplicate.response.status, 202, JSON.stringify(duplicate.payload));
@@ -260,10 +268,6 @@ test("لا يكشف الحساب النشط عند تأخر مزود البري�
     body: { email: activeEmail, code: verificationCode },
   });
   assert.equal(verified.response.status, 200, JSON.stringify(verified.payload));
-  const phoneVerified = await request("/auth/phone-verification/verify", {
-    body: { email: activeEmail, code: phoneVerificationCode },
-  });
-  assert.equal(phoneVerified.response.status, 200, JSON.stringify(phoneVerified.payload));
   const [activeSnapshot] = await db.select().from(teamUsersTable).where(eq(teamUsersTable.id, activeUser.id));
 
   process.env.EMAIL_DELIVERY_TEST_DELAY_MS = "900";

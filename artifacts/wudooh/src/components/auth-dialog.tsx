@@ -533,6 +533,9 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
                        data-testid="input-auth-phone"
                      />
                    </div>
+                   <p className="text-xs text-slate-500">
+                     سنرسل رمز التفعيل إلى بريدك الإلكتروني. يمكنك توثيق رقم الجوال لاحقاً من داخل الحساب.
+                   </p>
                  </div>
               </>
             )}
