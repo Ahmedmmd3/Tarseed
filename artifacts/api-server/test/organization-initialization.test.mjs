@@ -4,7 +4,7 @@ import { randomInt, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
 import test, { after, before } from "node:test";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   db,
   erpRecordsTable,
@@ -232,4 +232,65 @@ test("تمنع تهيئة البيانات التجريبية المتزامنة
   assert.deepEqual(results.filter(({ created }) => created === 0).length, 1);
   assert.equal(results.filter(({ created }) => created > 0).length, 1);
   await assertInitializedOrganization(organization.id, "التهيئة المتزامنة");
+});
+
+test("تتراجع تهيئة البذور بالكامل بعد فشل إدراج جزئي وتنجح إعادة المحاولة مرة واحدة", async () => {
+  const now = new Date();
+  const [organization] = await db.insert(organizationsTable).values({
+    name: `منشأة تراجع البذور ${suffix}`,
+    dataGeneration: 1,
+    planId: "pro",
+    subscriptionStatus: "active",
+    trialStartedAt: now,
+    trialEndsAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    subscriptionStartedAt: now,
+    subscriptionEndsAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    isTestWorkspace: true,
+  }).returning();
+  organizationIds.push(organization.id);
+
+  const triggerFunction = `fail_demo_seed_${suffix}`;
+  const triggerName = `${triggerFunction}_trigger`;
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${triggerFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.table_name = 'products' AND NEW.data->>'demoSeedKey' = '${DEMO_SEED_KEY}' THEN
+          RAISE EXCEPTION 'فشل مقصود لاختبار التراجع الذري للبذور';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${triggerName}
+      BEFORE INSERT ON erp_records
+      FOR EACH ROW EXECUTE FUNCTION ${triggerFunction}();
+    `));
+
+    let failure;
+    try {
+      await seedDemoData(organization.id, organization.dataGeneration);
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(failure, "يجب أن يفشل إدراج البذور بسبب العطل المقصود");
+    assert.match(
+      `${failure.message}\n${failure.cause?.message ?? ""}`,
+      /فشل مقصود لاختبار التراجع الذري للبذور/,
+    );
+    const recordsAfterFailure = await db.select().from(erpRecordsTable)
+      .where(eq(erpRecordsTable.organizationId, organization.id));
+    assert.equal(recordsAfterFailure.length, 0, "يجب ألا تبقى أي سجلات بذور بعد فشل التهيئة");
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${triggerName} ON erp_records`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${triggerFunction}()`));
+  }
+
+  const firstRetry = await seedDemoData(organization.id, organization.dataGeneration);
+  assert.ok(firstRetry.created > 0, "يجب أن تنشئ إعادة المحاولة المجموعة الكاملة");
+  await assertInitializedOrganization(organization.id, "إعادة المحاولة بعد فشل البذور");
+
+  const secondRetry = await seedDemoData(organization.id, organization.dataGeneration);
+  assert.deepEqual(secondRetry, { created: 0 }, "يجب ألا تعيد إعادة المحاولة إنشاء المجموعة مرة أخرى");
+  await assertInitializedOrganization(organization.id, "إعادة المحاولة الثانية للبذور");
 });
