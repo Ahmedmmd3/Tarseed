@@ -1244,6 +1244,9 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
           }
           if (action === "correct" && Array.isArray(effectData.items)) {
             const grouped = new Map<string, { productId: number; warehouseId: number; quantity: number; unitPriceExVat: number; vatRate: number }>();
+            const sourceItems = Array.isArray(source.data.items)
+              ? source.data.items.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+              : [];
             for (const rawItem of effectData.items) {
               if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) throw new SourceCorrectionError(400, "أحد أصناف الفاتورة المصححة غير صالح.");
               const item = rawItem as Record<string, unknown>;
@@ -1251,8 +1254,14 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
               const warehouseId = Number(item.warehouseId ?? effectData.warehouseId);
               const quantity = Number(item.quantity);
               const unitPriceExVat = asNumber(item.unitPriceExVat ?? item.unitPrice);
-              const vatRate = asNumber(item.vatRate ?? (Array.isArray(source.data.items) ? (source.data.items[0] as Record<string, unknown> | undefined)?.vatRate : 15) ?? 15);
-              if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(warehouseId) || warehouseId <= 0 || !Number.isFinite(quantity) || quantity <= 0 || unitPriceExVat < 0 || vatRate < 0) {
+              const sourceItem = sourceItems.find((candidate) =>
+                Number(candidate.productId) === productId
+                && Number(candidate.warehouseId ?? source.data.warehouseId) === warehouseId
+              );
+              const product = productRows.get(productId);
+              const vatRate = asNumber(sourceItem?.vatRate ?? product?.vatRate ?? 15);
+              const requestedVatRate = item.vatRate == null ? vatRate : Number(item.vatRate);
+              if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(warehouseId) || warehouseId <= 0 || !Number.isFinite(quantity) || quantity <= 0 || unitPriceExVat < 0 || ![0, 5, 15].includes(vatRate) || requestedVatRate !== vatRate) {
                 throw new SourceCorrectionError(400, "أحد أصناف الفاتورة المصححة غير صالح.");
               }
               const key = `${productId}:${warehouseId}:${unitPriceExVat}:${vatRate}`;

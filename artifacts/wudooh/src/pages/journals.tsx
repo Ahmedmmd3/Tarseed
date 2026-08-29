@@ -104,12 +104,12 @@ export default function Journals() {
   const [adjustmentOperationId, setAdjustmentOperationId] = useState('');
   const [attachmentJournal, setAttachmentJournal] = useState<Journal | null>(null);
 
-  const activeAccounts = useMemo(() => accounts.filter((account) => account.status === 'active').sort((left, right) => left.code.localeCompare(right.code, 'en')), [accounts]);
+  const activeAccounts = useMemo(() => accounts.filter((account) => account.status === 'active').sort((left, right) => String(left.code ?? '').localeCompare(String(right.code ?? ''), 'en')), [accounts]);
   const filteredJournals = useMemo(() => journals
-    .filter((journal) => (!fromDate || journal.date >= fromDate) && (!toDate || journal.date <= toDate))
+    .filter((journal) => (!fromDate || String(journal.date ?? '') >= fromDate) && (!toDate || String(journal.date ?? '') <= toDate))
     .filter((journal) => statusFilter === 'all' || journal.status === statusFilter)
-    .filter((journal) => !search.trim() || journal.number.toLocaleLowerCase('ar').includes(search.trim().toLocaleLowerCase('ar')) || journal.description.toLocaleLowerCase('ar').includes(search.trim().toLocaleLowerCase('ar')))
-    .sort((left, right) => right.date.localeCompare(left.date) || right.number.localeCompare(left.number, 'en')), [fromDate, journals, search, statusFilter, toDate]);
+    .filter((journal) => !search.trim() || String(journal.number ?? '').toLocaleLowerCase('ar').includes(search.trim().toLocaleLowerCase('ar')) || String(journal.description ?? '').toLocaleLowerCase('ar').includes(search.trim().toLocaleLowerCase('ar')))
+    .sort((left, right) => String(right.date ?? '').localeCompare(String(left.date ?? '')) || String(right.number ?? '').localeCompare(String(left.number ?? ''), 'en')), [fromDate, journals, search, statusFilter, toDate]);
 
   const addLine = () => setLines((current) => [...current, { accountId: '', debit: 0, credit: 0 }]);
   const removeLine = (index: number) => setLines((current) => current.length > 2 ? current.filter((_, lineIndex) => lineIndex !== index) : current);

@@ -82,6 +82,20 @@ async function remove(cookie, path) {
   return request(path, { method: "DELETE", cookie });
 }
 
+async function previewProductImport(cookie, records) {
+  const form = new FormData();
+  form.set("tableName", "products");
+  form.set("format", "json");
+  form.set("file", new Blob([JSON.stringify({ records })], { type: "application/json" }), "products.json");
+  const response = await fetch(`${apiBase}/data-transfer/preview`, {
+    method: "POST",
+    headers: { Origin: origin, Cookie: cookie },
+    body: form,
+  });
+  const payload = await response.json().catch(() => ({}));
+  return { response, payload };
+}
+
 async function createScenario({ initialQuantity, transferQuantity }) {
   const owner = await registerOwner();
   const secondCookie = await login(owner.email, owner.password);
@@ -453,6 +467,112 @@ test("يرفض الخادم المواقع غير الموجودة أو التا
     reason: "موقع تابع لمنشأة أخرى",
   });
   assert.equal(foreign.response.status, 404, JSON.stringify(foreign.payload));
+});
+
+test("يحفظ ضريبة المنتج ويحسب سلة مختلطة من 0 و5 و15 بالمئة", async () => {
+  const owner = await registerOwner();
+  const locations = await request("/data/warehouses", { cookie: owner.cookie });
+  assert.equal(locations.response.status, 200, JSON.stringify(locations.payload));
+  const warehouse = locations.payload.records[0];
+
+  const invalid = await post(owner.cookie, "/data/products", {
+    name: unique("ضريبة غير صالحة"), stock: 0, sellPrice: 100, vatRate: 7.5,
+  });
+  assert.equal(invalid.response.status, 400, JSON.stringify(invalid.payload));
+
+  const importedName = unique("منتج مستورد بضريبة افتراضية");
+  const importPreview = await previewProductImport(owner.cookie, [{ name: importedName, stock: 0, sellPrice: 100, vatRate: null }]);
+  assert.equal(importPreview.response.status, 200, JSON.stringify(importPreview.payload));
+  assert.equal(importPreview.payload.valid, true, JSON.stringify(importPreview.payload));
+  const importCommit = await post(owner.cookie, "/data-transfer/commit", {
+    previewId: importPreview.payload.previewId,
+    clientOperationId: crypto.randomUUID(),
+  });
+  assert.equal(importCommit.response.status, 201, JSON.stringify(importCommit.payload));
+  const importedProducts = await request("/data/products", { cookie: owner.cookie });
+  assert.equal(importedProducts.payload.records.find((product) => product.name === importedName)?.vatRate, 15);
+
+  const invalidImportPreview = await previewProductImport(owner.cookie, [{ name: unique("منتج مستورد غير صالح"), stock: 0, sellPrice: 100, vatRate: -5 }]);
+  assert.equal(invalidImportPreview.response.status, 200, JSON.stringify(invalidImportPreview.payload));
+  assert.equal(invalidImportPreview.payload.valid, false);
+  assert.match(invalidImportPreview.payload.errors.join(" "), /ضريبة المنتج/);
+
+  const products = [];
+  for (const vatRate of [0, 5, 15]) {
+    const created = await post(owner.cookie, "/data/products", {
+      name: unique(`منتج ضريبة ${vatRate}`), stock: 0, sellPrice: 100, vatRate,
+    });
+    assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+    assert.equal(created.payload.record.vatRate, vatRate);
+    products.push(created.payload.record);
+  }
+
+  const purchase = await post(owner.cookie, "/inventory/purchase-receipts", {
+    orderNumber: unique("PO-mixed-tax"),
+    supplierName: "مورد الضرائب المختلطة",
+    date: "2027-01-10",
+    warehouseId: warehouse.id,
+    paymentMethod: "cash",
+    clientOperationId: crypto.randomUUID(),
+    items: products.map((product) => ({ productId: product.id, quantity: 3, unitCostExVat: 100 })),
+  });
+  assert.equal(purchase.response.status, 200, JSON.stringify(purchase.payload));
+  assert.equal(purchase.payload.purchase.subtotal, 900);
+  assert.equal(purchase.payload.purchase.tax, 60);
+  assert.equal(purchase.payload.purchase.total, 960);
+  assert.deepEqual(purchase.payload.purchase.items.map((item) => item.vatRate).sort((a, b) => a - b), [0, 5, 15]);
+
+  const checkout = await post(owner.cookie, "/inventory/checkout", {
+    warehouseId: warehouse.id,
+    issueDate: "2027-01-11",
+    paymentMethod: "cash",
+    clientOperationId: crypto.randomUUID(),
+    items: products.map((product) => ({ productId: product.id, quantity: 1 })),
+  });
+  assert.equal(checkout.response.status, 200, JSON.stringify(checkout.payload));
+  assert.equal(checkout.payload.invoice.subtotal, 300);
+  assert.equal(checkout.payload.invoice.tax, 20);
+  assert.equal(checkout.payload.invoice.total, 320);
+  assert.deepEqual(checkout.payload.invoice.items.map((item) => item.vatRate).sort((a, b) => a - b), [0, 5, 15]);
+
+  const fivePercentProduct = products.find((product) => product.vatRate === 5);
+  const updated = await patch(owner.cookie, `/data/products/${fivePercentProduct.id}`, { vatRate: 0 });
+  assert.equal(updated.response.status, 200, JSON.stringify(updated.payload));
+  const invoices = await request("/data/invoices", { cookie: owner.cookie });
+  const persistedInvoice = invoices.payload.records.find((invoice) => invoice.id === checkout.payload.invoice.id);
+  assert.equal(persistedInvoice.tax, 20, "تغيير المنتج لا يعيد حساب ضريبة الفاتورة التاريخية");
+  assert.deepEqual(persistedInvoice.items.map((item) => item.vatRate).sort((a, b) => a - b), [0, 5, 15]);
+
+  const invalidCorrection = await request(`/accounting/sources/invoices/${checkout.payload.invoice.id}/correct`, {
+    method: "POST",
+    cookie: owner.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      reason: "رفض ضريبة غير مطابقة",
+      effectiveDate: "2027-01-12",
+      replacement: {
+        items: [{ productId: fivePercentProduct.id, warehouseId: warehouse.id, quantity: 1, unitPriceExVat: 100, vatRate: 7.5 }],
+      },
+    },
+  });
+  assert.equal(invalidCorrection.response.status, 400, JSON.stringify(invalidCorrection.payload));
+
+  const correction = await request(`/accounting/sources/invoices/${checkout.payload.invoice.id}/correct`, {
+    method: "POST",
+    cookie: owner.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      reason: "تصحيح يحفظ لقطة ضريبة المنتج الأصلية",
+      effectiveDate: "2027-01-12",
+      replacement: {
+        items: [{ productId: fivePercentProduct.id, warehouseId: warehouse.id, quantity: 1, unitPriceExVat: 100 }],
+      },
+    },
+  });
+  assert.equal(correction.response.status, 201, JSON.stringify(correction.payload));
+  assert.equal(correction.payload.source.items[0].vatRate, 5);
+  assert.equal(correction.payload.source.tax, 5);
+  assert.equal(correction.payload.source.total, 105);
 });
 
 test("استلام دفعتين يحسب VAT ويستهلك FIFO ويؤرشف القيود وإعادة الطلب", async () => {

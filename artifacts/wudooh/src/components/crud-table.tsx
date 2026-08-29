@@ -207,7 +207,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
       setFormData(Object.fromEntries(fields.map((field) => [field.key, item[field.key] ?? ''])));
     } else {
       setEditingId(null);
-      setFormData({});
+      setFormData(Object.fromEntries(fields.map((field) => [field.key, field.key === 'vatRate' ? 15 : ''])));
     }
     setOpen(true);
   };
@@ -299,8 +299,8 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
                           id={f.key}
                           required={f.required}
                           className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                          value={formData[f.key] || ''}
-                          onChange={(e) => setFormData({ ...formData, [f.key]: e.target.value })}
+                          value={formData[f.key] ?? ''}
+                          onChange={(e) => setFormData({ ...formData, [f.key]: f.options?.some((option) => typeof option.value === 'number') ? Number(e.target.value) : e.target.value })}
                         >
                           <option value="">اختر {f.label}</option>
                           {f.options?.map((opt) => (

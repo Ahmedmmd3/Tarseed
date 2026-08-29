@@ -14,7 +14,7 @@ import { CrudTable } from '@/components/crud-table';
 import { AttachmentsPanel } from '@/components/attachments-panel';
 import { TransferDialog } from '@/components/transfer-dialog';
 
-type Product = { id: number | string; name: string };
+type Product = { id: number | string; name: string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
 type Supplier = { id: number | string; name: string };
 type PurchaseOrder = { id: number | string; orderNumber: string; supplierName: string; date: string; status: string; total: number | string };
@@ -95,7 +95,12 @@ function PurchaseReceiptsWorkspace() {
 
   const calculateTotals = () => {
     const subtotal = items.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitCostExVat)), 0);
-    const tax = subtotal * vatRate;
+    const tax = items.reduce((sum, item) => {
+      const product = productsCrud.data.find((candidate) => String(candidate.id) === String(item.productId));
+      const configuredRate = Number(product?.vatRate);
+      const rate = [0, 5, 15].includes(configuredRate) ? configuredRate / 100 : vatRate;
+      return sum + (Number(item.quantity) * Number(item.unitCostExVat) * rate);
+    }, 0);
     const total = subtotal + tax;
     return { subtotal, tax, total };
   };
@@ -255,7 +260,7 @@ function PurchaseReceiptsWorkspace() {
                   <span>{formatCurrency(totals.subtotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm text-slate-300">
-                  <span>الضريبة ({(vatRate * 100).toFixed(0)}%)</span>
+                  <span>الضريبة (حسب المنتج)</span>
                   <span>{formatCurrency(totals.tax)}</span>
                 </div>
                 <div className="flex justify-between text-lg font-bold border-t border-slate-700 pt-3">

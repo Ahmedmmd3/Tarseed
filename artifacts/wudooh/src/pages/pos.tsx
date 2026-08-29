@@ -10,7 +10,7 @@ import {
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 
-type Product = { id: number | string; name: string; sku?: string; salePrice?: number | string; price?: number | string; sellPrice?: number | string; stock?: number | string };
+type Product = { id: number | string; name: string; sku?: string; salePrice?: number | string; price?: number | string; sellPrice?: number | string; stock?: number | string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
 type InventoryBalance = { productId: number | string; warehouseId: number | string; quantity: number | string };
 type CartItem = { product: Product; quantity: number };
@@ -97,6 +97,10 @@ export default function POS() {
   }, [loadData]);
 
   const getPrice = (p: Product) => Number(p.sellPrice ?? p.salePrice ?? p.price ?? 0);
+  const getVatRate = (p: Product) => {
+    const rate = Number(p.vatRate);
+    return [0, 5, 15].includes(rate) ? rate / 100 : vatRate;
+  };
 
   const getStock = (p: Product) => {
     if (selectedWarehouse) {
@@ -158,10 +162,14 @@ export default function POS() {
 
   const clearCart = () => setCart([]);
 
-  const listedTotal = cart.reduce((sum, item) => sum + getPrice(item.product) * item.quantity, 0);
-  const subtotal = pricesIncludeVat ? listedTotal / (1 + vatRate) : listedTotal;
-  const tax = pricesIncludeVat ? listedTotal - subtotal : subtotal * vatRate;
-  const finalTotal = pricesIncludeVat ? listedTotal : subtotal + tax;
+  const cartTotals = cart.reduce((totals, item) => {
+    const listed = getPrice(item.product) * item.quantity;
+    const rate = getVatRate(item.product);
+    const net = pricesIncludeVat ? listed / (1 + rate) : listed;
+    const lineTax = pricesIncludeVat ? listed - net : net * rate;
+    return { subtotal: totals.subtotal + net, tax: totals.tax + lineTax, total: totals.total + net + lineTax };
+  }, { subtotal: 0, tax: 0, total: 0 });
+  const { subtotal, tax, total: finalTotal } = cartTotals;
 
   const cartHasInsufficientStock = cart.some((item) => item.quantity > getStock(item.product));
   const cartTotalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -349,7 +357,7 @@ export default function POS() {
           <span className="text-base font-bold text-slate-900" data-testid="text-cart-subtotal">{formatCurrency(subtotal)}</span>
         </div>
         <div className="mb-4 flex items-center justify-between">
-          <span className="text-sm font-bold text-slate-600">ضريبة القيمة المضافة ({(vatRate * 100).toFixed(0)}%)</span>
+          <span className="text-sm font-bold text-slate-600">ضريبة القيمة المضافة (حسب المنتج)</span>
           <span className="text-base font-bold text-slate-900" data-testid="text-cart-tax">{formatCurrency(tax)}</span>
         </div>
         <div className="mb-5 flex items-center justify-between rounded-xl bg-teal-50 p-3">

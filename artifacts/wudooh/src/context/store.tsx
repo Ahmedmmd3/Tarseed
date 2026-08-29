@@ -850,13 +850,29 @@ function normalizeAccount(account: Account): Account {
 }
 
 function normalizeJournal(journal: Journal): Journal {
+  const rawLines = Array.isArray(journal.lines) ? journal.lines : [];
   return {
     ...journal,
     id: String(journal.id),
+    number: typeof journal.number === 'string' && journal.number.trim() ? journal.number : 'قيد بلا رقم',
+    date: typeof journal.date === 'string' ? journal.date : '',
+    description: typeof journal.description === 'string' && journal.description.trim() ? journal.description : 'بدون بيان',
+    status: journal.status === 'posted' ? 'posted' : 'draft',
     ...(journal.sourceId == null ? {} : { sourceId: String(journal.sourceId) }),
     ...(journal.adjustsJournalId == null ? {} : { adjustsJournalId: String(journal.adjustsJournalId) }),
     ...(Array.isArray(journal.adjustedByJournalIds) ? { adjustedByJournalIds: journal.adjustedByJournalIds.map(String) } : {}),
-    lines: journal.lines.map((line) => ({ ...line, id: String(line.id), accountId: String(line.accountId), debit: Number(line.debit), credit: Number(line.credit) })),
+    lines: rawLines.map((rawLine, index) => {
+      const line = rawLine && typeof rawLine === 'object' ? rawLine : {} as JournalLine;
+      const debit = Number(line.debit ?? 0);
+      const credit = Number(line.credit ?? 0);
+      return {
+        ...line,
+        id: String(line.id ?? `legacy-${journal.id}-${index}`),
+        accountId: String(line.accountId ?? ''),
+        debit: Number.isFinite(debit) ? debit : 0,
+        credit: Number.isFinite(credit) ? credit : 0,
+      };
+    }),
   };
 }
 

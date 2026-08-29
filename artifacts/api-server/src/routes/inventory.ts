@@ -77,6 +77,16 @@ function output(record: ErpRecord, organizationId: number): RecordData {
   return { ...record.data, id: record.id, userId: organizationId };
 }
 
+function productVatRate(product: ErpRecord, fallbackRate: number): number {
+  const rawRate = product.data.vatRate;
+  if (rawRate == null || rawRate === "") return fallbackRate;
+  const rate = Number(rawRate);
+  if (![0, 5, 15].includes(rate)) {
+    throw new InventoryRouteError(`ضريبة الصنف «${String(product.data.name ?? product.id)}» غير صالحة.`, 409);
+  }
+  return rate;
+}
+
 async function lockRecord(tx: Transaction, organizationId: number, tableName: string, id: number): Promise<ErpRecord> {
   const [record] = await tx.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.id, id),
@@ -590,9 +600,10 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           throw new InventoryRouteError(`الرصيد المتاح للصنف «${String(product.data.name ?? product.id)}» لم يعد كافياً.`);
         }
         const unitPrice = priceOf(product);
+        const lineVatRate = productVatRate(product, vatRate);
         const grossPrice = money(unitPrice * quantity);
-        const lineNet = pricesIncludeVat ? money(grossPrice / (1 + vatRate / 100)) : grossPrice;
-        const vatAmount = pricesIncludeVat ? money(grossPrice - lineNet) : money(lineNet * vatRate / 100);
+        const lineNet = pricesIncludeVat ? money(grossPrice / (1 + lineVatRate / 100)) : grossPrice;
+        const vatAmount = pricesIncludeVat ? money(grossPrice - lineNet) : money(lineNet * lineVatRate / 100);
         const lineGross = money(lineNet + vatAmount);
         const allocations = await consumeFifo(tx, auth.organizationId, product, warehouseId, quantity);
         const costAmount = money(allocations.reduce((sum, allocation) => sum + Number(allocation.costAmount), 0));
@@ -603,7 +614,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           quantity,
           unitPrice,
           unitPriceExVat: money(lineNet / quantity),
-          vatRate,
+          vatRate: lineVatRate,
           vatAmount,
           lineNet,
           lineGross,
@@ -849,9 +860,10 @@ router.post("/inventory/purchase-receipts", requireAuth, requireSubscriptionAcce
         if (balance) await updateData(tx, balance, { ...balance.data, quantity: quantityOf(balance) + quantity });
         else await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryBalances", data: { productId: product.id, warehouseId, quantity } });
         const [layer] = await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryLayers", data: { productId: product.id, warehouseId, originalQuantity: quantity, remainingQuantity: quantity, unitCostExVat, receivedDate: date } }).returning();
+        const lineVatRate = productVatRate(product, vatRate);
         const lineNet = money(quantity * unitCostExVat);
-        const vatAmount = money(lineNet * vatRate / 100);
-        snapshots.push({ productId: product.id, name: String(product.data.name ?? `صنف #${product.id}`), quantity, unitCostExVat, vatRate, lineNet, vatAmount, lineGross: money(lineNet + vatAmount), fifoLayerId: layer.id });
+        const vatAmount = money(lineNet * lineVatRate / 100);
+        snapshots.push({ productId: product.id, name: String(product.data.name ?? `صنف #${product.id}`), quantity, unitCostExVat, vatRate: lineVatRate, lineNet, vatAmount, lineGross: money(lineNet + vatAmount), fifoLayerId: layer.id });
         await reconcileProductTotal(tx, auth.organizationId, product);
       }
       const subtotal = money(snapshots.reduce((sum, item) => sum + Number(item.lineNet), 0));

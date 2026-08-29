@@ -58,6 +58,12 @@ function canManageInventoryCatalog(auth: AuthContext): boolean {
   return auth.roleId === "owner" || auth.permissions.inventory === true;
 }
 
+function normalizeProductData(data: Record<string, unknown>, fallbackRate = 15): Record<string, unknown> | null {
+  const vatRate = Number(data.vatRate ?? fallbackRate);
+  if (![0, 5, 15].includes(vatRate)) return null;
+  return { ...data, vatRate };
+}
+
 function rejectUnauthorizedInventoryCatalogMutation(access: { auth: AuthContext; tableName: string }, response: Response): boolean {
   if (access.tableName === "warehouses" && access.auth.roleId !== "owner") {
     response.status(403).json({ error: "إدارة مواقع التشغيل متاحة لمالك المنشأة فقط." });
@@ -239,7 +245,12 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
   }
   const data = body as Record<string, unknown>;
   const clientOperationId = typeof data.clientOperationId === "string" ? data.clientOperationId : "";
-  const { clientOperationId: _clientOperationId, ...recordData } = data;
+  const { clientOperationId: _clientOperationId, ...rawRecordData } = data;
+  const recordData = access.tableName === "products" ? normalizeProductData(rawRecordData) : rawRecordData;
+  if (!recordData) {
+    response.status(400).json({ error: "اختر ضريبة المنتج: بدون ضريبة أو 5٪ أو 15٪." });
+    return;
+  }
   if (access.tableName === "products" && Object.hasOwn(body, "stock") && Number((body as Record<string, unknown>).stock) !== 0) {
     response.status(409).json({ error: "الرصيد الافتتاحي للمنتج يُسجّل بتسوية مخزون بعد إنشاء المنتج." });
     return;
@@ -371,7 +382,8 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "products"),
       )).for("update");
       if (!current) return { kind: "missing" as const };
-      const data = { ...current.data, ...(body as Record<string, unknown>), stock: current.data.stock };
+      const data = normalizeProductData({ ...current.data, ...(body as Record<string, unknown>), stock: current.data.stock }, Number(current.data.vatRate ?? 15));
+      if (!data) return { kind: "invalid-tax" as const };
       if (!isLocationAllowed(currentAuth, access.tableName, data, current.id)) {
         return { kind: "forbidden" as const };
       }
@@ -389,6 +401,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     }
     if (result.kind === "forbidden") {
       response.status(403).json({ error: "ليس لديك صلاحية للمواقع المحددة." });
+      return;
+    }
+    if (result.kind === "invalid-tax") {
+      response.status(400).json({ error: "اختر ضريبة المنتج: بدون ضريبة أو 5٪ أو 15٪." });
       return;
     }
     await audit(access.auth, response, "products_updated", String(id));

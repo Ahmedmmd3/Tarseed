@@ -16,7 +16,7 @@ const fields: Record<string, Set<string>> = {
   accounts: new Set(["code", "name", "type", "parent", "openingBalance", "balance", "status", "clientOperationId"]),
   customers: new Set(["name", "companyName", "fullName", "phone", "email", "address", "vatNumber", "status", "clientOperationId"]),
   suppliers: new Set(["name", "companyName", "fullName", "phone", "email", "address", "vatNumber", "status", "clientOperationId"]),
-  products: new Set(["name", "sku", "barcode", "category", "description", "sellPrice", "purchasePrice", "cost", "price", "stock", "unit", "warehouseId", "status", "clientOperationId"]),
+  products: new Set(["name", "sku", "barcode", "category", "description", "sellPrice", "purchasePrice", "cost", "price", "stock", "unit", "warehouseId", "status", "vatRate", "clientOperationId"]),
   employees: new Set(["name", "fullName", "phone", "email", "position", "department", "salary", "status", "clientOperationId"]),
   projects: new Set(["name", "description", "status", "startDate", "endDate", "warehouseId", "clientOperationId"]),
   expenses: new Set(["description", "amount", "date", "category", "vendor", "paymentMethod", "paid", "warehouseId", "clientOperationId"]),
@@ -91,6 +91,11 @@ function validateRows(tableName: string, rows: Array<Record<string, unknown>>): 
     if (row.clientOperationId !== undefined && (typeof row.clientOperationId !== "string" || row.clientOperationId.length > 200)) { fail("معرّف العملية في السجل غير صالح."); return; }
     if (tableName === "accounts") { if (typeof row.code !== "string" || !row.code.trim() || !["asset", "liability", "equity", "revenue", "expense"].includes(String(row.type)) || typeof row.name !== "string" || !row.name.trim()) fail("الحساب يحتاج رمزاً واسماً ونوعاً صحيحاً."); else if (codes.has(row.code)) fail("رمز الحساب مكرر في الملف."); else codes.add(row.code); }
     if (["customers", "suppliers", "employees", "projects", "products"].includes(tableName) && typeof row.name !== "string" && typeof row.companyName !== "string" && typeof row.fullName !== "string") fail("يلزم إدخال اسم للسجل.");
+    if (tableName === "products") {
+      const vatRate = row.vatRate == null || row.vatRate === "" ? 15 : Number(row.vatRate);
+      if (![0, 5, 15].includes(vatRate)) fail("ضريبة المنتج يجب أن تكون بدون ضريبة أو 5٪ أو 15٪.");
+      else row.vatRate = vatRate;
+    }
     if (tableName === "expenses" && (!date(row.date) || typeof row.description !== "string" || !row.description.trim() || !number(row.amount) || Number(row.amount) < 0)) fail("المصروف يحتاج تاريخاً ووصفاً ومبلغاً صحيحاً.");
     if (tableName === "journalEntries") {
       const lines = row.lines;
