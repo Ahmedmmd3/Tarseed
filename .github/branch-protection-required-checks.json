@@ -1,14 +1,21 @@
 {
   "version": 1,
   "branch": "main",
-  "required_status_checks": ["API server clean typecheck", "Frontend typecheck"],
+  "required_status_checks": [
+    "API server clean typecheck",
+    "Frontend typecheck",
+    "Web end-to-end tests",
+    "Web PWA tests"
+  ],
   "rulesets": [],
   "protection": {
     "required_status_checks": {
       "strict": true,
       "checks": [
         { "context": "API server clean typecheck", "app_id": 15368 },
-        { "context": "Frontend typecheck", "app_id": 15368 }
+        { "context": "Frontend typecheck", "app_id": 15368 },
+        { "context": "Web end-to-end tests", "app_id": 15368 },
+        { "context": "Web PWA tests", "app_id": 15368 }
       ]
     },
     "required_pull_request_reviews": null,

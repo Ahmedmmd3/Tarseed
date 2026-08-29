@@ -3,11 +3,12 @@ import { expect, test } from '@playwright/test';
 async function registerSharedSession(page) {
   const uniqueId = crypto.randomUUID().slice(0, 8);
   const email = `source-status-${uniqueId}@example.test`;
+  const phone = `05${BigInt(`0x${uniqueId}`).toString().slice(-8).padStart(8, '0')}`;
   const password = 'Safe-test-password-123';
   const projectName = `منشأة مصدر البيانات ${uniqueId}`;
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  const registration = await page.evaluate(async ({ email, password, projectName }) => {
+  const registration = await page.evaluate(async ({ email, phone, password, projectName }) => {
     const response = await fetch('/api/auth/register', {
       method: 'POST',
       credentials: 'include',
@@ -16,15 +17,36 @@ async function registerSharedSession(page) {
         projectName,
         name: 'مالك اختبار مصدر البيانات',
         email,
+        phone,
         password,
       }),
     });
     return { status: response.status, body: await response.text() };
-  }, { email, password, projectName });
+  }, { email, phone, password, projectName });
 
-  expect(registration.status, registration.body).toBe(201);
-  const payload = JSON.parse(registration.body);
-  expect(payload.user).toBeTruthy();
+  expect(registration.status, registration.body).toBe(202);
+  const emailVerification = await page.evaluate(async ({ email }) => {
+    const response = await fetch('/api/auth/email-verification/verify', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code: '654321' }),
+    });
+    return { status: response.status, body: await response.text() };
+  }, { email });
+  expect(emailVerification.status, emailVerification.body).toBe(200);
+
+  const phoneVerification = await page.evaluate(async ({ email }) => {
+    const response = await fetch('/api/auth/phone-verification/verify', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, code: '246810' }),
+    });
+    return { status: response.status, body: await response.text() };
+  }, { email });
+  expect(phoneVerification.status, phoneVerification.body).toBe(200);
+  expect(JSON.parse(phoneVerification.body).user).toBeTruthy();
   return { email, projectName };
 }
 
@@ -38,6 +60,25 @@ async function submitJournal(page, { description, debitAccountId, creditAccountI
   await page.getByTestId('button-submit-journal').click();
 }
 
+async function getSharedRequestHeaders(page, apiOrigin) {
+  const response = await page.request.get(`${apiOrigin}/api/auth/me`, {
+    headers: { Origin: apiOrigin },
+  });
+  const payload = await response.json();
+  expect(response.ok(), JSON.stringify(payload)).toBeTruthy();
+  expect(payload.user?.dataGeneration).toBeTruthy();
+  return {
+    Origin: apiOrigin,
+    'X-Wudooh-Data-Generation': String(payload.user.dataGeneration),
+  };
+}
+
+async function triggerSharedDataReload(page) {
+  await page.evaluate(() => {
+    window.dispatchEvent(new Event('wudooh:stale-data-generation'));
+  });
+}
+
 test('يبقي الزائر المحلي على بيانات المتصفح عند توقف الخدمة المشتركة', async ({ page }) => {
   const apiRequests = [];
 
@@ -48,11 +89,9 @@ test('يبقي الزائر المحلي على بيانات المتصفح عن
 
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
 
-  const status = page.getByTestId('connection-status-local');
-  await expect(status).toBeVisible();
-  await expect(status).toContainText('وضع البيانات المحلي');
-  await expect(status).toContainText('لن تظهر على الأجهزة أو لأعضاء الفريق');
-  await expect(status).toContainText('سجّل الدخول للاتصال بسجل المنشأة المشترك');
+  await expect(page.getByTestId('authentication-required-message')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'سجّل الدخول للوصول إلى مساحة العمل' })).toBeVisible();
+  await expect(page.getByTestId('link-sign-in')).toBeVisible();
   expect(apiRequests).toEqual([]);
 });
 
@@ -63,8 +102,7 @@ test('يعرض السجل المشترك بعد إنشاء جلسة حقيقية
   const status = page.getByTestId('connection-status-remote');
   await expect(status).toBeVisible();
   await expect(status).toContainText('متصل بسجل المنشأة المشترك');
-  await expect(status).toContainText('التغييرات محفوظة في الخدمة المشتركة');
-  await expect(status).toContainText('تظهر للأجهزة وأعضاء الفريق المصرح لهم');
+  await expect(status).toContainText('التغييرات محفوظة وتظهر للأجهزة وأعضاء الفريق المصرح لهم');
 });
 
 test('يبقي شريط الحساب والسجل المشترك بعد تحديث لوحة التحكم', async ({ page }) => {
@@ -85,7 +123,7 @@ test('يبقي شريط الحساب والسجل المشترك بعد تحدي
   await expect(accountBar).toContainText(session.email);
   await expect(status).toBeVisible();
   await expect(status).toContainText('متصل بسجل المنشأة المشترك');
-  await expect(status).toContainText('التغييرات محفوظة في الخدمة المشتركة');
+  await expect(status).toContainText('التغييرات محفوظة وتظهر للأجهزة وأعضاء الفريق المصرح لهم');
 });
 
 test('ينتقل إلى الوضع المحلي برسالة عربية عند رفض الجلسة', async ({ page }) => {
@@ -100,29 +138,29 @@ test('ينتقل إلى الوضع المحلي برسالة عربية عند �
   });
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
 
-  const status = page.getByTestId('connection-status-local');
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByTestId('shared-account-bar')).toHaveCount(0);
-  await expect(status).toBeVisible();
-  await expect(status).toContainText('وضع البيانات المحلي');
-  await expect(status).toContainText('التغييرات محفوظة في هذا المتصفح فقط');
-  await expect(status).toContainText('سجّل الدخول للاتصال بسجل المنشأة المشترك');
+  await expect(page.getByTestId('authentication-required-message')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'سجّل الدخول للوصول إلى مساحة العمل' })).toBeVisible();
 });
 
 test('يبقي جلسة مشتركة قابلة لإعادة الاتصال عند توقف الخدمة', async ({ page }) => {
   await registerSharedSession(page);
+  await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+  await page.waitForLoadState('networkidle');
   const apiRequests = [];
 
   await page.route('**/api/**', async (route) => {
     apiRequests.push(route.request().url());
     await route.abort('failed');
   });
-  await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
+  await triggerSharedDataReload(page);
 
   const status = page.getByTestId('connection-status-local');
   await expect(status).toBeVisible();
-  await expect(status).toContainText('تعذر الوصول إلى السجل المشترك');
-  await expect(status).toContainText('لن تتم مزامنة التغييرات حتى إعادة الاتصال بالسجل المشترك');
+  await expect(status).toContainText('غير متصل بالسجل المشترك');
+  await expect(status).toContainText('نعرض البيانات المحفوظة محلياً');
   await expect(page.getByTestId('button-retry-shared-connection')).toBeVisible();
   expect(apiRequests).toHaveLength(1);
   expect(apiRequests[0]).toContain('/api/auth/me');
@@ -134,7 +172,7 @@ test('يستعيد السجل المشترك بعد عودة الخدمة دون
   await expect(page.getByTestId('connection-status-remote')).toBeVisible();
 
   const apiOrigin = 'http://127.0.0.1:8081';
-  const requestHeaders = { Origin: apiOrigin };
+  const requestHeaders = await getSharedRequestHeaders(page, apiOrigin);
   const accountResponse = await page.request.post(`${apiOrigin}/api/data/accounts`, {
       headers: requestHeaders,
       data: {
@@ -178,11 +216,11 @@ test('يستعيد السجل المشترك بعد عودة الخدمة دون
   await page.route('**/api/**', async (route) => {
     await route.abort('failed');
   });
-  await page.reload({ waitUntil: 'domcontentloaded' });
+  await triggerSharedDataReload(page);
 
   const localStatus = page.getByTestId('connection-status-local');
   await expect(localStatus).toBeVisible();
-  await expect(localStatus).toContainText('تعذر الوصول إلى السجل المشترك');
+  await expect(localStatus).toContainText('غير متصل بالسجل المشترك');
   await expect(page.getByTestId(`card-journal-${journal.id}`)).toContainText(journal.description);
 
   await page.unroute('**/api/**');
@@ -201,7 +239,7 @@ test('يرسل القيد الذي أُنشئ أثناء الانقطاع بعد
   await expect(page.getByTestId('connection-status-remote')).toBeVisible();
 
   const apiOrigin = 'http://127.0.0.1:8081';
-  const requestHeaders = { Origin: apiOrigin };
+  const requestHeaders = await getSharedRequestHeaders(page, apiOrigin);
   const uniqueId = crypto.randomUUID().slice(0, 8);
   const accounts = await Promise.all([
     { code: `901${uniqueId.slice(0, 3)}`, name: `حساب مدين ${uniqueId}`, type: 'asset' },
@@ -224,8 +262,8 @@ test('يرسل القيد الذي أُنشئ أثناء الانقطاع بعد
   await page.route('**/api/**', async (route) => {
     await route.abort('failed');
   });
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('connection-status-local')).toContainText('تعذر الوصول إلى السجل المشترك');
+  await triggerSharedDataReload(page);
+  await expect(page.getByTestId('connection-status-local')).toContainText('غير متصل بالسجل المشترك');
 
   const description = `قيد محفوظ أثناء الانقطاع ${uniqueId}`;
   await submitJournal(page, { description, debitAccountId: accounts[0], creditAccountId: accounts[1], amount: 125 });
@@ -341,7 +379,7 @@ test('يحفظ ترحيل القيد محلياً ويعيد المحاولة ب
   await expect(page.getByTestId('connection-status-remote')).toBeVisible();
 
   const apiOrigin = 'http://127.0.0.1:8081';
-  const requestHeaders = { Origin: apiOrigin };
+  const requestHeaders = await getSharedRequestHeaders(page, apiOrigin);
   const uniqueId = crypto.randomUUID().slice(0, 8);
   const accounts = await Promise.all([
     { code: `911${uniqueId.slice(0, 3)}`, name: `حساب ترحيل مدين ${uniqueId}`, type: 'asset' },
@@ -397,7 +435,7 @@ test('يحفظ ترحيل القيد محلياً ويعيد المحاولة ب
   });
 
   await page.getByTestId(`button-post-${journalId}`).click();
-  await expect(page.getByTestId('connection-status-local')).toContainText('تعذر الوصول إلى السجل المشترك');
+  await expect(page.getByTestId('connection-status-local')).toContainText('غير متصل بالسجل المشترك');
   await expect(page.getByTestId(`card-journal-${journalId}`)).toContainText('مرحّل');
   await expect(page.getByTestId('sync-queue-status')).toContainText('تعذرت مزامنة 1 من 1 عملية');
 

@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './test',
   testMatch: '**/*.e2e.mjs',
+  testIgnore: '**/pwa.e2e.mjs',
   outputDir: '../../.cache/wudooh-playwright',
   timeout: 30_000,
   expect: {
@@ -14,7 +15,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'PORT=8081 pnpm --filter @workspace/api-server run dev',
+      command: 'pnpm --filter @workspace/db run push && pnpm --filter @workspace/api-server run build && NODE_ENV=test EMAIL_VERIFICATION_TEST_CODE=654321 PHONE_VERIFICATION_TEST_CODE=246810 PORT=8081 pnpm --filter @workspace/api-server run start',
       url: 'http://127.0.0.1:8081/api/healthz',
       reuseExistingServer: false,
       timeout: 60_000,
