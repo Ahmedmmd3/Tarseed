@@ -3,6 +3,10 @@ import { logger } from "./lib/logger";
 import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync } from "./lib/stripe-client";
 import { ensureInitialPlatformAdmin } from "./lib/platform-admin-bootstrap";
+import {
+  INITIALIZATION_RETRY_DELAY_MS,
+  reconcileStaleOrganizationInitializations,
+} from "./lib/seed-demo-data";
 
 const rawPort = process.env["PORT"];
 
@@ -54,6 +58,15 @@ try {
       process.exit(1);
     }
     logger.info({ port }, "Server listening");
+    const reconciliationTimer = setInterval(() => {
+      void reconcileStaleOrganizationInitializations().catch((reconciliationError) => {
+        logger.error({ err: reconciliationError }, "Automatic organization initialization reconciliation failed");
+      });
+    }, INITIALIZATION_RETRY_DELAY_MS);
+    reconciliationTimer.unref();
+    void reconcileStaleOrganizationInitializations().catch((reconciliationError) => {
+      logger.error({ err: reconciliationError }, "Initial organization initialization reconciliation failed");
+    });
   });
 } catch (error) {
   logger.error({ err: error }, "Server initialization failed");

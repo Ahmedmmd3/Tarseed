@@ -1,5 +1,11 @@
-import { and, eq, sql } from "drizzle-orm";
-import { db, erpRecordsTable, organizationsTable } from "@workspace/db";
+import { randomUUID } from "node:crypto";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import {
+  db,
+  erpRecordsTable,
+  organizationsTable,
+  platformAuditLogsTable,
+} from "@workspace/db";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
@@ -7,6 +13,16 @@ type DemoRecordData = Record<string, unknown>;
 
 export const DEMO_SEED_KEY = "new-organization-v1";
 const DEMO_SEED_LOCK_NAMESPACE = 8_421_307;
+export const INITIALIZATION_STALE_AFTER_MS = 5 * 60 * 1000;
+export const INITIALIZATION_RETRY_DELAY_MS = 60 * 1000;
+export const INITIALIZATION_LEASE_MS = 15 * 60 * 1000;
+export const MAX_AUTOMATIC_INITIALIZATION_ATTEMPTS = 3;
+const MAX_AUTOMATIC_RECONCILIATION_BATCH = 10;
+const AUTOMATIC_ACTOR_NAME = "نظام المصالحة الخلفية";
+const AUTOMATIC_RETRY_EXHAUSTED_FAILURE: InitializationFailure = {
+  code: "initialization_retry_exhausted",
+  reason: "تعذر إكمال تجهيز البيانات الأساسية تلقائياً. راجع سجل المنشأة وأعد المحاولة يدوياً.",
+};
 
 export const ORGANIZATION_INITIALIZATION_STATUS = {
   READY: "ready",
@@ -417,32 +433,83 @@ async function markOrganizationInitializationReady(
     initializationFailureCode: null,
     initializationFailureReason: null,
     initializationFailedAt: null,
+    initializationPendingAt: null,
+    initializationLastAttemptAt: null,
+    initializationLeaseToken: null,
+    initializationLeaseExpiresAt: null,
   }).where(eq(organizationsTable.id, organizationId));
+}
+
+type InitializationAttemptOptions = {
+  automatic?: boolean;
+  leaseToken?: string;
+};
+
+class InitializationLeaseLostError extends Error {
+  constructor() {
+    super("Organization initialization lease is no longer owned by this worker.");
+    this.name = "InitializationLeaseLostError";
+  }
+}
+
+function automaticAuditValues(
+  organizationId: number,
+  details: Record<string, unknown>,
+) {
+  return {
+    organizationId,
+    actorName: AUTOMATIC_ACTOR_NAME,
+    action: "organization_initialization_auto_retry",
+    entity: `organization:${organizationId}`,
+    details: JSON.stringify(details),
+  };
 }
 
 export async function initializeOrganization(
   organizationId: number,
   dataGeneration: number,
   now = new Date(),
+  options: InitializationAttemptOptions = {},
 ): Promise<{ created: number }> {
   const [organization] = await db.transaction(async (tx) => {
     const [current] = await tx.select({
       id: organizationsTable.id,
       initializationStatus: organizationsTable.initializationStatus,
+      initializationPendingAt: organizationsTable.initializationPendingAt,
+      initializationAttempts: organizationsTable.initializationAttempts,
+      initializationLeaseToken: organizationsTable.initializationLeaseToken,
+      initializationLeaseExpiresAt: organizationsTable.initializationLeaseExpiresAt,
     }).from(organizationsTable)
       .where(eq(organizationsTable.id, organizationId))
       .for("update");
     if (!current) return [];
     if (current.initializationStatus === ORGANIZATION_INITIALIZATION_STATUS.READY) return [current];
+    if (options.automatic) {
+      if (
+        !options.leaseToken
+        || current.initializationStatus !== ORGANIZATION_INITIALIZATION_STATUS.PENDING
+        || current.initializationLeaseToken !== options.leaseToken
+        || !current.initializationLeaseExpiresAt
+        || current.initializationLeaseExpiresAt <= now
+      ) {
+        throw new InitializationLeaseLostError();
+      }
+      return [current];
+    }
     const [updated] = await tx.update(organizationsTable).set({
       initializationStatus: ORGANIZATION_INITIALIZATION_STATUS.PENDING,
       initializationFailureCode: null,
       initializationFailureReason: null,
       initializationFailedAt: null,
+      initializationPendingAt: current.initializationPendingAt ?? now,
+      initializationLastAttemptAt: now,
+      initializationLeaseToken: null,
+      initializationLeaseExpiresAt: null,
       initializationAttempts: sql`${organizationsTable.initializationAttempts} + 1`,
     }).where(eq(organizationsTable.id, organizationId)).returning({
       id: organizationsTable.id,
       initializationStatus: organizationsTable.initializationStatus,
+      initializationAttempts: organizationsTable.initializationAttempts,
     });
     return updated ? [updated] : [];
   });
@@ -458,18 +525,185 @@ export async function initializeOrganization(
   }
 
   try {
-    return await seedDemoData(organizationId, dataGeneration, undefined, now);
+    if (!options.automatic) {
+      return await seedDemoData(organizationId, dataGeneration, undefined, now);
+    }
+    return await db.transaction(async (tx) => {
+      const [leased] = await tx.select({
+        initializationStatus: organizationsTable.initializationStatus,
+        initializationLeaseToken: organizationsTable.initializationLeaseToken,
+      }).from(organizationsTable)
+        .where(eq(organizationsTable.id, organizationId))
+        .for("update");
+      if (
+        !leased
+        || leased.initializationStatus !== ORGANIZATION_INITIALIZATION_STATUS.PENDING
+        || leased.initializationLeaseToken !== options.leaseToken
+      ) {
+        throw new InitializationLeaseLostError();
+      }
+      const result = await seedDemoData(organizationId, dataGeneration, tx, now);
+      await tx.insert(platformAuditLogsTable).values(automaticAuditValues(organizationId, {
+        outcome: "ready",
+        attempts: organization.initializationAttempts,
+        created: result.created,
+      }));
+      return result;
+    });
   } catch (error) {
+    if (error instanceof InitializationLeaseLostError) throw error;
     const failure = safeInitializationFailure(error);
-    await db.update(organizationsTable).set({
-      initializationStatus: ORGANIZATION_INITIALIZATION_STATUS.FAILED,
-      initializationFailureCode: failure.code,
-      initializationFailureReason: failure.reason,
-      initializationFailedAt: now,
-    }).where(and(
-      eq(organizationsTable.id, organizationId),
-      sql`${organizationsTable.initializationStatus} <> ${ORGANIZATION_INITIALIZATION_STATUS.READY}`,
-    ));
-    throw new OrganizationInitializationError(failure, error);
+    const attemptsExhausted = options.automatic
+      && organization.initializationAttempts >= MAX_AUTOMATIC_INITIALIZATION_ATTEMPTS;
+    const recordedFailure = attemptsExhausted
+      ? AUTOMATIC_RETRY_EXHAUSTED_FAILURE
+      : failure;
+    await db.transaction(async (tx) => {
+      const ownershipCondition = options.automatic
+        ? eq(organizationsTable.initializationLeaseToken, options.leaseToken ?? "")
+        : undefined;
+      const [updated] = await tx.update(organizationsTable).set({
+        initializationStatus: options.automatic && !attemptsExhausted
+          ? ORGANIZATION_INITIALIZATION_STATUS.PENDING
+          : ORGANIZATION_INITIALIZATION_STATUS.FAILED,
+        initializationFailureCode: recordedFailure.code,
+        initializationFailureReason: recordedFailure.reason,
+        initializationFailedAt: options.automatic && !attemptsExhausted ? null : now,
+        initializationLeaseToken: null,
+        initializationLeaseExpiresAt: null,
+      }).where(and(
+        eq(organizationsTable.id, organizationId),
+        sql`${organizationsTable.initializationStatus} <> ${ORGANIZATION_INITIALIZATION_STATUS.READY}`,
+        ownershipCondition,
+      )).returning({ id: organizationsTable.id });
+      if (options.automatic && !updated) throw new InitializationLeaseLostError();
+      if (options.automatic) {
+        await tx.insert(platformAuditLogsTable).values(automaticAuditValues(organizationId, {
+          outcome: attemptsExhausted ? "failed" : "retry_pending",
+          attempts: organization.initializationAttempts,
+          failureCode: recordedFailure.code,
+          failureReason: recordedFailure.reason,
+        }));
+      }
+    });
+    throw new OrganizationInitializationError(recordedFailure, error);
   }
+}
+
+type InitializationReconciliationResult = {
+  inspected: number;
+  retried: number;
+  failed: number;
+};
+
+export async function reconcileStaleOrganizationInitializations(
+  now = new Date(),
+  options: { organizationIds?: number[] } = {},
+): Promise<InitializationReconciliationResult> {
+  const staleBefore = new Date(now.getTime() - INITIALIZATION_STALE_AFTER_MS);
+  const retryAllowedBefore = new Date(now.getTime() - INITIALIZATION_RETRY_DELAY_MS);
+  const candidates = await db.transaction(async (tx) => {
+    const scopeCondition = options.organizationIds?.length
+      ? inArray(organizationsTable.id, options.organizationIds)
+      : undefined;
+    const pending = await tx.select({
+      id: organizationsTable.id,
+      dataGeneration: organizationsTable.dataGeneration,
+      initializationAttempts: organizationsTable.initializationAttempts,
+      initializationLeaseToken: organizationsTable.initializationLeaseToken,
+      initializationLeaseExpiresAt: organizationsTable.initializationLeaseExpiresAt,
+    }).from(organizationsTable).where(and(
+      eq(organizationsTable.initializationStatus, ORGANIZATION_INITIALIZATION_STATUS.PENDING),
+      sql`COALESCE(${organizationsTable.initializationPendingAt}, ${organizationsTable.createdAt}) <= ${staleBefore}`,
+      sql`(${organizationsTable.initializationLastAttemptAt} IS NULL OR ${organizationsTable.initializationLastAttemptAt} <= ${retryAllowedBefore})`,
+      sql`(${organizationsTable.initializationLeaseExpiresAt} IS NULL OR ${organizationsTable.initializationLeaseExpiresAt} <= ${now})`,
+      scopeCondition,
+    )).orderBy(asc(organizationsTable.id)).limit(MAX_AUTOMATIC_RECONCILIATION_BATCH).for("update");
+
+    const retryable = [];
+    let failed = 0;
+    for (const organization of pending) {
+      if (
+        organization.initializationLeaseToken
+        && organization.initializationLeaseExpiresAt
+        && organization.initializationLeaseExpiresAt <= now
+      ) {
+        await tx.insert(platformAuditLogsTable).values(automaticAuditValues(organization.id, {
+          outcome: "interrupted",
+          attempts: organization.initializationAttempts,
+          failureCode: "initialization_attempt_interrupted",
+        }));
+      }
+      if (organization.initializationAttempts >= MAX_AUTOMATIC_INITIALIZATION_ATTEMPTS) {
+        await tx.update(organizationsTable).set({
+          initializationStatus: ORGANIZATION_INITIALIZATION_STATUS.FAILED,
+          initializationFailureCode: AUTOMATIC_RETRY_EXHAUSTED_FAILURE.code,
+          initializationFailureReason: AUTOMATIC_RETRY_EXHAUSTED_FAILURE.reason,
+          initializationFailedAt: now,
+          initializationLeaseToken: null,
+          initializationLeaseExpiresAt: null,
+        }).where(and(
+          eq(organizationsTable.id, organization.id),
+          eq(organizationsTable.initializationStatus, ORGANIZATION_INITIALIZATION_STATUS.PENDING),
+        ));
+        await tx.insert(platformAuditLogsTable).values({
+          ...automaticAuditValues(organization.id, {
+            outcome: "failed",
+            failureCode: AUTOMATIC_RETRY_EXHAUSTED_FAILURE.code,
+            attempts: organization.initializationAttempts,
+          }),
+          action: "organization_initialization_auto_retries_exhausted",
+        });
+        failed += 1;
+        continue;
+      }
+
+      const leaseToken = randomUUID();
+      await tx.update(organizationsTable).set({
+        initializationLastAttemptAt: now,
+        initializationAttempts: sql`${organizationsTable.initializationAttempts} + 1`,
+        initializationLeaseToken: leaseToken,
+        initializationLeaseExpiresAt: new Date(now.getTime() + INITIALIZATION_LEASE_MS),
+      }).where(and(
+        eq(organizationsTable.id, organization.id),
+        eq(organizationsTable.initializationStatus, ORGANIZATION_INITIALIZATION_STATUS.PENDING),
+      ));
+      retryable.push({
+        ...organization,
+        initializationAttempts: organization.initializationAttempts + 1,
+        leaseToken,
+      });
+    }
+
+    return { pending, retryable, failed };
+  });
+
+  let retried = 0;
+  let failed = candidates.failed;
+  for (const organization of candidates.retryable) {
+    try {
+      await initializeOrganization(
+        organization.id,
+        organization.dataGeneration,
+        now,
+        { automatic: true, leaseToken: organization.leaseToken },
+      );
+      retried += 1;
+    } catch (error) {
+      const failure = safeInitializationFailure(error);
+      const exhausted = failure.code === AUTOMATIC_RETRY_EXHAUSTED_FAILURE.code;
+      console.error("Automatic organization initialization retry failed", {
+        failureCode: failure.code,
+        organizationId: organization.id,
+      });
+      if (exhausted) failed += 1;
+      retried += 1;
+    }
+  }
+
+  return {
+    inspected: candidates.pending.length,
+    retried,
+    failed,
+  };
 }

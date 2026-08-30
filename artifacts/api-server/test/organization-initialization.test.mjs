@@ -10,12 +10,22 @@ import {
   erpRecordsTable,
   organizationsTable,
   platformAdminsTable,
+  platformAuditLogsTable,
   pool,
   testWorkspaceInvitationsTable,
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
-import { DEMO_SEED_KEY, initializeOrganization, seedDemoData } from "../src/lib/seed-demo-data.ts";
+import {
+  DEMO_SEED_KEY,
+  INITIALIZATION_LEASE_MS,
+  INITIALIZATION_RETRY_DELAY_MS,
+  INITIALIZATION_STALE_AFTER_MS,
+  MAX_AUTOMATIC_INITIALIZATION_ATTEMPTS,
+  initializeOrganization,
+  reconcileStaleOrganizationInitializations,
+  seedDemoData,
+} from "../src/lib/seed-demo-data.ts";
 import { hashPassword, hashSessionToken } from "../src/lib/team-auth.ts";
 
 const execFileAsync = promisify(execFile);
@@ -421,4 +431,196 @@ test("تتراجع تهيئة البذور بالكامل بعد فشل إدرا
   assert.equal(concurrentCreatedCounts[0], 0, "يجب ألا تنشئ المحاولة المتزامنة الثانية أي سجلات");
   assert.ok(concurrentCreatedCounts[1] > 0, "يجب أن تنشئ محاولة واحدة فقط مجموعة البذور");
   await assertInitializedOrganization(stalePendingOrganization.id, "إعادة تهيئة الحالة المعلقة");
+});
+
+test("تعالج المصالحة الحالات المعلقة القديمة وتحترم التباعد وتوقف المحاولات المستنفدة", async () => {
+  const now = new Date("2026-08-30T12:00:00.000Z");
+  const stalePendingAt = new Date(now.getTime() - INITIALIZATION_STALE_AFTER_MS - 1);
+  const [recoverable] = await db.insert(organizationsTable).values({
+    name: `منشأة مصالحة ${suffix}`,
+    dataGeneration: 1,
+    initializationStatus: "pending",
+    initializationAttempts: 1,
+    initializationPendingAt: stalePendingAt,
+  }).returning();
+  organizationIds.push(recoverable.id);
+
+  const concurrentRecoveries = await Promise.all([
+    reconcileStaleOrganizationInitializations(now, {
+      organizationIds: [recoverable.id],
+    }),
+    reconcileStaleOrganizationInitializations(
+      new Date(now.getTime() + INITIALIZATION_RETRY_DELAY_MS),
+      { organizationIds: [recoverable.id] },
+    ),
+  ]);
+  assert.equal(concurrentRecoveries.reduce((sum, result) => sum + result.inspected, 0), 1);
+  assert.equal(concurrentRecoveries.reduce((sum, result) => sum + result.retried, 0), 1);
+  const [ready] = await db.select().from(organizationsTable)
+    .where(eq(organizationsTable.id, recoverable.id));
+  assert.equal(ready.initializationStatus, "ready");
+  assert.equal(ready.initializationAttempts, 2);
+  assert.equal(ready.initializationPendingAt, null);
+  await assertInitializedOrganization(recoverable.id, "المصالحة الخلفية");
+  const successfulAudit = await db.select().from(platformAuditLogsTable).where(and(
+    eq(platformAuditLogsTable.organizationId, recoverable.id),
+    eq(platformAuditLogsTable.action, "organization_initialization_auto_retry"),
+  ));
+  assert.equal(successfulAudit.length, 1);
+  const successfulDetails = JSON.parse(successfulAudit[0].details);
+  assert.equal(successfulDetails.outcome, "ready");
+  assert.equal(successfulDetails.attempts, 2);
+  assert.ok(successfulDetails.created > 0);
+
+  const [retrying] = await db.insert(organizationsTable).values({
+    name: `منشأة تباعد ${suffix}`,
+    dataGeneration: 1,
+    initializationStatus: "pending",
+    initializationAttempts: 1,
+    initializationPendingAt: stalePendingAt,
+  }).returning();
+  organizationIds.push(retrying.id);
+  const triggerFunction = `fail_auto_seed_${suffix}`;
+  const triggerName = `${triggerFunction}_trigger`;
+  const automaticErrorLogs = [];
+  const originalConsoleError = console.error;
+  console.error = (...args) => automaticErrorLogs.push(args);
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${triggerFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.organization_id = ${retrying.id}
+          AND NEW.table_name = 'products'
+          AND NEW.data->>'demoSeedKey' = '${DEMO_SEED_KEY}' THEN
+          RAISE EXCEPTION 'تفصيل داخلي سري لا يجب تسجيله';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${triggerName}
+      BEFORE INSERT ON erp_records
+      FOR EACH ROW EXECUTE FUNCTION ${triggerFunction}();
+    `));
+
+    await reconcileStaleOrganizationInitializations(now, {
+      organizationIds: [retrying.id],
+    });
+    const [pendingAfterFailure] = await db.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, retrying.id));
+    assert.equal(pendingAfterFailure.initializationStatus, "pending");
+    assert.equal(pendingAfterFailure.initializationAttempts, 2);
+    assert.equal(pendingAfterFailure.initializationFailureCode, "seed_data_error");
+
+    await reconcileStaleOrganizationInitializations(
+      new Date(now.getTime() + INITIALIZATION_RETRY_DELAY_MS - 1),
+      { organizationIds: [retrying.id] },
+    );
+    const [stillWaiting] = await db.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, retrying.id));
+    assert.equal(stillWaiting.initializationAttempts, 2, "يجب ألا تبدأ محاولة قبل انقضاء مهلة التباعد");
+
+    await reconcileStaleOrganizationInitializations(
+      new Date(now.getTime() + INITIALIZATION_RETRY_DELAY_MS),
+      { organizationIds: [retrying.id] },
+    );
+    const [exhausted] = await db.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, retrying.id));
+    assert.equal(exhausted.initializationStatus, "failed");
+    assert.equal(exhausted.initializationAttempts, MAX_AUTOMATIC_INITIALIZATION_ATTEMPTS);
+    assert.equal(exhausted.initializationFailureCode, "initialization_retry_exhausted");
+    assert.equal(exhausted.initializationFailureReason.includes("تفصيل داخلي"), false);
+
+    const failureAudits = await db.select().from(platformAuditLogsTable).where(and(
+      eq(platformAuditLogsTable.organizationId, retrying.id),
+      eq(platformAuditLogsTable.action, "organization_initialization_auto_retry"),
+    ));
+    assert.equal(failureAudits.length, 2, "يجب تسجيل نتيجة كل محاولة آلية فقط");
+    const parsedDetails = failureAudits.map((audit) => JSON.parse(audit.details));
+    assert.deepEqual(parsedDetails.map((details) => details.outcome), ["retry_pending", "failed"]);
+    assert.ok(parsedDetails.every((details) => !JSON.stringify(details).includes("تفصيل داخلي")));
+    assert.ok(automaticErrorLogs.length >= 2);
+    assert.ok(
+      automaticErrorLogs.every((entry) => !JSON.stringify(entry).includes("تفصيل داخلي")),
+      "يجب ألا يكشف السجل التشغيلي تفاصيل خطأ قاعدة البيانات",
+    );
+  } finally {
+    console.error = originalConsoleError;
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${triggerName} ON erp_records`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${triggerFunction}()`));
+  }
+
+  const [alreadyExhausted] = await db.insert(organizationsTable).values({
+    name: `منشأة مستنفدة ${suffix}`,
+    dataGeneration: 1,
+    initializationStatus: "pending",
+    initializationAttempts: MAX_AUTOMATIC_INITIALIZATION_ATTEMPTS,
+    initializationPendingAt: stalePendingAt,
+  }).returning();
+  organizationIds.push(alreadyExhausted.id);
+  const exhaustedResult = await reconcileStaleOrganizationInitializations(now, {
+    organizationIds: [alreadyExhausted.id],
+  });
+  assert.equal(exhaustedResult.failed, 1);
+  assert.equal(exhaustedResult.retried, 0);
+  const [markedFailed] = await db.select().from(organizationsTable)
+    .where(eq(organizationsTable.id, alreadyExhausted.id));
+  assert.equal(markedFailed.initializationStatus, "failed");
+  assert.equal(markedFailed.initializationFailureCode, "initialization_retry_exhausted");
+
+  const [auditProtected] = await db.insert(organizationsTable).values({
+    name: `منشأة سجل ذري ${suffix}`,
+    dataGeneration: 1,
+    initializationStatus: "pending",
+    initializationAttempts: 1,
+    initializationPendingAt: stalePendingAt,
+  }).returning();
+  organizationIds.push(auditProtected.id);
+  const auditTriggerFunction = `fail_auto_audit_${suffix}`;
+  const auditTriggerName = `${auditTriggerFunction}_trigger`;
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${auditTriggerFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.organization_id = ${auditProtected.id}
+          AND NEW.action = 'organization_initialization_auto_retry' THEN
+          RAISE EXCEPTION 'تعذر سجل التدقيق عمداً';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${auditTriggerName}
+      BEFORE INSERT ON platform_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION ${auditTriggerFunction}();
+    `));
+    await reconcileStaleOrganizationInitializations(now, {
+      organizationIds: [auditProtected.id],
+    });
+    const [notReadyWithoutAudit] = await db.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, auditProtected.id));
+    assert.equal(notReadyWithoutAudit.initializationStatus, "pending");
+    const recordsWithoutAudit = await db.select().from(erpRecordsTable)
+      .where(eq(erpRecordsTable.organizationId, auditProtected.id));
+    assert.equal(recordsWithoutAudit.length, 0, "لا يجب تثبيت نجاح التهيئة إذا تعذر تثبيت سجل نتيجتها");
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${auditTriggerName} ON platform_audit_logs`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${auditTriggerFunction}()`));
+  }
+
+  await reconcileStaleOrganizationInitializations(
+    new Date(now.getTime() + INITIALIZATION_LEASE_MS),
+    { organizationIds: [auditProtected.id] },
+  );
+  const [readyAfterAuditRecovery] = await db.select().from(organizationsTable)
+    .where(eq(organizationsTable.id, auditProtected.id));
+  assert.equal(readyAfterAuditRecovery.initializationStatus, "ready");
+  const recoveredAudits = await db.select().from(platformAuditLogsTable).where(and(
+    eq(platformAuditLogsTable.organizationId, auditProtected.id),
+    eq(platformAuditLogsTable.action, "organization_initialization_auto_retry"),
+  ));
+  assert.deepEqual(
+    recoveredAudits.map((audit) => JSON.parse(audit.details).outcome),
+    ["interrupted", "ready"],
+  );
 });

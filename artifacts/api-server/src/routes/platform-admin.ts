@@ -289,6 +289,8 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
       initializationFailureReason: organization.initializationFailureReason,
       initializationFailedAt: organization.initializationFailedAt?.toISOString() ?? null,
       initializationAttempts: organization.initializationAttempts,
+      initializationPendingAt: organization.initializationPendingAt?.toISOString() ?? null,
+      initializationLastAttemptAt: organization.initializationLastAttemptAt?.toISOString() ?? null,
       createdAt: organization.createdAt.toISOString(),
     };
   });

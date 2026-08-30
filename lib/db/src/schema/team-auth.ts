@@ -20,6 +20,10 @@ export const organizationsTable = pgTable("organizations", {
   initializationFailureReason: text("initialization_failure_reason"),
   initializationFailedAt: timestamp("initialization_failed_at", { withTimezone: true }),
   initializationAttempts: integer("initialization_attempts").notNull().default(0),
+  initializationPendingAt: timestamp("initialization_pending_at", { withTimezone: true }),
+  initializationLastAttemptAt: timestamp("initialization_last_attempt_at", { withTimezone: true }),
+  initializationLeaseToken: text("initialization_lease_token"),
+  initializationLeaseExpiresAt: timestamp("initialization_lease_expires_at", { withTimezone: true }),
   planId: text("plan_id").notNull().default("trial"),
   subscriptionStatus: text("subscription_status").notNull().default("trialing"),
   trialStartedAt: timestamp("trial_started_at", { withTimezone: true }).notNull().defaultNow(),
@@ -31,7 +35,13 @@ export const organizationsTable = pgTable("organizations", {
   stripeCustomerId: text("stripe_customer_id"),
   stripeSubscriptionId: text("stripe_subscription_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (table) => [
+  index("organizations_initialization_pending_idx").on(
+    table.initializationStatus,
+    table.initializationPendingAt,
+    table.initializationLeaseExpiresAt,
+  ),
+]);
 
 export const teamUsersTable = pgTable(
   "team_users",
