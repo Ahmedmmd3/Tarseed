@@ -10,7 +10,11 @@ import {
   testWorkspaceInvitationsTable,
   teamUsersTable,
 } from "@workspace/db";
-import { seedDemoData } from "../lib/seed-demo-data";
+import {
+  initializeOrganization,
+  safeInitializationFailure,
+  type InitializationFailure,
+} from "../lib/seed-demo-data";
 import { createSessionToken, hashSessionToken, isEmail, verifyPassword } from "../lib/team-auth";
 import {
   getPlatformAdminContext,
@@ -68,6 +72,24 @@ function organizationIdFromRequest(request: Request): number | null {
   const rawId = Array.isArray(request.params.organizationId) ? request.params.organizationId[0] : request.params.organizationId;
   const id = Number.parseInt(rawId ?? "", 10);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+async function recordInitializationFailure(
+  admin: PlatformAdminContext,
+  organizationId: number,
+  failure: InitializationFailure,
+): Promise<void> {
+  await db.insert(platformAuditLogsTable).values({
+    adminId: admin.id,
+    organizationId,
+    actorName: admin.displayName,
+    action: "organization_initialization_failed",
+    entity: `organization:${organizationId}`,
+    details: JSON.stringify({
+      failureCode: failure.code,
+      failureReason: failure.reason,
+    }),
+  });
 }
 
 function subscriptionSnapshot(subscription: SubscriptionFields, now: Date) {
@@ -262,6 +284,11 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
       accessSuspended: Boolean(organization.platformAccessSuspendedAt),
       hasBillingPortal: Boolean(organization.stripeCustomerId),
       managedByStripe: Boolean(organization.stripeSubscriptionId),
+      initializationStatus: organization.initializationStatus,
+      initializationFailureCode: organization.initializationFailureCode,
+      initializationFailureReason: organization.initializationFailureReason,
+      initializationFailedAt: organization.initializationFailedAt?.toISOString() ?? null,
+      initializationAttempts: organization.initializationAttempts,
       createdAt: organization.createdAt.toISOString(),
     };
   });
@@ -278,7 +305,9 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
     active: 0,
     expired: 0,
     inactive: 0,
+    initializationFailed: 0,
   });
+  summary.initializationFailed = rows.filter((row) => row.initializationStatus !== "ready").length;
 
   const filtered = rows
     .filter((row) => statusFilter === "all" || row.status === statusFilter)
@@ -302,6 +331,9 @@ router.get("/super-admin/overview", requirePlatformAdmin, async (request: Reques
   response.json({
     summary,
     organizations: filtered.slice(start, start + pageSize),
+    initializationFailures: rows
+      .filter((row) => row.initializationStatus !== "ready")
+      .sort((left, right) => right.id - left.id),
     pagination: {
       page,
       pageSize,
@@ -354,13 +386,13 @@ router.post("/super-admin/test-workspaces", requirePlatformAdmin, async (request
 
       const [organization] = await tx.insert(organizationsTable).values({
         name: workspaceName,
+        initializationStatus: "pending",
         planId: "trial",
         subscriptionStatus: "trialing",
         trialStartedAt: now,
         trialEndsAt: new Date(now.getTime() + 30 * DAY_MS),
         isTestWorkspace: true,
       }).returning();
-      await seedDemoData(organization.id, organization.dataGeneration, tx);
       const [invitation] = await tx.insert(testWorkspaceInvitationsTable).values({
         organizationId: organization.id,
         createdByAdminId: admin.id,
@@ -387,6 +419,26 @@ router.post("/super-admin/test-workspaces", requirePlatformAdmin, async (request
 
     if (result.kind === "conflict") {
       response.status(409).json({ error: "لا يمكن دعوة هذا البريد لأنه مرتبط بحساب منشأة موجود." });
+      return;
+    }
+
+    try {
+      await initializeOrganization(result.organization.id, result.organization.dataGeneration, now);
+    } catch (error) {
+      const failure = safeInitializationFailure(error);
+      await recordInitializationFailure(admin, result.organization.id, failure);
+      request.log.error({ err: error, organizationId: result.organization.id }, "Test workspace initialization failed");
+      response.status(503).json({
+        error: "أُنشئت مساحة الاختبار لكن تعذر تجهيز بياناتها. أصلح السبب ثم أعد التهيئة من سجل المنشآت.",
+        code: "organization_initialization_failed",
+        workspace: {
+          id: result.organization.id,
+          name: result.organization.name,
+          isTestWorkspace: true,
+          status: "initialization_failed",
+          initializationFailureReason: failure.reason,
+        },
+      });
       return;
     }
 
@@ -431,6 +483,55 @@ router.post("/super-admin/test-workspaces", requirePlatformAdmin, async (request
   }
 });
 
+router.post("/super-admin/organizations/:organizationId/initialization-retry", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
+  const admin = response.locals.platformAdmin as PlatformAdminContext;
+  const organizationId = organizationIdFromRequest(request);
+  if (!organizationId) {
+    response.status(400).json({ error: "معرّف المنشأة غير صحيح." });
+    return;
+  }
+
+  const [organization] = await db.select({
+    id: organizationsTable.id,
+    dataGeneration: organizationsTable.dataGeneration,
+    initializationStatus: organizationsTable.initializationStatus,
+  }).from(organizationsTable).where(eq(organizationsTable.id, organizationId)).limit(1);
+  if (!organization) {
+    response.status(404).json({ error: "المنشأة غير موجودة." });
+    return;
+  }
+  if (organization.initializationStatus === "ready") {
+    response.json({ organizationId, status: "ready", created: 0, retried: false });
+    return;
+  }
+
+  try {
+    const result = await initializeOrganization(organization.id, organization.dataGeneration);
+    await db.insert(platformAuditLogsTable).values({
+      adminId: admin.id,
+      organizationId,
+      actorName: admin.displayName,
+      action: "organization_initialization_retried",
+      entity: `organization:${organizationId}`,
+      details: JSON.stringify({ created: result.created }),
+    });
+    response.json({ organizationId, status: "ready", created: result.created, retried: true });
+  } catch (error) {
+    const failure = safeInitializationFailure(error);
+    await recordInitializationFailure(admin, organizationId, failure);
+    request.log.error({ err: error, organizationId }, "Organization initialization retry failed");
+    response.status(503).json({
+      error: "تعذر إعادة تهيئة المنشأة. أصلح السبب ثم أعد المحاولة.",
+      code: "organization_initialization_failed",
+      initialization: {
+        status: "failed",
+        failureCode: failure.code,
+        failureReason: failure.reason,
+      },
+    });
+  }
+});
+
 router.post("/super-admin/test-workspaces/:organizationId/resend-invitation", requirePlatformAdmin, async (request: Request, response: Response): Promise<void> => {
   const admin = response.locals.platformAdmin as PlatformAdminContext;
   const organizationId = organizationIdFromRequest(request);
@@ -456,6 +557,7 @@ router.post("/super-admin/test-workspaces/:organizationId/resend-invitation", re
       .where(eq(organizationsTable.id, organizationId))
       .for("update");
     if (!organization || !organization.isTestWorkspace) return { kind: "missing" as const };
+    if (organization.initializationStatus !== "ready") return { kind: "initialization_incomplete" as const };
     const [invitation] = await tx.select().from(testWorkspaceInvitationsTable)
       .where(eq(testWorkspaceInvitationsTable.organizationId, organizationId))
       .orderBy(desc(testWorkspaceInvitationsTable.createdAt))
@@ -472,6 +574,10 @@ router.post("/super-admin/test-workspaces/:organizationId/resend-invitation", re
   });
   if (prepared.kind === "missing") {
     response.status(404).json({ error: "مساحة الاختبار غير موجودة." });
+    return;
+  }
+  if (prepared.kind === "initialization_incomplete") {
+    response.status(409).json({ error: "يجب إكمال تهيئة مساحة الاختبار قبل إرسال الدعوة." });
     return;
   }
   if (prepared.kind === "conflict") {

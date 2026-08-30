@@ -15,7 +15,7 @@ import {
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
-import { DEMO_SEED_KEY, seedDemoData } from "../src/lib/seed-demo-data.ts";
+import { DEMO_SEED_KEY, initializeOrganization, seedDemoData } from "../src/lib/seed-demo-data.ts";
 import { hashPassword, hashSessionToken } from "../src/lib/team-auth.ts";
 
 const execFileAsync = promisify(execFile);
@@ -239,6 +239,7 @@ test("تتراجع تهيئة البذور بالكامل بعد فشل إدرا
   const [organization] = await db.insert(organizationsTable).values({
     name: `منشأة تراجع البذور ${suffix}`,
     dataGeneration: 1,
+    initializationStatus: "pending",
     planId: "pro",
     subscriptionStatus: "active",
     trialStartedAt: now,
@@ -269,28 +270,155 @@ test("تتراجع تهيئة البذور بالكامل بعد فشل إدرا
 
     let failure;
     try {
-      await seedDemoData(organization.id, organization.dataGeneration);
+      await initializeOrganization(organization.id, organization.dataGeneration);
     } catch (error) {
       failure = error;
     }
     assert.ok(failure, "يجب أن يفشل إدراج البذور بسبب العطل المقصود");
-    assert.match(
-      `${failure.message}\n${failure.cause?.message ?? ""}`,
-      /فشل مقصود لاختبار التراجع الذري للبذور/,
-    );
+    assert.equal(failure.message.includes("فشل مقصود"), false, "يجب ألا يكشف الخطأ الآمن تفاصيل قاعدة البيانات");
     const recordsAfterFailure = await db.select().from(erpRecordsTable)
       .where(eq(erpRecordsTable.organizationId, organization.id));
     assert.equal(recordsAfterFailure.length, 0, "يجب ألا تبقى أي سجلات بذور بعد فشل التهيئة");
+    const [failedOrganization] = await db.select().from(organizationsTable)
+      .where(eq(organizationsTable.id, organization.id));
+    assert.equal(failedOrganization.initializationStatus, "failed");
+    assert.equal(failedOrganization.initializationFailureCode, "seed_data_error");
+    assert.match(failedOrganization.initializationFailureReason, /البيانات الأساسية/);
+    assert.equal(failedOrganization.initializationFailureReason.includes("فشل مقصود"), false);
+
+    const interruptedRegistrationEmail = `init-failure-${suffix}@example.test`;
+    const interruptedRegistration = await request("/auth/register", {
+      method: "POST",
+      body: {
+        projectName: `منشأة تسجيل متعثرة ${suffix}`,
+        name: "مالك تسجيل متعثر",
+        email: interruptedRegistrationEmail,
+        phone: `05${String(randomInt(0, 100_000_000)).padStart(8, "0")}`,
+        password: "Initialization-failure-password-123!",
+      },
+      forwardedFor: "203.0.113.218",
+    });
+    assert.equal(interruptedRegistration.response.status, 503, JSON.stringify(interruptedRegistration.payload));
+    assert.equal(interruptedRegistration.payload.code, "organization_initialization_failed");
+    const [interruptedOwner] = await db.select().from(teamUsersTable)
+      .where(eq(teamUsersTable.email, interruptedRegistrationEmail));
+    assert.ok(interruptedOwner, "يجب أن يبقى حساب المالك بعد فشل تهيئة منشأته");
+    organizationIds.push(interruptedOwner.organizationId);
+    const blockedVerification = await request("/auth/email-verification/verify", {
+      method: "POST",
+      body: { email: interruptedRegistrationEmail, code: "654321" },
+      forwardedFor: "203.0.113.219",
+    });
+    assert.equal(blockedVerification.response.status, 503, JSON.stringify(blockedVerification.payload));
+    assert.equal(blockedVerification.payload.code, "organization_initialization_incomplete");
   } finally {
     await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${triggerName} ON erp_records`));
     await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${triggerFunction}()`));
   }
 
-  const firstRetry = await seedDemoData(organization.id, organization.dataGeneration);
-  assert.ok(firstRetry.created > 0, "يجب أن تنشئ إعادة المحاولة المجموعة الكاملة");
+  const adminUsername = `retry-admin.${suffix}`;
+  const adminPassword = "Retry-admin-password-123!";
+  const [admin] = await db.insert(platformAdminsTable).values({
+    username: adminUsername,
+    displayName: "مشرف إعادة التهيئة",
+    passwordHash: await hashPassword(adminPassword),
+  }).returning();
+  platformAdminIds.push(admin.id);
+  const adminLogin = await request("/platform-auth/login", {
+    method: "POST",
+    body: { username: adminUsername, password: adminPassword },
+    forwardedFor: "203.0.113.214",
+  });
+  const adminCookie = cookieFrom(adminLogin.response, "wudooh_super_admin_session");
+  assert.ok(adminCookie);
+
+  const overview = await request("/super-admin/overview", {
+    cookie: adminCookie,
+    forwardedFor: "203.0.113.215",
+  });
+  assert.equal(overview.response.status, 200, JSON.stringify(overview.payload));
+  const failedInOverview = overview.payload.initializationFailures.find((item) => item.id === organization.id);
+  assert.ok(failedInOverview, "يجب أن تظهر المنشأة المتعثرة للمشرف");
+  assert.equal(failedInOverview.initializationFailureCode, "seed_data_error");
+  assert.equal(failedInOverview.initializationFailureReason.includes("فشل مقصود"), false);
+
+  const firstRetry = await request(`/super-admin/organizations/${organization.id}/initialization-retry`, {
+    method: "POST",
+    cookie: adminCookie,
+    forwardedFor: "203.0.113.216",
+  });
+  assert.equal(firstRetry.response.status, 200, JSON.stringify(firstRetry.payload));
+  assert.equal(firstRetry.payload.status, "ready");
+  assert.ok(firstRetry.payload.created > 0, "يجب أن تنشئ إعادة المحاولة المجموعة الكاملة");
   await assertInitializedOrganization(organization.id, "إعادة المحاولة بعد فشل البذور");
 
-  const secondRetry = await seedDemoData(organization.id, organization.dataGeneration);
-  assert.deepEqual(secondRetry, { created: 0 }, "يجب ألا تعيد إعادة المحاولة إنشاء المجموعة مرة أخرى");
+  const secondRetry = await request(`/super-admin/organizations/${organization.id}/initialization-retry`, {
+    method: "POST",
+    cookie: adminCookie,
+    forwardedFor: "203.0.113.217",
+  });
+  assert.equal(secondRetry.response.status, 200, JSON.stringify(secondRetry.payload));
+  assert.deepEqual(
+    { status: secondRetry.payload.status, created: secondRetry.payload.created, retried: secondRetry.payload.retried },
+    { status: "ready", created: 0, retried: false },
+    "يجب ألا تعيد إعادة المحاولة إنشاء المجموعة مرة أخرى",
+  );
+  const [readyOrganization] = await db.select().from(organizationsTable)
+    .where(eq(organizationsTable.id, organization.id));
+  assert.equal(readyOrganization.initializationStatus, "ready");
+  assert.equal(readyOrganization.initializationFailureCode, null);
+  assert.equal(readyOrganization.initializationFailureReason, null);
   await assertInitializedOrganization(organization.id, "إعادة المحاولة الثانية للبذور");
+
+  const [interruptedOwner] = await db.select().from(teamUsersTable)
+    .where(eq(teamUsersTable.email, `init-failure-${suffix}@example.test`));
+  assert.ok(interruptedOwner);
+  const registrationRetry = await request(`/super-admin/organizations/${interruptedOwner.organizationId}/initialization-retry`, {
+    method: "POST",
+    cookie: adminCookie,
+    forwardedFor: "203.0.113.220",
+  });
+  assert.equal(registrationRetry.response.status, 200, JSON.stringify(registrationRetry.payload));
+  const verifiedAfterRetry = await request("/auth/email-verification/verify", {
+    method: "POST",
+    body: { email: interruptedOwner.email, code: "654321" },
+    forwardedFor: "203.0.113.221",
+  });
+  assert.equal(verifiedAfterRetry.response.status, 200, JSON.stringify(verifiedAfterRetry.payload));
+
+  const [stalePendingOrganization] = await db.insert(organizationsTable).values({
+    name: `منشأة معلقة ${suffix}`,
+    dataGeneration: 1,
+    initializationStatus: "pending",
+  }).returning();
+  organizationIds.push(stalePendingOrganization.id);
+  const pendingOverview = await request("/super-admin/overview", {
+    cookie: adminCookie,
+    forwardedFor: "203.0.113.222",
+  });
+  assert.equal(pendingOverview.response.status, 200, JSON.stringify(pendingOverview.payload));
+  assert.ok(
+    pendingOverview.payload.initializationFailures.some((item) => item.id === stalePendingOrganization.id),
+    "يجب أن تظهر التهيئة المعلقة للمشرف حتى بعد انقطاع العملية",
+  );
+  const concurrentPendingRetries = await Promise.all([
+    request(`/super-admin/organizations/${stalePendingOrganization.id}/initialization-retry`, {
+      method: "POST",
+      cookie: adminCookie,
+      forwardedFor: "203.0.113.223",
+    }),
+    request(`/super-admin/organizations/${stalePendingOrganization.id}/initialization-retry`, {
+      method: "POST",
+      cookie: adminCookie,
+      forwardedFor: "203.0.113.224",
+    }),
+  ]);
+  assert.equal(concurrentPendingRetries[0].response.status, 200, JSON.stringify(concurrentPendingRetries[0].payload));
+  assert.equal(concurrentPendingRetries[1].response.status, 200, JSON.stringify(concurrentPendingRetries[1].payload));
+  const concurrentCreatedCounts = concurrentPendingRetries
+    .map((retry) => retry.payload.created)
+    .sort((left, right) => left - right);
+  assert.equal(concurrentCreatedCounts[0], 0, "يجب ألا تنشئ المحاولة المتزامنة الثانية أي سجلات");
+  assert.ok(concurrentCreatedCounts[1] > 0, "يجب أن تنشئ محاولة واحدة فقط مجموعة البذور");
+  await assertInitializedOrganization(stalePendingOrganization.id, "إعادة تهيئة الحالة المعلقة");
 });

@@ -42,6 +42,7 @@ import {
 
 type SubscriptionStatus = 'trialing' | 'active' | 'expired' | 'inactive';
 type SubscriptionAction = 'extend_trial' | 'extend_access' | 'suspend_access' | 'restore_access';
+type InitializationStatus = 'ready' | 'pending' | 'failed';
 
 type PlatformAdmin = {
   id: number;
@@ -65,6 +66,11 @@ type OrganizationSummary = {
   hasBillingPortal: boolean;
   managedByStripe: boolean;
   isTestWorkspace: boolean;
+  initializationStatus: InitializationStatus;
+  initializationFailureCode: string | null;
+  initializationFailureReason: string | null;
+  initializationFailedAt: string | null;
+  initializationAttempts: number;
   createdAt: string;
 };
 
@@ -76,8 +82,10 @@ type OverviewResponse = {
     active: number;
     expired: number;
     inactive: number;
+    initializationFailed: number;
   };
   organizations: OrganizationSummary[];
+  initializationFailures: OrganizationSummary[];
   pagination: {
     page: number;
     pageSize: number;
@@ -137,6 +145,8 @@ export default function SuperAdminPortal() {
   const [testWorkspaceError, setTestWorkspaceError] = useState('');
   const [isCreatingTestWorkspace, setIsCreatingTestWorkspace] = useState(false);
   const [resendingInvitationId, setResendingInvitationId] = useState<number | null>(null);
+  const [retryingInitializationId, setRetryingInitializationId] = useState<number | null>(null);
+  const [initializationActionError, setInitializationActionError] = useState('');
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
@@ -310,6 +320,13 @@ export default function SuperAdminPortal() {
         body: JSON.stringify({ workspaceName, ownerName, ownerEmail }),
       });
       const payload = await response.json().catch(() => ({})) as { workspace?: { name: string }; error?: string; code?: string };
+      if (payload.code === 'organization_initialization_failed' && payload.workspace) {
+        toast({ title: 'تحتاج المساحة إلى إعادة تهيئة', description: payload.error, variant: 'destructive' });
+        setTestWorkspaceForm({ workspaceName: '', ownerName: '', ownerEmail: '' });
+        setTestWorkspaceDialogOpen(false);
+        setRefreshKey((value) => value + 1);
+        return;
+      }
       if (payload.code === 'invitation_delivery_failed' && payload.workspace) {
         toast({ title: 'تعذر إرسال الدعوة', description: payload.error, variant: 'destructive' });
         setTestWorkspaceForm({ workspaceName: '', ownerName: '', ownerEmail: '' });
@@ -346,6 +363,30 @@ export default function SuperAdminPortal() {
       toast({ title: 'تعذر إعادة الإرسال', description: resendError instanceof Error ? resendError.message : 'حاول مرة أخرى.', variant: 'destructive' });
     } finally {
       setResendingInvitationId(null);
+    }
+  };
+
+  const retryOrganizationInitialization = async (organization: OrganizationSummary) => {
+    setRetryingInitializationId(organization.id);
+    setInitializationActionError('');
+    try {
+      const response = await fetch(`/api/super-admin/organizations/${organization.id}/initialization-retry`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر إعادة تهيئة المنشأة.');
+      toast({
+        title: 'اكتملت تهيئة المنشأة',
+        description: organization.isTestWorkspace && !organization.owner
+          ? 'أصبحت البيانات الأساسية جاهزة. استخدم زر إعادة الدعوة لإرسال رابط جديد إلى المالك.'
+          : 'أصبحت البيانات الأساسية جاهزة، ولن تُكرر إعادة المحاولة السجلات الموجودة.',
+      });
+      setRefreshKey((value) => value + 1);
+    } catch (retryError) {
+      setInitializationActionError(retryError instanceof Error ? retryError.message : 'تعذر إعادة تهيئة المنشأة.');
+    } finally {
+      setRetryingInitializationId(null);
     }
   };
 
@@ -438,13 +479,61 @@ export default function SuperAdminPortal() {
           </Button>
         </section>
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6" aria-label="ملخص المنصة">
+        {overview && overview.initializationFailures.length > 0 && (
+          <section className="rounded-3xl border border-rose-200 bg-rose-50/80 p-5 shadow-sm" data-testid="section-initialization-failures">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-rose-600 text-white">
+                <AlertTriangle className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-lg font-black text-rose-950">منشآت تحتاج إعادة تهيئة</h2>
+                <p className="mt-1 text-sm leading-6 text-rose-800">لم تكتمل البيانات الأساسية لهذه المنشآت. أصلح السبب الموضح ثم أعد المحاولة بأمان.</p>
+              </div>
+            </div>
+            {initializationActionError && (
+              <p className="mt-4 rounded-xl border border-rose-300 bg-white p-3 text-sm font-bold text-rose-800" role="alert" data-testid="error-initialization-retry">
+                {initializationActionError}
+              </p>
+            )}
+            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+              {overview.initializationFailures.map((organization) => (
+                <article key={organization.id} className="rounded-2xl border border-rose-200 bg-white p-4" data-testid={`initialization-failure-${organization.id}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="font-black text-slate-900">{organization.name} <span className="text-xs font-medium text-slate-400">#{organization.id}</span></p>
+                      <p className="mt-1 text-sm text-rose-800" data-testid={`initialization-failure-reason-${organization.id}`}>
+                        {organization.initializationFailureReason ?? 'توقفت التهيئة قبل اكتمالها. أعد المحاولة بأمان.'}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        آخر فشل: {organization.initializationFailedAt ? new Date(organization.initializationFailedAt).toLocaleString('ar-SA') : 'غير محدد'}
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void retryOrganizationInitialization(organization)}
+                      disabled={retryingInitializationId !== null}
+                      className="shrink-0 gap-1.5 bg-rose-700 text-white hover:bg-rose-800"
+                      data-testid={`button-retry-initialization-${organization.id}`}
+                    >
+                      {retryingInitializationId === organization.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      إعادة التهيئة
+                    </Button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-7" aria-label="ملخص المنصة">
           <SummaryCard label="إجمالي المنشآت" value={summary?.totalOrganizations} icon={Building2} accent="text-blue-700 bg-blue-50" testId="stat-total-organizations" />
           <SummaryCard label="إجمالي المستخدمين" value={summary?.totalUsers} icon={Users} accent="text-violet-700 bg-violet-50" testId="stat-total-users" />
           <SummaryCard label="نشطة" value={summary?.active} icon={ShieldCheck} accent="text-emerald-700 bg-emerald-50" testId="stat-active-organizations" />
           <SummaryCard label="تجريبية" value={summary?.trialing} icon={Clock3} accent="text-amber-700 bg-amber-50" testId="stat-trial-organizations" />
           <SummaryCard label="منتهية" value={summary?.expired} icon={AlertTriangle} accent="text-rose-700 bg-rose-50" testId="stat-expired-organizations" />
           <SummaryCard label="غير نشطة" value={summary?.inactive} icon={AlertTriangle} accent="text-slate-700 bg-slate-100" testId="stat-inactive-organizations" />
+          <SummaryCard label="تحتاج تهيئة" value={summary?.initializationFailed} icon={RefreshCw} accent="text-rose-700 bg-rose-50" testId="stat-initialization-failed" />
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
@@ -511,6 +600,11 @@ export default function SuperAdminPortal() {
                             <FlaskConical className="h-3 w-3" />مساحة اختبار
                           </span>
                         )}
+                        {organization.initializationStatus !== 'ready' && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-800" data-testid={`badge-initialization-failed-${organization.id}`}>
+                            <AlertTriangle className="h-3 w-3" />تهيئة غير مكتملة
+                          </span>
+                        )}
                       </div>
                       <p className="mt-1 text-xs text-slate-400">#{organization.id}</p>
                     </td>
@@ -549,6 +643,12 @@ export default function SuperAdminPortal() {
                           <Button type="button" size="sm" variant="outline" onClick={() => void resendTestWorkspaceInvitation(organization)} disabled={resendingInvitationId === organization.id} className="gap-1.5 border-teal-200 text-teal-800 hover:bg-teal-50" data-testid={`button-resend-test-workspace-invitation-${organization.id}`}>
                             {resendingInvitationId === organization.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
                             إعادة الدعوة
+                          </Button>
+                        )}
+                        {organization.initializationStatus !== 'ready' && (
+                          <Button type="button" size="sm" variant="outline" onClick={() => void retryOrganizationInitialization(organization)} disabled={retryingInitializationId !== null} className="gap-1.5 border-rose-200 text-rose-800 hover:bg-rose-50" data-testid={`button-row-retry-initialization-${organization.id}`}>
+                            {retryingInitializationId === organization.id ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                            إعادة التهيئة
                           </Button>
                         )}
                         {organization.hasBillingPortal && (
@@ -752,6 +852,8 @@ const actionLabels: Record<string, string> = {
   test_workspace_created: 'إنشاء مساحة اختبار',
   test_workspace_activated: 'تفعيل مالك مساحة الاختبار',
   test_workspace_invitation_resent: 'إعادة إرسال دعوة مساحة الاختبار',
+  organization_initialization_failed: 'فشل تهيئة المنشأة',
+  organization_initialization_retried: 'إعادة تهيئة المنشأة',
 };
 
 function AuditRow({ log }: { log: PlatformAuditLog }) {

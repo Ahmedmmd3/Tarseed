@@ -31,7 +31,7 @@ import {
   verifyPassword,
 } from "../lib/team-auth";
 import { logger } from "../lib/logger";
-import { seedDemoData } from "../lib/seed-demo-data";
+import { initializeOrganization } from "../lib/seed-demo-data";
 import { isSmsDeliveryConfigured, sendSmsWithTwilio } from "../lib/sms";
 import { getAuthContext, hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, subscriptionState, type AuthContext, type SubscriptionFields } from "../middleware/team-auth";
 
@@ -485,7 +485,8 @@ router.post("/auth/test-workspace-invitations/accept", async (request: Request, 
     const [organization] = await tx.select().from(organizationsTable)
       .where(eq(organizationsTable.id, invitation.organizationId))
       .for("update");
-    if (!organization || !organization.isTestWorkspace || organization.platformAccessSuspendedAt) {
+    if (!organization || !organization.isTestWorkspace || organization.platformAccessSuspendedAt
+      || organization.initializationStatus !== "ready") {
       return { kind: "invalid" as const };
     }
     const [existingUser] = await tx.select({ id: teamUsersTable.id })
@@ -508,7 +509,6 @@ router.post("/auth/test-workspace-invitations/accept", async (request: Request, 
       locationScope: "all",
       warehouseIds: [],
     }).returning();
-    await seedDemoData(organization.id, organization.dataGeneration, tx);
     await tx.update(testWorkspaceInvitationsTable)
       .set({ acceptedAt: now })
       .where(eq(testWorkspaceInvitationsTable.id, invitation.id));
@@ -582,7 +582,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
     ? process.env.EMAIL_VERIFICATION_TEST_CODE as string
     : createEmailVerificationCode();
   type RegistrationResult =
-    | { kind: "created"; userId: number; organizationId: number }
+    | { kind: "created"; userId: number; organizationId: number; dataGeneration: number }
     | {
         kind: "pending";
         userId: number;
@@ -640,6 +640,7 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
         const trialEndsAt = new Date(trialStartedAt.getTime() + 14 * 24 * 60 * 60 * 1000);
         const [organization] = await tx.insert(organizationsTable).values({
           name: projectName,
+          initializationStatus: "pending",
           planId: "trial",
           subscriptionStatus: "trialing",
           trialStartedAt,
@@ -663,8 +664,12 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
           codeHash: hashEmailVerificationCode(verificationCode),
           expiresAt: new Date(Date.now() + EMAIL_VERIFICATION_MINUTES * 60 * 1000),
         });
-        await seedDemoData(organization.id, organization.dataGeneration, tx);
-        return { kind: "created", userId: user.id, organizationId: organization.id };
+        return {
+          kind: "created",
+          userId: user.id,
+          organizationId: organization.id,
+          dataGeneration: organization.dataGeneration,
+        };
       });
     } catch (error) {
       const errorCode = (error as { code?: string; cause?: { code?: string } }).code
@@ -683,6 +688,16 @@ router.post("/auth/register", async (request: Request, response: Response): Prom
       userId: result.userId,
       operation: "email_verification_delivery",
     });
+    try {
+      await initializeOrganization(result.organizationId, result.dataGeneration);
+    } catch (error) {
+      request.log.error({ err: error, organizationId: result.organizationId }, "Organization initialization failed after registration");
+      response.status(503).json({
+        error: "تم إنشاء الحساب، لكن تعذر تجهيز بيانات المنشأة. سيظهر السبب للمشرف ويمكن إعادة المحاولة بعد إصلاحه.",
+        code: "organization_initialization_failed",
+      });
+      return;
+    }
   } else if (result.kind === "pending" && result.emailCode) {
     void deliverEmailVerificationCode({
       email: result.email,
@@ -763,6 +778,9 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
       };
     }
     if (user.status !== "active") return null;
+    if (organization.initializationStatus !== "ready") {
+      return { kind: "initialization_unavailable" as const };
+    }
     const token = createSessionToken();
     const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
     await tx.insert(authSessionsTable).values({
@@ -785,6 +803,13 @@ router.post("/auth/login", async (request: Request, response: Response): Promise
       code: isEmailVerification ? "email_verification_required" : "phone_verification_required",
       email: result.email,
       ...(result.phone ? { phone: maskedPhone(result.phone) } : {}),
+    });
+    return;
+  }
+  if (result.kind === "initialization_unavailable") {
+    response.status(503).json({
+      error: "بيانات المنشأة لم تكتمل بعد. أعد المحاولة بعد أن يعالج المشرف التهيئة.",
+      code: "organization_initialization_incomplete",
     });
     return;
   }
@@ -849,6 +874,9 @@ router.post("/auth/email-verification/verify", async (request: Request, response
       .where(eq(organizationsTable.id, user.organizationId))
       .for("update");
     if (!organization) return { kind: "invalid" as const };
+    if (organization.initializationStatus !== "ready") {
+      return { kind: "initialization_unavailable" as const };
+    }
     const [activatedUser] = await tx.update(teamUsersTable)
       .set({
         status: "active",
@@ -877,6 +905,13 @@ router.post("/auth/email-verification/verify", async (request: Request, response
   }
   if (result.kind === "invalid") {
     response.status(400).json({ error: "رمز التفعيل غير صحيح أو انتهت صلاحيته." });
+    return;
+  }
+  if (result.kind === "initialization_unavailable") {
+    response.status(503).json({
+      error: "تم استلام الرمز، لكن بيانات المنشأة لم تكتمل بعد. أعد المحاولة بعد معالجة التهيئة.",
+      code: "organization_initialization_incomplete",
+    });
     return;
   }
   setSession(response, result.token);

@@ -1,5 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
-import { db, erpRecordsTable } from "@workspace/db";
+import { db, erpRecordsTable, organizationsTable } from "@workspace/db";
 
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
@@ -7,6 +7,51 @@ type DemoRecordData = Record<string, unknown>;
 
 export const DEMO_SEED_KEY = "new-organization-v1";
 const DEMO_SEED_LOCK_NAMESPACE = 8_421_307;
+
+export const ORGANIZATION_INITIALIZATION_STATUS = {
+  READY: "ready",
+  PENDING: "pending",
+  FAILED: "failed",
+} as const;
+
+export type OrganizationInitializationStatus =
+  typeof ORGANIZATION_INITIALIZATION_STATUS[keyof typeof ORGANIZATION_INITIALIZATION_STATUS];
+
+export type InitializationFailure = {
+  code: string;
+  reason: string;
+};
+
+export class OrganizationInitializationError extends Error {
+  constructor(
+    readonly failure: InitializationFailure,
+    cause?: unknown,
+  ) {
+    super(failure.reason, { cause });
+    this.name = "OrganizationInitializationError";
+  }
+}
+
+export function safeInitializationFailure(error: unknown): InitializationFailure {
+  if (error instanceof OrganizationInitializationError) return error.failure;
+  const message = error instanceof Error ? error.message : "";
+  if (message.includes("المستودع الافتراضي")) {
+    return {
+      code: "default_warehouse_missing",
+      reason: "تعذر إنشاء المستودع الافتراضي اللازم لبدء المنشأة.",
+    };
+  }
+  if (message.includes("الحساب الافتراضي")) {
+    return {
+      code: "default_account_missing",
+      reason: "تعذر إنشاء الحسابات الافتراضية اللازمة لبدء المنشأة.",
+    };
+  }
+  return {
+    code: "seed_data_error",
+    reason: "تعذر إنشاء البيانات الأساسية للمنشأة. راجع سجل الخادم ثم أعد المحاولة.",
+  };
+}
 
 export const DEFAULT_WAREHOUSE_DEFINITIONS = [
   { name: "المستودع الرئيسي", type: "warehouse", city: "", manager: "", status: "active" },
@@ -131,7 +176,10 @@ async function seedDemoDataInTransaction(
     eq(erpRecordsTable.organizationId, organizationId),
     sql`${erpRecordsTable.data}->>'demoSeedKey' = ${DEMO_SEED_KEY}`,
   )).limit(1);
-  if (existing.length) return { created: 0 };
+  if (existing.length) {
+    await markOrganizationInitializationReady(executor, organizationId);
+    return { created: 0 };
+  }
 
   const [warehouse] = await executor.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
@@ -356,5 +404,72 @@ async function seedDemoDataInTransaction(
 
   await executor.insert(erpRecordsTable).values(journals);
   createdCount += journals.length;
+  await markOrganizationInitializationReady(executor, organizationId);
   return { created: createdCount };
+}
+
+async function markOrganizationInitializationReady(
+  executor: DatabaseExecutor,
+  organizationId: number,
+): Promise<void> {
+  await executor.update(organizationsTable).set({
+    initializationStatus: ORGANIZATION_INITIALIZATION_STATUS.READY,
+    initializationFailureCode: null,
+    initializationFailureReason: null,
+    initializationFailedAt: null,
+  }).where(eq(organizationsTable.id, organizationId));
+}
+
+export async function initializeOrganization(
+  organizationId: number,
+  dataGeneration: number,
+  now = new Date(),
+): Promise<{ created: number }> {
+  const [organization] = await db.transaction(async (tx) => {
+    const [current] = await tx.select({
+      id: organizationsTable.id,
+      initializationStatus: organizationsTable.initializationStatus,
+    }).from(organizationsTable)
+      .where(eq(organizationsTable.id, organizationId))
+      .for("update");
+    if (!current) return [];
+    if (current.initializationStatus === ORGANIZATION_INITIALIZATION_STATUS.READY) return [current];
+    const [updated] = await tx.update(organizationsTable).set({
+      initializationStatus: ORGANIZATION_INITIALIZATION_STATUS.PENDING,
+      initializationFailureCode: null,
+      initializationFailureReason: null,
+      initializationFailedAt: null,
+      initializationAttempts: sql`${organizationsTable.initializationAttempts} + 1`,
+    }).where(eq(organizationsTable.id, organizationId)).returning({
+      id: organizationsTable.id,
+      initializationStatus: organizationsTable.initializationStatus,
+    });
+    return updated ? [updated] : [];
+  });
+
+  if (!organization) {
+    throw new OrganizationInitializationError({
+      code: "organization_missing",
+      reason: "المنشأة غير موجودة.",
+    });
+  }
+  if (organization.initializationStatus === ORGANIZATION_INITIALIZATION_STATUS.READY) {
+    return { created: 0 };
+  }
+
+  try {
+    return await seedDemoData(organizationId, dataGeneration, undefined, now);
+  } catch (error) {
+    const failure = safeInitializationFailure(error);
+    await db.update(organizationsTable).set({
+      initializationStatus: ORGANIZATION_INITIALIZATION_STATUS.FAILED,
+      initializationFailureCode: failure.code,
+      initializationFailureReason: failure.reason,
+      initializationFailedAt: now,
+    }).where(and(
+      eq(organizationsTable.id, organizationId),
+      sql`${organizationsTable.initializationStatus} <> ${ORGANIZATION_INITIALIZATION_STATUS.READY}`,
+    ));
+    throw new OrganizationInitializationError(failure, error);
+  }
 }
