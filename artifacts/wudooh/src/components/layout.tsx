@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, AlertTriangle, BarChart3, Book, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Sparkles, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Book, BookOpen, Boxes, BriefcaseBusiness, ChevronLeft, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Sparkles, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,7 @@ import { FinancialAssistant } from '@/components/financial-assistant';
 type NavigationItem = { name: string; href: string; icon: LucideIcon; permission?: string; ownerOnly?: boolean };
 
 const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
-  { label: 'الرئيسية', items: [{ name: 'لوحة التحكم', href: '/dashboard', icon: LayoutDashboard, permission: 'dashboard' }] },
+  { label: 'الرئيسية', items: [{ name: 'لوحة التحكم', href: '/dashboard', icon: LayoutDashboard, permission: 'dashboard' }, { name: 'دليل الاستخدام', href: '/guide', icon: BookOpen, permission: 'dashboard' }] },
   {
     label: 'المبيعات والتشغيل',
     items: [
@@ -587,12 +587,13 @@ function AuthenticationRequiredRoute() {
 }
 
 function isSubscriptionProtectedRoute(href: string): boolean {
-  return new Set(['/dashboard', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
+  return new Set(['/dashboard', '/guide', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
 }
 
 function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {
   if (user.roleId === 'owner') return true;
   if (href === '/e-invoicing') return user.permissions['accounting'] === true || user.permissions['sales'] === true;
+  if (href === '/guide') return true;
   const permissionByRoute: Record<string, string> = { '/dashboard': 'dashboard', '/pos': 'sales', '/sales': 'sales', '/inventory': 'inventory', '/purchases': 'inventory', '/accounts': 'accounting', '/journals': 'accounting', '/receivables': 'accounting', '/expenses': 'accounting', '/reports': 'reports', '/hr': 'hr', '/operations': 'operations', '/team': '__owner__', '/operations-log': '__owner__' };
   const permission = permissionByRoute[href];
   return permission ? user.permissions[permission] === true : false;

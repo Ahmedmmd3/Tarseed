@@ -17,6 +17,7 @@ import { AppLayout } from '@/components/layout';
 
 import Landing from '@/pages/landing';
 import Overview from '@/pages/overview';
+import Guide from '@/pages/guide';
 import Accounts from '@/pages/accounts';
 import Journals from '@/pages/journals';
 import Receivables from '@/pages/receivables';
@@ -82,6 +83,7 @@ function Router() {
         <Route path="/manager" component={() => <SessionLayout><ManagerPortal /></SessionLayout>} />
         <Route path="/super-admin" component={SuperAdminPortal} />
         <Route path="/dashboard" component={() => <DashboardLayout><Overview /></DashboardLayout>} />
+        <Route path="/guide" component={() => <DashboardLayout><Guide /></DashboardLayout>} />
         <Route path="/pos" component={() => <DashboardLayout><POS /></DashboardLayout>} />
         <Route path="/sales" component={() => <DashboardLayout><Sales /></DashboardLayout>} />
         <Route path="/purchases" component={() => <DashboardLayout><Purchases /></DashboardLayout>} />
