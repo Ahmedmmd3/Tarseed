@@ -8,6 +8,8 @@ import {
   Lightbulb, AlertCircle
 } from 'lucide-react';
 
+const asset = (name: string) => `${import.meta.env.BASE_URL}${name}`;
+
 export default function Guide() {
   const [activeSection, setActiveSection] = useState('intro');
 
@@ -71,7 +73,23 @@ export default function Guide() {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl">
+    <div dir="rtl" className="min-h-screen bg-[#061d40] font-sans text-slate-900">
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#061d40]/95 shadow-lg backdrop-blur-xl">
+        <div className="mx-auto flex min-h-[72px] max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+          <Link href="/" className="flex items-center gap-3 text-white" aria-label="العودة إلى الصفحة الرئيسية">
+            <span className="relative h-10 w-10 shrink-0 overflow-hidden">
+              <img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none brightness-0 invert" style={{ width: '105px', right: '-31px', top: '-20px' }} />
+            </span>
+            <span className="text-lg font-black">ترصيد</span>
+          </Link>
+          <div className="flex items-center gap-2 text-sm font-bold">
+            <Link href="/" className="hidden rounded-xl px-3 py-2 text-slate-300 transition hover:bg-white/10 hover:text-white sm:inline-flex">الصفحة الرئيسية</Link>
+            <Link href="/manager" className="inline-flex min-h-10 items-center rounded-xl bg-teal-400 px-4 text-[#061d40] transition hover:bg-teal-300">تسجيل الدخول</Link>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10 lg:px-8 lg:py-12">
       <div className="mb-8">
         <h1 className="text-3xl font-black text-white sm:text-4xl">دليل استخدام ترصيد</h1>
         <p className="mt-3 text-base text-slate-300">دليلك الشامل لتعظيم الاستفادة من المنصة، من إعداد الحساب حتى العمليات المتقدمة.</p>
@@ -370,6 +388,7 @@ export default function Guide() {
           </section>
         </main>
       </div>
+      </main>
     </div>
   );
 }

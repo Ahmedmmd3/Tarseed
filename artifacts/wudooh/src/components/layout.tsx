@@ -587,7 +587,7 @@ function AuthenticationRequiredRoute() {
 }
 
 function isSubscriptionProtectedRoute(href: string): boolean {
-  return new Set(['/dashboard', '/guide', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
+  return new Set(['/dashboard', '/pos', '/sales', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
 }
 
 function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {
