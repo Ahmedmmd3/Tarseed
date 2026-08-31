@@ -16,6 +16,7 @@ Simulator، وليس Playwright على الويب. وهي تختبر واجهة 
    استخدم `http://127.0.0.1:4317` مع iOS Simulator. في بيئة Replit اضبط المتغير في
    workflow الخاص بتطبيق Expo قبل تحميل الـ development build. لا تستخدم عنوان API
    الإنتاج مع هذه الاختبارات.
+
 3. من مجلد المشروع شغّل الأمر الموحد، ومرّر العنوان نفسه كحاجز يمنع تشغيل الحزمة
    على API حقيقي:
 
@@ -39,3 +40,18 @@ Simulator، وليس Playwright على الويب. وهي تختبر واجهة 
 ```bash
 pnpm --filter @workspace/wudooh-mobile run e2e:mock
 ```
+
+## GitHub Actions
+
+يشغّل فحص `Mobile native E2E` في CI على Android Emulator قبل دمج التغييرات على
+`main`. ينشئ سير العمل نسخة Android release مؤقتة، يثبتها على المحاكي، ثم يشغّل
+الأمر نفسه:
+
+```bash
+pnpm --filter @workspace/wudooh-mobile run test:e2e:native
+```
+
+يُمرّر الأمر داخل CI العنوان `http://10.0.2.2:4317` فقط، وهو عنوان المحاكي للوصول
+إلى Fixture المحلي الذي يبدأه مشغّل الاختبارات. لا يحتاج الفحص إلى أسرار أو إلى
+خدمة API خارجية. تُرفع تقارير JUnit وسجلات Maestro ولقطات الشاشة و`logcat` عند
+الفشل كأثر باسم `mobile-native-e2e-results`.

@@ -5,7 +5,8 @@
     "API server clean typecheck",
     "Frontend typecheck",
     "Web end-to-end tests",
-    "Web PWA tests"
+    "Web PWA tests",
+    "Mobile native E2E"
   ],
   "rulesets": [],
   "protection": {
@@ -15,7 +16,8 @@
         { "context": "API server clean typecheck", "app_id": 15368 },
         { "context": "Frontend typecheck", "app_id": 15368 },
         { "context": "Web end-to-end tests", "app_id": 15368 },
-        { "context": "Web PWA tests", "app_id": 15368 }
+        { "context": "Web PWA tests", "app_id": 15368 },
+        { "context": "Mobile native E2E", "app_id": 15368 }
       ]
     },
     "required_pull_request_reviews": null,

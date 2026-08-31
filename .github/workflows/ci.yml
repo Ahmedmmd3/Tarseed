@@ -140,6 +140,78 @@ jobs:
       - name: Run production PWA tests
         run: pnpm --filter @workspace/wudooh run test:e2e:pwa
 
+  mobile-native-e2e:
+    name: Mobile native E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The Android emulator reaches the host process through 10.0.2.2.
+      # This must stay a local fixture URL; never replace it with a deployed API.
+      EXPO_PUBLIC_API_ORIGIN: http://10.0.2.2:4317
+      MAESTRO_OUTPUT_DIR: ${{ github.workspace }}/artifacts/wudooh-mobile/e2e/results
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Maestro
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+          "$HOME/.maestro/bin/maestro" --version
+
+      - name: Generate Android test project
+        working-directory: artifacts/wudooh-mobile
+        run: pnpm exec expo prebuild --platform android --no-install
+
+      - name: Build Android test APK
+        working-directory: artifacts/wudooh-mobile
+        run: ./android/gradlew --no-daemon :app:assembleRelease
+
+      - name: Run native mobile E2E suite
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb install -r artifacts/wudooh-mobile/android/app/build/outputs/apk/release/app-release.apk
+            pnpm --filter @workspace/wudooh-mobile run test:e2e:native
+
+      - name: Upload Maestro results and failure screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-native-e2e-results
+          path: artifacts/wudooh-mobile/e2e/results
+          if-no-files-found: warn
+          retention-days: 14
+
   security-hardening-tests:
     name: Security hardening tests
     runs-on: ubuntu-latest
