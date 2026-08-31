@@ -112,6 +112,12 @@ async function mockSharedAccounting(page, journals = seededJournals()) {
           ],
           netIncome: 11000,
         },
+        balanceSheet: {
+          baseEquity: 60000,
+          unclosedEarnings: 11000,
+          totalAssets: 75000,
+          totalLiabilitiesAndEquity: 75000,
+        },
         receivables: [{
           id: 'credit-invoice',
           party: 'شركة الأمل',
