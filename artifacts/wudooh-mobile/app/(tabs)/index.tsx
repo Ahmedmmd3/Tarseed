@@ -15,7 +15,7 @@ export default function DashboardScreen() {
     return total <= 5;
   }).length;
   return (
-    <Screen title="لوحة التحكم" eyebrow={user?.projectName}>
+    <Screen testID="dashboard-screen" title="لوحة التحكم" eyebrow={user?.projectName}>
       <PermissionGate permission="dashboard">
         <Hero>
           <View style={styles.heroTop}>

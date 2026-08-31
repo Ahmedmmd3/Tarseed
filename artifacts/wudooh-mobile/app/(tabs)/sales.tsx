@@ -8,7 +8,7 @@ export default function SalesScreen() {
   const { invoices } = useApp();
   const ordered = [...invoices].sort((a, b) => String(b.issueDate ?? '').localeCompare(String(a.issueDate ?? '')));
   return (
-    <Screen title="المبيعات" eyebrow="الفواتير وحركة التحصيل">
+    <Screen testID="sales-screen" title="المبيعات" eyebrow="الفواتير وحركة التحصيل">
       <PermissionGate permission="sales">
         {ordered.length ? ordered.map((invoice) => <Card key={String(invoice.id)} style={styles.invoice}><View style={styles.top}><View><Text style={[styles.number, { color: colors.foreground }]}>{invoice.number ?? `#${invoice.id}`}</Text><Text style={[styles.meta, { color: colors.mutedForeground }]}>{invoice.customerName ?? 'عميل نقدي'} · {invoice.issueDate ?? '—'}</Text></View><View style={[styles.status, { backgroundColor: invoice.status === 'paid' ? colors.accent : colors.secondary }]}><Text style={[styles.statusText, { color: invoice.status === 'paid' ? colors.success : colors.warning }]}>{invoice.status === 'paid' ? 'مسددة' : invoice.status === 'partial' ? 'جزئية' : 'غير مسددة'}</Text></View></View><View style={styles.bottom}><Text style={[commonStyles.label, { color: colors.mutedForeground, marginBottom: 0 }]}>{invoice.paymentMethod === 'cash' ? 'نقدي' : invoice.paymentMethod === 'card' ? 'شبكة' : 'آجل'}</Text><Money value={Number(invoice.total ?? 0)} /></View></Card>) : <Empty icon="receipt-outline" title="لا توجد مبيعات بعد" text="الفواتير التي تنشئها من نقطة البيع ستظهر هنا." />}
       </PermissionGate>

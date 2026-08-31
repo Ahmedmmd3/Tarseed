@@ -6,7 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useColors } from '@/hooks/useColors';
 import { useApp } from '@/context/AppContext';
 
-export function Screen({ title, eyebrow, children }: { title: string; eyebrow?: string; children: ReactNode }) {
+export function Screen({ title, eyebrow, testID, children }: { title: string; eyebrow?: string; testID?: string; children: ReactNode }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { loading, refresh, queue, retrySync } = useApp();
@@ -20,7 +20,7 @@ export function Screen({ title, eyebrow, children }: { title: string; eyebrow?: 
         <View style={styles.header}>
           <View>
             {eyebrow ? <Text style={[styles.eyebrow, { color: colors.primary }]}>{eyebrow}</Text> : null}
-            <Text style={[styles.title, { color: colors.foreground }]}>{title}</Text>
+            <Text testID={testID} style={[styles.title, { color: colors.foreground }]}>{title}</Text>
           </View>
           {queue.length ? (
             <Pressable testID="sync-status" onPress={() => void retrySync()} style={[styles.sync, { backgroundColor: colors.accent }]}>

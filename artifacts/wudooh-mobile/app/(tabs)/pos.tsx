@@ -110,7 +110,7 @@ export default function PosScreen() {
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
   return (
-    <Screen title="نقطة البيع" eyebrow="كاشير سريع وآمن">
+    <Screen testID="pos-screen" title="نقطة البيع" eyebrow="كاشير سريع وآمن">
       <PermissionGate permission="sales">
         <View style={styles.warehouses}>{warehouses.filter((item) => item.status !== 'inactive').map((warehouse) => <Pressable key={warehouse.id} onPress={() => setWarehouseId(warehouse.id)} style={[styles.chip, { backgroundColor: warehouseId === warehouse.id ? colors.accent : colors.card, borderColor: warehouseId === warehouse.id ? colors.primary : colors.border }]}><Text style={[styles.chipText, { color: warehouseId === warehouse.id ? colors.accentForeground : colors.mutedForeground }]}>{warehouse.name}</Text></Pressable>)}</View>
         <View style={styles.searchRow}>

@@ -1,7 +1,8 @@
 export type ApiErrorPayload = { error?: string; code?: string };
 
+const configuredOrigin = process.env.EXPO_PUBLIC_API_ORIGIN?.trim().replace(/\/+$/, '');
 const domain = process.env.EXPO_PUBLIC_DOMAIN?.trim();
-export const API_ORIGIN = domain ? `https://${domain}` : '';
+export const API_ORIGIN = configuredOrigin || (domain ? `https://${domain}` : '');
 
 export async function apiRequest<T>(
   path: string,

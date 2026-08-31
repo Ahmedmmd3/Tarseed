@@ -1,0 +1,39 @@
+appId: com.tarseed.stores
+---
+- clearState
+- launchApp
+- tapOn:
+    id: login-identifier
+- inputText: "native-e2e@example.test"
+- tapOn:
+    id: login-password
+- inputText: "Native-e2e-password-123"
+- tapOn:
+    id: login-submit
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 15000
+- tapOn: "المصاريف"
+- tapOn:
+    id: add-expense
+- tapOn:
+    id: expense-description
+- inputText: "مصروف انقطاع الشبكة"
+- tapOn:
+    id: expense-amount
+- inputText: "12"
+- tapOn:
+    id: save-expense
+- extendedWaitUntil:
+    visible:
+      id: sync-status
+    timeout: 15000
+- assertVisible: "حُفظ المصروف محلياً وبانتظار المزامنة."
+- tapOn:
+    id: sync-status
+- extendedWaitUntil:
+    notVisible:
+      id: sync-status
+    timeout: 15000
+- assertVisible: "مصروف انقطاع الشبكة"

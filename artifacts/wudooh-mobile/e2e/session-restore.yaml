@@ -1,0 +1,24 @@
+appId: com.tarseed.stores
+---
+- clearState
+- launchApp
+- tapOn:
+    id: login-identifier
+- inputText: "native-e2e@example.test"
+- tapOn:
+    id: login-password
+- inputText: "Native-e2e-password-123"
+- tapOn:
+    id: login-submit
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 15000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: dashboard-screen
+    timeout: 15000
+- assertNotVisible:
+    id: login-submit

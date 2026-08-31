@@ -8,7 +8,7 @@ export default function InventoryScreen() {
   const colors = useColors();
   const { products, balances, warehouses } = useApp();
   return (
-    <Screen title="المخزون" eyebrow="الأرصدة حسب موقع التشغيل">
+    <Screen testID="inventory-screen" title="المخزون" eyebrow="الأرصدة حسب موقع التشغيل">
       <PermissionGate permission="inventory">
         {products.length ? products.map((product) => {
           const locations = balances.filter((item) => Number(item.productId) === Number(product.id));
