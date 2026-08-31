@@ -13,6 +13,7 @@
     "test:billing": "pnpm --filter @workspace/api-server run test:billing",
     "test:stripe-webhook-security": "pnpm --filter @workspace/api-server run test:stripe-webhook-security",
     "test:organization-initialization": "pnpm --filter @workspace/api-server run test:organization-initialization",
+    "test:accounting-report-balance": "pnpm --filter @workspace/api-server run test:accounting-report-balance",
     "test:inventory": "pnpm --filter @workspace/api-server run test:inventory",
     "test:platform-admin": "pnpm --filter @workspace/api-server run test:platform-admin",
     "test:security": "pnpm --filter @workspace/api-server run test:security",

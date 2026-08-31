@@ -29,6 +29,16 @@ test.describe('سلامة التقارير والقيود المحاسبية', (
     expect(Math.abs(assets - liabilitiesAndEquity)).toBe(0);
   });
 
+  test('يبقى التقرير المحلي متوازناً عند تعذر ملخص الخادم', async ({ authenticatedPage: page }) => {
+    await page.route('**/api/accounting/summary?**', (route) => route.abort());
+    await page.goto('/reports');
+    await page.getByTestId('tab-report-balance').click();
+    const assets = parseArabicNumber(await page.getByTestId('report-total-assets').innerText());
+    const liabilitiesAndEquity = parseArabicNumber(await page.getByTestId('report-total-liab-equity').innerText());
+    expect(Math.abs(assets - liabilitiesAndEquity)).toBe(0);
+    await expect(page.getByTestId('report-balance-warning')).toHaveCount(0);
+  });
+
   test('يحفظ قيداً يدوياً متوازناً 1000/1000', async ({ authenticatedPage: page }) => {
     await page.goto('/journals');
     await page.getByTestId('button-add-journal').click();

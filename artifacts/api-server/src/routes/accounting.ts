@@ -326,12 +326,13 @@ function sourceReference(data: Record<string, unknown>, tableName: SourceTable, 
       : data.reference ?? data.description ?? `#${id}`);
 }
 
-function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: string, to: string) {
+export function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: string, to: string) {
   const balances = new Map<string, number>();
   for (const account of accounts) balances.set(String(account.id), asNumber(account.openingBalance ?? account.balance));
 
   const postedToDate = journals.filter((journal) => journal.status === "posted" && asDate(journal.date) <= to);
   const postedInPeriod = postedToDate.filter((journal) => inPeriod(journal, from, to));
+  const periodMovements = new Map<string, number>();
   for (const journal of postedToDate) {
     for (const line of normalizeLines(journal.lines)) {
       const account = accounts.find((item) => String(item.id) === line.accountId);
@@ -341,6 +342,15 @@ function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: str
       balances.set(line.accountId, current + (debitNormal ? line.debit - line.credit : line.credit - line.debit));
     }
   }
+  for (const journal of postedInPeriod) {
+    for (const line of normalizeLines(journal.lines)) {
+      const account = accounts.find((item) => String(item.id) === line.accountId);
+      if (!account) continue;
+      const debitNormal = account.type === "asset" || account.type === "expense";
+      const current = periodMovements.get(line.accountId) ?? 0;
+      periodMovements.set(line.accountId, current + (debitNormal ? line.debit - line.credit : line.credit - line.debit));
+    }
+  }
 
   const withBalances: Array<AnyRecord & { calculatedBalance: number }> = accounts.map((account) => {
     const balance = balances.get(String(account.id)) ?? 0;
@@ -348,18 +358,18 @@ function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: str
   });
   const total = (type: string) => withBalances
     .filter((account) => account.type === type && account.status !== "inactive")
-    .reduce((sum, account) => sum + Math.abs(asNumber(account.calculatedBalance)), 0);
-  const movementFor = (type: string) => postedInPeriod.reduce((sum, journal) => sum + normalizeLines(journal.lines).reduce((lineSum, line) => {
-    const account = accounts.find((item) => String(item.id) === line.accountId);
-    if (!account || account.type !== type) return lineSum;
-    return lineSum + (type === "revenue" ? line.credit - line.debit : line.debit - line.credit);
-  }, 0), 0);
+    .reduce((sum, account) => sum + asNumber(account.calculatedBalance), 0);
+  const movementFor = (type: string) => accounts
+    .filter((account) => account.type === type && account.status !== "inactive")
+    .reduce((sum, account) => sum + (periodMovements.get(String(account.id)) ?? 0), 0);
   const revenue = movementFor("revenue");
   const expense = movementFor("expense");
   const netIncome = revenue - expense;
   const assets = total("asset");
   const liabilities = total("liability");
-  const equity = total("equity") + netIncome;
+  const baseEquity = total("equity");
+  const unclosedEarnings = total("revenue") - total("expense");
+  const equity = baseEquity + unclosedEarnings;
   const trialBalance = withBalances
     .filter((account) => account.status !== "inactive")
     .map((account) => {
@@ -382,14 +392,16 @@ function calculateReport(accounts: AnyRecord[], journals: AnyRecord[], from: str
     totals: { revenue, expense, netIncome, assets, liabilities, equity, trialDebit: trialBalance.reduce((s, a) => s + a.debit, 0), trialCredit: trialBalance.reduce((s, a) => s + a.credit, 0) },
     trialBalance,
     incomeStatement: {
-      revenue: withBalances.filter((a) => a.type === "revenue" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: Math.abs(asNumber(a.calculatedBalance)) })),
-      expense: withBalances.filter((a) => a.type === "expense" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: Math.abs(asNumber(a.calculatedBalance)) })),
+      revenue: withBalances.filter((a) => a.type === "revenue" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: periodMovements.get(String(a.id)) ?? 0 })),
+      expense: withBalances.filter((a) => a.type === "expense" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: periodMovements.get(String(a.id)) ?? 0 })),
       netIncome,
     },
     balanceSheet: {
-      assets: withBalances.filter((a) => a.type === "asset" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: Math.abs(asNumber(a.calculatedBalance)) })),
-      liabilities: withBalances.filter((a) => a.type === "liability" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: Math.abs(asNumber(a.calculatedBalance)) })),
-      equity: withBalances.filter((a) => a.type === "equity" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: Math.abs(asNumber(a.calculatedBalance)) })),
+      assets: withBalances.filter((a) => a.type === "asset" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: asNumber(a.calculatedBalance) })),
+      liabilities: withBalances.filter((a) => a.type === "liability" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: asNumber(a.calculatedBalance) })),
+      equity: withBalances.filter((a) => a.type === "equity" && a.status !== "inactive").map((a) => ({ id: a.id, name: a.name, amount: asNumber(a.calculatedBalance) })),
+      baseEquity,
+      unclosedEarnings,
       totalAssets: assets,
       totalLiabilitiesAndEquity: liabilities + equity,
     },

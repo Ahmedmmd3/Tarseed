@@ -21,6 +21,12 @@ type ServerSummary = {
     expense: Array<{ id: string | number; name: string; amount: number }>;
     netIncome: number;
   };
+  balanceSheet: {
+    baseEquity: number;
+    unclosedEarnings: number;
+    totalAssets: number;
+    totalLiabilitiesAndEquity: number;
+  };
   receivables: Array<{
     id: string | number;
     party: string;
@@ -137,28 +143,44 @@ export default function Reports() {
       credits += credit;
       return { ...account, debit, credit };
     });
-    return { balanceAccounts, incomeAccounts, totalTrialDebit: debits, totalTrialCredit: credits, trialData: trial };
+    const unclosedEarnings = balanceAccounts
+      .filter((account) => account.type === 'revenue')
+      .reduce((sum, account) => sum + account.balance, 0)
+      - balanceAccounts
+        .filter((account) => account.type === 'expense')
+        .reduce((sum, account) => sum + account.balance, 0);
+    return { balanceAccounts, incomeAccounts, unclosedEarnings, totalTrialDebit: debits, totalTrialCredit: credits, trialData: trial };
   }, [accounts, journals, fromDate, toDate]);
   
-  const { balanceAccounts, incomeAccounts, totalTrialDebit, totalTrialCredit, trialData } = serverSummary
+  const { balanceAccounts, incomeAccounts, balanceSheetEarnings, totalTrialDebit, totalTrialCredit, trialData } = serverSummary
     ? {
-      balanceAccounts: serverSummary.trialBalance.map((account) => ({ ...account, id: String(account.id), balance: account.debit || account.credit, status: 'active' as const, parent: null })),
+      balanceAccounts: serverSummary.trialBalance.map((account) => {
+        const debitNormal = account.type === 'asset' || account.type === 'expense';
+        return {
+          ...account,
+          id: String(account.id),
+          balance: debitNormal ? account.debit - account.credit : account.credit - account.debit,
+          status: 'active' as const,
+          parent: null,
+        };
+      }),
       incomeAccounts: [
         ...serverSummary.incomeStatement.revenue.map((account) => ({ ...account, id: String(account.id), code: '', balance: account.amount, type: 'revenue' as const, status: 'active' as const, parent: null })),
         ...serverSummary.incomeStatement.expense.map((account) => ({ ...account, id: String(account.id), code: '', balance: account.amount, type: 'expense' as const, status: 'active' as const, parent: null })),
       ],
+      balanceSheetEarnings: serverSummary.balanceSheet.unclosedEarnings,
       totalTrialDebit: serverSummary.trialBalance.reduce((sum, account) => sum + account.debit, 0),
       totalTrialCredit: serverSummary.trialBalance.reduce((sum, account) => sum + account.credit, 0),
       trialData: serverSummary.trialBalance,
     }
-    : localReport;
+    : { ...localReport, balanceSheetEarnings: localReport.unclosedEarnings };
 
   // Calculations for Income Statement
   const revenues = incomeAccounts.filter(a => a.type === 'revenue' && a.balance !== 0);
   const expenses = incomeAccounts.filter(a => a.type === 'expense' && a.balance !== 0);
   const totalRev = revenues.reduce((s, a) => s + a.balance, 0);
   const totalExp = expenses.reduce((s, a) => s + a.balance, 0);
-  const netIncome = totalRev - totalExp;
+  const netIncome = serverSummary ? serverSummary.totals.netIncome : totalRev - totalExp;
 
   // Calculations for Balance Sheet
   const assets = balanceAccounts.filter(a => a.type === 'asset' && a.balance !== 0);
@@ -168,7 +190,8 @@ export default function Reports() {
   const totalAssets = assets.reduce((s, a) => s + a.balance, 0);
   const totalLiab = liabilities.reduce((s, a) => s + a.balance, 0);
   const baseEquity = equities.reduce((s, a) => s + a.balance, 0);
-  const totalEquity = baseEquity + netIncome;
+  const unclosedEarnings = balanceSheetEarnings;
+  const totalEquity = baseEquity + unclosedEarnings;
 
   return (
     <div className="space-y-6" data-testid="page-reports">
@@ -529,8 +552,8 @@ export default function Reports() {
                       ))}
                       
                       <div className="flex justify-between items-center pt-2 text-primary font-medium">
-                        <span>أرباح (خسائر) الفترة الحالية</span>
-                        <span className="font-mono" dir="ltr">{formatCurrency(netIncome)}</span>
+                        <span>أرباح (خسائر) متراكمة غير مرحلة</span>
+                        <span className="font-mono" dir="ltr">{formatCurrency(unclosedEarnings)}</span>
                       </div>
                       
                       <div className="flex justify-between items-center font-bold text-slate-800 pt-2 mt-2">
@@ -553,7 +576,7 @@ export default function Reports() {
             </div>
             
             {Math.abs(totalAssets - (totalLiab + totalEquity)) > 0.01 && (
-              <div className="bg-red-50 border-t border-red-200 p-4 flex items-center justify-center gap-2 text-red-700">
+              <div className="bg-red-50 border-t border-red-200 p-4 flex items-center justify-center gap-2 text-red-700" data-testid="report-balance-warning">
                 <AlertTriangle className="h-5 w-5 shrink-0" />
                 <p className="font-bold text-sm">تنبيه محاسبي: الميزانية غير متزنة. يرجى مراجعة توازن القيود الافتتاحية واليومية.</p>
               </div>
