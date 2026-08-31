@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+const directApiOrigin = process.env.E2E_API_ORIGIN ?? 'http://127.0.0.1:18082';
+
 async function registerSharedSession(page) {
   const uniqueId = crypto.randomUUID().slice(0, 8);
   const email = `source-status-${uniqueId}@example.test`;
@@ -35,18 +37,7 @@ async function registerSharedSession(page) {
     return { status: response.status, body: await response.text() };
   }, { email });
   expect(emailVerification.status, emailVerification.body).toBe(200);
-
-  const phoneVerification = await page.evaluate(async ({ email }) => {
-    const response = await fetch('/api/auth/phone-verification/verify', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, code: '246810' }),
-    });
-    return { status: response.status, body: await response.text() };
-  }, { email });
-  expect(phoneVerification.status, phoneVerification.body).toBe(200);
-  expect(JSON.parse(phoneVerification.body).user).toBeTruthy();
+  expect(JSON.parse(emailVerification.body).user).toBeTruthy();
   return { email, projectName };
 }
 
@@ -171,7 +162,7 @@ test('يستعيد السجل المشترك بعد عودة الخدمة دون
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('connection-status-remote')).toBeVisible();
 
-  const apiOrigin = 'http://127.0.0.1:8081';
+  const apiOrigin = directApiOrigin;
   const requestHeaders = await getSharedRequestHeaders(page, apiOrigin);
   const accountResponse = await page.request.post(`${apiOrigin}/api/data/accounts`, {
       headers: requestHeaders,
@@ -238,7 +229,7 @@ test('يرسل القيد الذي أُنشئ أثناء الانقطاع بعد
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('connection-status-remote')).toBeVisible();
 
-  const apiOrigin = 'http://127.0.0.1:8081';
+  const apiOrigin = directApiOrigin;
   const requestHeaders = await getSharedRequestHeaders(page, apiOrigin);
   const uniqueId = crypto.randomUUID().slice(0, 8);
   const accounts = await Promise.all([
@@ -378,7 +369,7 @@ test('يحفظ ترحيل القيد محلياً ويعيد المحاولة ب
   await page.goto('/dashboard', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('connection-status-remote')).toBeVisible();
 
-  const apiOrigin = 'http://127.0.0.1:8081';
+  const apiOrigin = directApiOrigin;
   const requestHeaders = await getSharedRequestHeaders(page, apiOrigin);
   const uniqueId = crypto.randomUUID().slice(0, 8);
   const accounts = await Promise.all([

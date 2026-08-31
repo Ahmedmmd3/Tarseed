@@ -66,6 +66,9 @@ async function mockSharedAccounting(page, journals = seededJournals()) {
   await page.route('**/api/accounting/initialize', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ created: 0, accounts }) });
   });
+  await page.route('**/api/data/accounts', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ records: accounts }) });
+  });
   await page.route('**/api/data/journalEntries', async (route) => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON();
