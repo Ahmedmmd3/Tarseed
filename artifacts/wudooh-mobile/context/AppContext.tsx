@@ -41,7 +41,21 @@ export type Warehouse = { id: number; name: string; status?: string };
 export type Balance = { id: number; productId: number; warehouseId: number; quantity: number };
 export type Invoice = { id: number | string; number?: string; customerName?: string; issueDate?: string; total?: number; status?: string; paymentMethod?: string };
 export type Expense = { id: number | string; description?: string; amount?: number; date?: string; category?: string; vendor?: string };
-type Snapshot = { products: Product[]; warehouses: Warehouse[]; balances: Balance[]; invoices: Invoice[]; expenses: Expense[] };
+export type ExpiringPurchaseOrderShare = {
+  purchaseOrderId: number;
+  orderNumber: string;
+  supplierName: string;
+  expiresAt: string;
+  hoursRemaining: number;
+};
+type Snapshot = {
+  products: Product[];
+  warehouses: Warehouse[];
+  balances: Balance[];
+  invoices: Invoice[];
+  expenses: Expense[];
+  purchaseOrderShareAlerts: ExpiringPurchaseOrderShare[];
+};
 export type CheckoutPayload = {
   warehouseId: number;
   issueDate: string;
@@ -62,9 +76,11 @@ type AppContextValue = Snapshot & {
   error: string;
   token: string | null;
   queue: QueueItem[];
+  purchaseOrderShareAlertsError: string;
   login: (identifier: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
+  rotatePurchaseOrderShare: (purchaseOrderId: number) => Promise<void>;
   checkout: (payload: Omit<CheckoutPayload, 'clientOperationId'>) => Promise<{ queued: boolean; invoice?: Invoice }>;
   addExpense: (expense: Omit<Expense, 'id'>) => Promise<{ queued: boolean }>;
   retrySync: () => Promise<void>;
@@ -74,7 +90,14 @@ type AppContextValue = Snapshot & {
 const sessionKey = 'tarseed-mobile-session-v1';
 const tokenKey = 'tarseed-mobile-token-v1';
 const AppContext = createContext<AppContextValue | null>(null);
-const emptySnapshot: Snapshot = { products: [], warehouses: [], balances: [], invoices: [], expenses: [] };
+const emptySnapshot: Snapshot = {
+  products: [],
+  warehouses: [],
+  balances: [],
+  invoices: [],
+  expenses: [],
+  purchaseOrderShareAlerts: [],
+};
 const cacheKey = (organizationId: number) => `tarseed-mobile-cache-v1:${organizationId}`;
 const queueKey = (organizationId: number) => `tarseed-mobile-queue-v1:${organizationId}`;
 
@@ -102,6 +125,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [booting, setBooting] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [purchaseOrderShareAlertsError, setPurchaseOrderShareAlertsError] = useState('');
   const syncPromise = useRef<Promise<void> | null>(null);
   const queueRef = useRef<QueueItem[]>([]);
   const userRef = useRef<User | null>(null);
@@ -116,14 +140,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const loadRemote = useCallback(async (activeUser: User, activeToken: string) => {
     setLoading(true);
     setError('');
+    setPurchaseOrderShareAlertsError('');
     try {
       const headers = { 'X-Wudooh-Data-Generation': String(activeUser.dataGeneration) };
-      const [products, warehouses, balances, invoices, expenses] = await Promise.all([
+      const canReadPurchaseOrders = activeUser.roleId === 'owner' || activeUser.permissions.inventory === true;
+      const shareAlertsPromise: Promise<ExpiringPurchaseOrderShare[] | null> = canReadPurchaseOrders
+        ? apiRequest<{ alerts?: ExpiringPurchaseOrderShare[] }>('/api/data/purchaseOrderShares/expiring', { headers }, activeToken)
+          .then((payload) => Array.isArray(payload.alerts) ? payload.alerts : [])
+          .catch((alertsError: unknown) => {
+            setPurchaseOrderShareAlertsError(alertsError instanceof Error
+              ? alertsError.message
+              : 'تعذر تحميل تنبيهات روابط الموردين.');
+            return null;
+          })
+        : Promise.resolve([]);
+      const [products, warehouses, balances, invoices, expenses, shareAlerts] = await Promise.all([
         apiRequest<{ records: Product[] }>('/api/data/products', { headers }, activeToken),
         apiRequest<{ records: Warehouse[] }>('/api/data/warehouses', { headers }, activeToken),
         apiRequest<{ records: Balance[] }>('/api/data/inventoryBalances', { headers }, activeToken),
         apiRequest<{ records: Invoice[] }>('/api/data/invoices', { headers }, activeToken),
         apiRequest<{ records: Expense[] }>('/api/data/expenses', { headers }, activeToken),
+        shareAlertsPromise,
       ]);
       const next = {
         products: products.records,
@@ -132,7 +169,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         invoices: invoices.records,
         expenses: expenses.records,
       };
-      setSnapshot(next);
+      setSnapshot((current) => ({
+        ...next,
+        purchaseOrderShareAlerts: shareAlerts ?? current.purchaseOrderShareAlerts,
+      }));
       await AsyncStorage.setItem(cacheKey(activeUser.organizationId), JSON.stringify(next));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'تعذر تحديث بيانات المنشأة.');
@@ -192,7 +232,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       AsyncStorage.getItem(cacheKey(nextUser.organizationId)),
       AsyncStorage.getItem(queueKey(nextUser.organizationId)),
     ]);
-    if (cached) setSnapshot(JSON.parse(cached) as Snapshot);
+    if (cached) {
+      const parsed = JSON.parse(cached) as Partial<Snapshot>;
+      setSnapshot({
+        ...emptySnapshot,
+        ...parsed,
+        purchaseOrderShareAlerts: Array.isArray(parsed.purchaseOrderShareAlerts) ? parsed.purchaseOrderShareAlerts : [],
+      });
+    }
     const restoredQueue = pending ? JSON.parse(pending) as QueueItem[] : [];
     queueRef.current = restoredQueue.filter((item) => item.dataGeneration === nextUser.dataGeneration);
     setQueue(queueRef.current);
@@ -226,10 +273,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     })();
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void retrySync();
+      if (state === 'active') {
+        void retrySync();
+        if (queueRef.current.length === 0 && userRef.current && tokenRef.current) {
+          void loadRemote(userRef.current, tokenRef.current);
+        }
+      }
     });
     return () => { active = false; subscription.remove(); };
-  }, [establishSession, retrySync]);
+  }, [establishSession, loadRemote, retrySync]);
 
   const login = useCallback(async (identifier: string, password: string) => {
     setError('');
@@ -262,6 +314,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await retrySync();
     await loadRemote(userRef.current, tokenRef.current);
   }, [loadRemote, retrySync]);
+
+  const rotatePurchaseOrderShare = useCallback(async (purchaseOrderId: number) => {
+    const activeUser = userRef.current;
+    const activeToken = tokenRef.current;
+    if (!activeUser || !activeToken) throw new Error('سجّل الدخول أولاً.');
+    if (activeUser.roleId !== 'owner' && activeUser.permissions.inventory !== true) {
+      throw new Error('ليس لديك صلاحية لتدوير روابط أوامر الشراء.');
+    }
+    await apiRequest<{ rotated: boolean; share: { id: number; status: string; expiresAt: string; createdAt: string; url: string } }>(
+      `/api/data/purchaseOrders/${purchaseOrderId}/share`,
+      {
+        method: 'POST',
+        headers: { 'X-Wudooh-Data-Generation': String(activeUser.dataGeneration) },
+      },
+      activeToken,
+    );
+    setSnapshot((current) => ({
+      ...current,
+      purchaseOrderShareAlerts: current.purchaseOrderShareAlerts.filter((alert) => alert.purchaseOrderId !== purchaseOrderId),
+    }));
+    await loadRemote(activeUser, activeToken);
+  }, [loadRemote]);
 
   const checkout = useCallback(async (payload: Omit<CheckoutPayload, 'clientOperationId'>) => {
     if (!userRef.current || !tokenRef.current) throw new Error('سجّل الدخول أولاً.');
@@ -329,9 +403,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<AppContextValue>(() => ({
-    ...snapshot, user, token, queue, booting, loading, error,
-    login, logout, refresh, checkout, addExpense, retrySync, can,
-  }), [addExpense, booting, can, checkout, error, loading, login, logout, queue, refresh, retrySync, snapshot, token, user]);
+    ...snapshot, user, token, queue, booting, loading, error, purchaseOrderShareAlertsError,
+    login, logout, refresh, rotatePurchaseOrderShare, checkout, addExpense, retrySync, can,
+  }), [addExpense, booting, can, checkout, error, loading, login, logout, purchaseOrderShareAlertsError, queue, refresh, retrySync, rotatePurchaseOrderShare, snapshot, token, user]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

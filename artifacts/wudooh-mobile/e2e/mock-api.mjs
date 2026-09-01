@@ -42,6 +42,13 @@ const products = [{ id: 1, name: "منتج اختبار", sku: "NATIVE-001", bar
 const balances = [{ id: 1, productId: 1, warehouseId: 1, quantity: 20 }];
 const invoices = [];
 const expenses = [];
+let expiringShareAlerts = [{
+  purchaseOrderId: 42,
+  orderNumber: "PO-NATIVE-001",
+  supplierName: "مورد الاختبار",
+  expiresAt: "2026-09-01T18:00:00.000Z",
+  hoursRemaining: 4,
+}];
 
 function json(response, status, payload) {
   response.writeHead(status, {
@@ -148,6 +155,34 @@ const server = createServer(async (request, response) => {
   if (records && request.method === "GET") {
     if (!requireAuthentication(request, response)) return;
     json(response, 200, { records });
+    return;
+  }
+
+  if (url.pathname === "/api/data/purchaseOrderShares/expiring" && request.method === "GET") {
+    if (!requireAuthentication(request, response)) return;
+    json(response, 200, { alerts: expiringShareAlerts });
+    return;
+  }
+
+  const shareMatch = url.pathname.match(/^\/api\/data\/purchaseOrders\/(\d+)\/share$/);
+  if (shareMatch && request.method === "POST") {
+    if (!requireAuthentication(request, response)) return;
+    const purchaseOrderId = Number(shareMatch[1]);
+    if (!expiringShareAlerts.some((alert) => alert.purchaseOrderId === purchaseOrderId)) {
+      json(response, 404, { error: "أمر الشراء غير متاح." });
+      return;
+    }
+    expiringShareAlerts = expiringShareAlerts.filter((alert) => alert.purchaseOrderId !== purchaseOrderId);
+    json(response, 201, {
+      rotated: true,
+      share: {
+        id: 1001,
+        url: "https://example.test/purchase-order-share/native-fixture-token",
+        status: "pending",
+        expiresAt: "2026-09-08T18:00:00.000Z",
+        createdAt: "2026-09-01T14:00:00.000Z",
+      },
+    });
     return;
   }
 

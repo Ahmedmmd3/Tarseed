@@ -1,13 +1,28 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import { Card, Hero, Money, PermissionGate, Screen, commonStyles } from '@/components/AppUI';
+import { Card, Empty, Hero, Money, PermissionGate, Screen, commonStyles } from '@/components/AppUI';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { useState } from 'react';
 
 export default function DashboardScreen() {
   const colors = useColors();
-  const { user, invoices, expenses, balances, products, logout, queue } = useApp();
+  const {
+    user,
+    invoices,
+    expenses,
+    balances,
+    products,
+    logout,
+    queue,
+    can,
+    purchaseOrderShareAlerts,
+    purchaseOrderShareAlertsError,
+    rotatePurchaseOrderShare,
+  } = useApp();
+  const [rotatingPurchaseOrderId, setRotatingPurchaseOrderId] = useState<number | null>(null);
+  const [rotationError, setRotationError] = useState('');
   const salesTotal = invoices.reduce((sum, invoice) => sum + Number(invoice.total ?? 0), 0);
   const expenseTotal = expenses.reduce((sum, expense) => sum + Number(expense.amount ?? 0), 0);
   const lowStock = products.filter((product) => {
@@ -33,6 +48,39 @@ export default function DashboardScreen() {
             <View><Text style={styles.heroLabel}>بانتظار المزامنة</Text><Text style={styles.heroValue}>{queue.length.toLocaleString('ar-SA')}</Text></View>
           </View>
         </Hero>
+      </PermissionGate>
+      {can('inventory') ? (
+        <PurchaseOrderShareExpiryAlerts
+          alerts={purchaseOrderShareAlerts}
+          loading={rotatingPurchaseOrderId !== null}
+          error={purchaseOrderShareAlertsError || rotationError}
+          rotatingPurchaseOrderId={rotatingPurchaseOrderId}
+          onRotate={(purchaseOrderId) => {
+            setRotationError('');
+            Alert.alert(
+              'تدوير رابط المورد',
+              'سيُلغى الرابط الحالي فوراً ويُنشأ رابط جديد صالح للمورد. هل تريد المتابعة؟',
+              [
+                { text: 'إلغاء', style: 'cancel' },
+                {
+                  text: 'تدوير الرابط',
+                  style: 'destructive',
+                  onPress: () => {
+                    setRotatingPurchaseOrderId(purchaseOrderId);
+                    void rotatePurchaseOrderShare(purchaseOrderId)
+                      .catch((error: unknown) => {
+                        setRotationError(error instanceof Error ? error.message : 'تعذر تدوير رابط المورد.');
+                      })
+                      .finally(() => setRotatingPurchaseOrderId(null));
+                  },
+                },
+              ],
+            );
+          }}
+        />
+      ) : null}
+      {can('dashboard') ? (
+        <>
         <Text style={[commonStyles.sectionTitle, { color: colors.foreground }]}>مؤشرات المنشأة</Text>
         <View style={styles.metrics}>
           <Metric icon="receipt-outline" label="إجمالي المبيعات" value={salesTotal} color={colors.info} />
@@ -46,9 +94,88 @@ export default function DashboardScreen() {
           <QuickAction icon="add-circle-outline" label="مصروف جديد" color={colors.rose} onPress={() => router.push('/expenses')} />
           <QuickAction icon="layers-outline" label="فحص المخزون" color={colors.violet} onPress={() => router.push('/inventory')} />
         </View>
-      </PermissionGate>
+        </>
+      ) : null}
     </Screen>
   );
+}
+
+function PurchaseOrderShareExpiryAlerts({
+  alerts,
+  loading,
+  error,
+  rotatingPurchaseOrderId,
+  onRotate,
+}: {
+  alerts: Array<{
+    purchaseOrderId: number;
+    orderNumber: string;
+    supplierName: string;
+    expiresAt: string;
+    hoursRemaining: number;
+  }>;
+  loading: boolean;
+  error: string;
+  rotatingPurchaseOrderId: number | null;
+  onRotate: (purchaseOrderId: number) => void;
+}) {
+  const colors = useColors();
+  if (alerts.length === 0 && !error) return null;
+  return (
+    <Card style={[styles.expiryCard, { backgroundColor: colors.accent, borderColor: colors.warning }]}>
+      <View style={styles.expiryHeading}>
+        <View style={[styles.expiryIcon, { backgroundColor: colors.secondary }]}>
+          <Ionicons name="warning-outline" size={21} color={colors.warning} />
+        </View>
+        <View style={styles.expiryCopy}>
+          <Text style={[styles.expiryTitle, { color: colors.foreground }]}>روابط موردين ستنتهي قريباً</Text>
+          <Text style={[styles.expiryDescription, { color: colors.mutedForeground }]}>
+            جدّد الرابط قبل انتهاء صلاحيته حتى لا يتعذر على المورد اتخاذ القرار.
+          </Text>
+        </View>
+      </View>
+      {error ? (
+        <Text testID="po-share-expiry-error" style={[styles.expiryError, { color: colors.destructive }]}>{error}</Text>
+      ) : null}
+      {alerts.map((alert) => (
+        <View key={alert.purchaseOrderId} testID={`po-share-expiry-item-${alert.purchaseOrderId}`} style={[styles.expiryItem, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.expiryItemCopy}>
+            <Text style={[styles.expiryOrder, { color: colors.foreground }]}>أمر شراء {alert.orderNumber}</Text>
+            <Text style={[styles.expiryMeta, { color: colors.mutedForeground }]}>
+              {alert.supplierName} · ينتهي خلال {alert.hoursRemaining} ساعة
+            </Text>
+            <Text style={[styles.expiryDate, { color: colors.mutedForeground }]}>
+              {formatExpiryDate(alert.expiresAt)}
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel={`تدوير رابط أمر الشراء ${alert.orderNumber}`}
+            testID={`po-share-expiry-rotate-${alert.purchaseOrderId}`}
+            disabled={loading}
+            onPress={() => onRotate(alert.purchaseOrderId)}
+            style={({ pressed }) => [
+              styles.rotateButton,
+              { backgroundColor: colors.warning, opacity: pressed || loading ? 0.7 : 1 },
+            ]}
+          >
+            {rotatingPurchaseOrderId === alert.purchaseOrderId
+              ? <ActivityIndicator color={colors.primaryForeground} />
+              : <Ionicons name="refresh-outline" size={19} color={colors.primaryForeground} />}
+            <Text style={[styles.rotateLabel, { color: colors.primaryForeground }]}>تدوير الرابط</Text>
+          </Pressable>
+        </View>
+      ))}
+      {alerts.length === 0 && error ? (
+        <Empty icon="cloud-offline-outline" title="تعذر تحديث تنبيهات الروابط" text="تحقق من الصلاحية أو إصدار بيانات المنشأة ثم اسحب للتحديث." />
+      ) : null}
+    </Card>
+  );
+}
+
+function formatExpiryDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'تاريخ الانتهاء غير متاح';
+  return `ينتهي في ${date.toLocaleDateString('ar-SA')}، ${date.toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
 function Metric({ icon, label, value, textValue, color }: { icon: keyof typeof Ionicons.glyphMap; label: string; value?: number; textValue?: string; color: string }) {
@@ -78,4 +205,18 @@ const styles = StyleSheet.create({
   action: { borderWidth: 1, borderRadius: 16, padding: 12, flexDirection: 'row-reverse', alignItems: 'center', gap: 12 },
   actionIcon: { width: 42, height: 42, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   actionLabel: { fontFamily: 'Cairo_600SemiBold', fontSize: 14, textAlign: 'right' },
+  expiryCard: { gap: 12, padding: 14 },
+  expiryHeading: { flexDirection: 'row-reverse', alignItems: 'flex-start', gap: 10 },
+  expiryIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
+  expiryCopy: { flex: 1, gap: 2 },
+  expiryTitle: { fontFamily: 'Cairo_700Bold', fontSize: 16, textAlign: 'right' },
+  expiryDescription: { fontFamily: 'Cairo_400Regular', fontSize: 12, lineHeight: 20, textAlign: 'right' },
+  expiryError: { fontFamily: 'Cairo_500Medium', fontSize: 12, lineHeight: 20, textAlign: 'right' },
+  expiryItem: { borderWidth: 1, borderRadius: 14, padding: 12, gap: 12 },
+  expiryItemCopy: { gap: 2 },
+  expiryOrder: { fontFamily: 'Cairo_700Bold', fontSize: 14, textAlign: 'right' },
+  expiryMeta: { fontFamily: 'Cairo_400Regular', fontSize: 12, textAlign: 'right' },
+  expiryDate: { fontFamily: 'Cairo_400Regular', fontSize: 11, textAlign: 'right' },
+  rotateButton: { minHeight: 43, borderRadius: 12, flexDirection: 'row-reverse', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 12 },
+  rotateLabel: { fontFamily: 'Cairo_700Bold', fontSize: 12 },
 });
