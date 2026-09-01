@@ -38,6 +38,7 @@ import Expenses from '@/pages/expenses';
 import ManagerPortal from '@/pages/manager-portal';
 import SuperAdminPortal from '@/pages/super-admin-portal';
 import TestWorkspaceInvite from '@/pages/test-workspace-invite';
+import SupplierPurchaseOrderShare from '@/pages/supplier-purchase-order-share';
 import {
   Features,
   Pricing,
@@ -81,6 +82,7 @@ function Router() {
         <Route path="/resources/operations" component={() => <ResourcePage kind="operations" />} />
         <Route path="/resources/e-invoicing" component={() => <ResourcePage kind="e-invoicing" />} />
         <Route path="/reset-password" component={ResetPassword} />
+        <Route path="/purchase-order-share/:token" component={SupplierPurchaseOrderShare} />
         <Route path="/test-workspace-invite" component={TestWorkspaceInvite} />
         <Route path="/manager" component={() => <SessionLayout><ManagerPortal /></SessionLayout>} />
         <Route path="/super-admin" component={SuperAdminPortal} />

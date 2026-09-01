@@ -81,6 +81,10 @@ const verificationRule: PublicAuthRateLimitRule = {
   byIp: { limit: 10, windowMs: 15 * 60 * 1000 },
   byIdentity: { limit: 5, windowMs: 15 * 60 * 1000 },
 };
+const purchaseOrderShareDecisionRule: PublicAuthRateLimitRule = {
+  byIp: { limit: 20, windowMs: 15 * 60 * 1000 },
+  byIdentity: { limit: 10, windowMs: 15 * 60 * 1000 },
+};
 const preSessionAuthPaths = new Set([
   "/api/auth/login",
   "/api/auth/register",
@@ -116,7 +120,10 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     next();
     return;
   }
-  const rule = request.path === "/auth/login" || request.path === "/platform-auth/login"
+  const isPurchaseOrderShareDecision = /^\/purchase-order-shares\/[A-Za-z0-9_-]{40,64}\/decision$/.test(request.path);
+  const rule = isPurchaseOrderShareDecision
+    ? purchaseOrderShareDecisionRule
+    : request.path === "/auth/login" || request.path === "/platform-auth/login"
     ? loginRule
     : request.path === "/auth/register"
       ? verificationRule
@@ -139,6 +146,7 @@ function publicAuthRateLimit(request: express.Request, response: express.Respons
     typeof request.body?.phone === "string" ? normalizeSaudiPhone(request.body.phone) ?? "" : "",
     typeof request.body?.identifier === "string" ? request.body.identifier.trim().toLowerCase() : "",
     typeof request.body?.username === "string" ? request.body.username.trim().toLowerCase() : "",
+    typeof request.params?.token === "string" ? request.params.token : "",
   ];
   const byIp = consumeRateLimit(`${request.path}:ip:${request.ip}`, rule.byIp);
   const identityLimits = [...new Set(identityValues.filter(Boolean))].map((identity) => {
@@ -223,7 +231,8 @@ app.use((request, response, next) => {
   }
   const hasSession = Boolean(request.cookies?.wudooh_session || request.cookies?.wudooh_super_admin_session);
   const normalizedPath = request.path.replace(/\/+$/, "") || "/";
-  if (!hasSession && !preSessionAuthPaths.has(normalizedPath)) {
+  const isPublicPurchaseOrderSharePath = /^\/api\/purchase-order-shares\/[A-Za-z0-9_-]{40,64}(?:\/decision)?$/.test(normalizedPath);
+  if (!hasSession && !preSessionAuthPaths.has(normalizedPath) && !isPublicPurchaseOrderSharePath) {
     next();
     return;
   }

@@ -1,8 +1,14 @@
 import { Router, type IRouter, type Request, type Response } from "express";
-import { and, eq, sql } from "drizzle-orm";
-import { db, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
+import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { db, erpRecordsTable, organizationsTable, purchaseOrderSharesTable, teamAuditLogsTable } from "@workspace/db";
 import { isLocationAllowed } from "../lib/location-scope";
 import { DEFAULT_ACCOUNT_DEFINITIONS, DEMO_SEED_KEY } from "../lib/seed-demo-data";
+import {
+  createPurchaseOrderShareToken,
+  hashPurchaseOrderShareToken,
+  PURCHASE_ORDER_SHARE_TTL_MS,
+  purchaseOrderShareUrl,
+} from "../lib/purchase-order-share";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -332,6 +338,14 @@ async function purchaseOrderData(
   }
   const notes = typeof data.notes === "string" ? data.notes.trim() : "";
   if (notes.length > 5000) return { error: "ملاحظات أمر الشراء طويلة جداً." };
+  const supplierDecisionStatus = data.supplierDecisionStatus === "confirmed" || data.supplierDecisionStatus === "rejected"
+    ? data.supplierDecisionStatus
+    : undefined;
+  const supplierDecisionNote = typeof data.supplierDecisionNote === "string"
+    ? data.supplierDecisionNote.trim()
+    : "";
+  const supplierDecisionAt = typeof data.supplierDecisionAt === "string" ? data.supplierDecisionAt : "";
+  if (supplierDecisionNote.length > 2000) return { error: "ملاحظة قرار المورد طويلة جداً." };
   const paid = roundMoney(Number(data.paid ?? 0));
   const total = roundMoney(subtotal + vat);
   if (!Number.isFinite(paid) || paid < 0 || paid > total) return { error: "المبلغ المدفوع غير صالح." };
@@ -360,6 +374,13 @@ async function purchaseOrderData(
       received: receivedUnits > 0,
       paid,
       ...(notes ? { notes } : {}),
+      ...(supplierDecisionStatus
+        ? {
+            supplierDecisionStatus,
+            supplierDecisionNote,
+            ...(supplierDecisionAt ? { supplierDecisionAt } : {}),
+          }
+        : {}),
     },
   };
 }
@@ -470,6 +491,51 @@ async function nextPurchaseOrderNumber(executor: DatabaseExecutor, organizationI
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
   return `PO-${String(highest + 1).padStart(4, "0")}`;
+}
+
+async function publicPurchaseOrderDocument(
+  executor: DatabaseExecutor,
+  organizationId: number,
+  record: { id: number; data: Record<string, unknown> },
+): Promise<Record<string, unknown>> {
+  const data = record.data;
+  const warehouseId = Number(data.warehouseId);
+  let warehouseName = String(data.warehouseName ?? "");
+  if (!warehouseName && Number.isInteger(warehouseId) && warehouseId > 0) {
+    const [warehouse] = await executor.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, warehouseId),
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "warehouses"),
+    )).limit(1);
+    warehouseName = warehouse ? String(warehouse.data.name ?? "") : "";
+  }
+  const items = Array.isArray(data.items)
+    ? data.items
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      .map((item) => ({
+        productName: String(item.productName ?? item.name ?? ""),
+        quantity: Number(item.quantity) || 0,
+        unitCost: Number(item.unitCost ?? item.unitCostExVat) || 0,
+        vatRate: Number(item.vatRate) || 0,
+        lineNet: Number(item.lineNet) || 0,
+        vatAmount: Number(item.vatAmount) || 0,
+        total: Number(item.total ?? item.lineGross) || 0,
+      }))
+    : [];
+
+  return {
+    orderNumber: String(data.orderNumber ?? ""),
+    supplierName: String(data.supplierName ?? ""),
+    warehouseName,
+    issueDate: String(data.issueDate ?? data.date ?? ""),
+    ...(data.expectedDate ? { expectedDate: String(data.expectedDate) } : {}),
+    status: String(data.status ?? "draft"),
+    items,
+    subtotal: Number(data.subtotal) || 0,
+    vat: Number(data.vat ?? data.tax) || 0,
+    total: Number(data.total) || 0,
+    notes: data.notes ? String(data.notes) : "",
+  };
 }
 
 class MutationRejected extends Error {
@@ -667,46 +733,300 @@ router.get("/data/purchaseOrders/:id/print", requireAuth, requireSubscriptionAcc
     return;
   }
 
-  const data = record.data as Record<string, unknown>;
-  const warehouseId = Number(data.warehouseId);
-  let warehouseName = String(data.warehouseName ?? "");
-  if (!warehouseName && Number.isInteger(warehouseId) && warehouseId > 0) {
-    const [warehouse] = await db.select().from(erpRecordsTable).where(and(
-      eq(erpRecordsTable.id, warehouseId),
-      eq(erpRecordsTable.organizationId, auth.organizationId),
-      eq(erpRecordsTable.tableName, "warehouses"),
-    )).limit(1);
-    warehouseName = warehouse ? String(warehouse.data.name ?? "") : "";
-  }
-  const items = Array.isArray(data.items)
-    ? data.items
-      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
-      .map((item) => ({
-        productName: String(item.productName ?? item.name ?? ""),
-        quantity: Number(item.quantity) || 0,
-        unitCost: Number(item.unitCost ?? item.unitCostExVat) || 0,
-        vatRate: Number(item.vatRate) || 0,
-        lineNet: Number(item.lineNet) || 0,
-        vatAmount: Number(item.vatAmount) || 0,
-        total: Number(item.total ?? item.lineGross) || 0,
-      }))
-    : [];
+  response.json({ document: await publicPurchaseOrderDocument(db, auth.organizationId, record) });
+});
 
+router.get("/data/purchaseOrders/:id/share", requireAuth, requireSubscriptionAccess, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const id = Number(request.params.id);
+  if (!Number.isInteger(id) || id <= 0 || !hasTableAccess(auth, "purchaseOrders")) {
+    response.status(!Number.isInteger(id) || id <= 0 ? 400 : 403).json({
+      error: !Number.isInteger(id) || id <= 0 ? "معرّف أمر الشراء غير صالح." : "ليس لديك صلاحية لهذه الوحدة.",
+    });
+    return;
+  }
+  const [record] = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, id),
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    eq(erpRecordsTable.tableName, "purchaseOrders"),
+  )).limit(1);
+  if (!record || !isLocationAllowed(auth, "purchaseOrders", record.data, record.id)) {
+    response.status(404).json({ error: "أمر الشراء غير متاح." });
+    return;
+  }
+  const [share] = await db.select().from(purchaseOrderSharesTable).where(and(
+    eq(purchaseOrderSharesTable.organizationId, auth.organizationId),
+    eq(purchaseOrderSharesTable.purchaseOrderId, id),
+    isNull(purchaseOrderSharesTable.revokedAt),
+    gt(purchaseOrderSharesTable.expiresAt, new Date()),
+  )).orderBy(desc(purchaseOrderSharesTable.createdAt)).limit(1);
   response.json({
-    document: {
-      orderNumber: String(data.orderNumber ?? ""),
-      supplierName: String(data.supplierName ?? ""),
-      warehouseName,
-      issueDate: String(data.issueDate ?? data.date ?? ""),
-      expectedDate: data.expectedDate ? String(data.expectedDate) : undefined,
-      status: String(data.status ?? "draft"),
-      items,
-      subtotal: Number(data.subtotal) || 0,
-      vat: Number(data.vat ?? data.tax) || 0,
-      total: Number(data.total) || 0,
-      notes: data.notes ? String(data.notes) : "",
+    share: share
+      ? {
+          id: share.id,
+          status: share.decisionStatus,
+          expiresAt: share.expiresAt.toISOString(),
+          createdAt: share.createdAt.toISOString(),
+        }
+      : null,
+    decision: {
+      status: String(record.data.supplierDecisionStatus ?? "pending"),
+      note: record.data.supplierDecisionNote ? String(record.data.supplierDecisionNote) : "",
+      decidedAt: record.data.supplierDecisionAt ? String(record.data.supplierDecisionAt) : null,
     },
   });
+});
+
+router.post("/data/purchaseOrders/:id/share", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const id = Number(request.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    response.status(400).json({ error: "معرّف أمر الشراء غير صالح." });
+    return;
+  }
+  if (!hasTableAccess(auth, "purchaseOrders")) {
+    response.status(403).json({ error: "ليس لديك صلاحية لهذه الوحدة." });
+    return;
+  }
+
+  const token = createPurchaseOrderShareToken();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + PURCHASE_ORDER_SHARE_TTL_MS);
+  let share: typeof purchaseOrderSharesTable.$inferSelect | undefined;
+  let rotated = false;
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedMutationRejected(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, "purchaseOrders")) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      const [order] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "purchaseOrders"),
+      )).for("update");
+      if (!order || !isLocationAllowed(currentAuth, "purchaseOrders", order.data, order.id)) {
+        throw new MutationRejected(404, "أمر الشراء غير متاح.");
+      }
+      if (order.data.status !== "draft" && order.data.status !== "sent") {
+        throw new MutationRejected(409, "لا يمكن مشاركة أمر شراء بدأ استلامه أو أُلغي.");
+      }
+      const revoked = await tx.update(purchaseOrderSharesTable).set({ revokedAt: now }).where(and(
+        eq(purchaseOrderSharesTable.organizationId, currentAuth.organizationId),
+        eq(purchaseOrderSharesTable.purchaseOrderId, id),
+        isNull(purchaseOrderSharesTable.revokedAt),
+      )).returning({ id: purchaseOrderSharesTable.id });
+      rotated = revoked.length > 0;
+      const [created] = await tx.insert(purchaseOrderSharesTable).values({
+        organizationId: currentAuth.organizationId,
+        purchaseOrderId: id,
+        tokenHash: hashPurchaseOrderShareToken(token),
+        expiresAt,
+      }).returning();
+      return created;
+    });
+    share = result;
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+  await audit(auth, response, rotated ? "purchase_order_share_rotated" : "purchase_order_share_created", String(id));
+  response.status(201).json({
+    share: {
+      id: share.id,
+      url: purchaseOrderShareUrl(request, token),
+      status: share.decisionStatus,
+      expiresAt: share.expiresAt.toISOString(),
+      createdAt: share.createdAt.toISOString(),
+    },
+    rotated,
+  });
+});
+
+router.post("/data/purchaseOrders/:id/share/revoke", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const id = Number(request.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    response.status(400).json({ error: "معرّف أمر الشراء غير صالح." });
+    return;
+  }
+  if (!hasTableAccess(auth, "purchaseOrders")) {
+    response.status(403).json({ error: "ليس لديك صلاحية لهذه الوحدة." });
+    return;
+  }
+  let revoked = 0;
+  try {
+    revoked = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedMutationRejected(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, "purchaseOrders")) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      const [order] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "purchaseOrders"),
+      )).for("update");
+      if (!order || !isLocationAllowed(currentAuth, "purchaseOrders", order.data, order.id)) {
+        throw new MutationRejected(404, "أمر الشراء غير متاح.");
+      }
+      const rows = await tx.update(purchaseOrderSharesTable).set({ revokedAt: new Date() }).where(and(
+        eq(purchaseOrderSharesTable.organizationId, currentAuth.organizationId),
+        eq(purchaseOrderSharesTable.purchaseOrderId, id),
+        isNull(purchaseOrderSharesTable.revokedAt),
+      )).returning({ id: purchaseOrderSharesTable.id });
+      return rows.length;
+    });
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+  if (revoked > 0) await audit(auth, response, "purchase_order_share_revoked", String(id));
+  response.json({ revoked });
+});
+
+router.get("/purchase-order-shares/:token", async (request: Request, response: Response): Promise<void> => {
+  const token = typeof request.params.token === "string" ? request.params.token.trim() : "";
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) {
+    response.status(404).json({ error: "رابط أمر الشراء غير صالح أو منتهي." });
+    return;
+  }
+  const [share] = await db.select().from(purchaseOrderSharesTable).where(eq(
+    purchaseOrderSharesTable.tokenHash,
+    hashPurchaseOrderShareToken(token),
+  )).limit(1);
+  const now = new Date();
+  if (!share || share.revokedAt || share.expiresAt <= now) {
+    response.status(404).json({ error: "رابط أمر الشراء غير صالح أو منتهي." });
+    return;
+  }
+  const [order] = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, share.purchaseOrderId),
+    eq(erpRecordsTable.organizationId, share.organizationId),
+    eq(erpRecordsTable.tableName, "purchaseOrders"),
+  )).limit(1);
+  if (!order) {
+    response.status(404).json({ error: "رابط أمر الشراء غير صالح أو منتهي." });
+    return;
+  }
+  if (order.data.status !== "draft" && order.data.status !== "sent") {
+    response.status(404).json({ error: "رابط أمر الشراء غير صالح أو منتهي." });
+    return;
+  }
+  response.json({
+    document: await publicPurchaseOrderDocument(db, share.organizationId, order),
+    share: {
+      status: share.decisionStatus,
+      expiresAt: share.expiresAt.toISOString(),
+      decidedAt: share.decidedAt?.toISOString() ?? null,
+      decisionNote: share.decisionNote ?? "",
+    },
+  });
+});
+
+router.post("/purchase-order-shares/:token/decision", async (request: Request, response: Response): Promise<void> => {
+  const token = typeof request.params.token === "string" ? request.params.token.trim() : "";
+  const decision = request.body?.decision;
+  const note = typeof request.body?.note === "string" ? request.body.note.trim() : "";
+  if (!/^[A-Za-z0-9_-]{40,64}$/.test(token)) {
+    response.status(404).json({ error: "رابط أمر الشراء غير صالح أو منتهي." });
+    return;
+  }
+  if (decision !== "confirmed" && decision !== "rejected") {
+    response.status(400).json({ error: "اختر تأكيد أمر الشراء أو رفضه." });
+    return;
+  }
+  if (note.length > 2000) {
+    response.status(400).json({ error: "الملاحظة طويلة جداً." });
+    return;
+  }
+  const origin = request.get("origin");
+  if (origin) {
+    try {
+      if (new URL(origin).host !== request.get("host")) {
+        response.status(403).json({ error: "مصدر الطلب غير موثوق." });
+        return;
+      }
+    } catch {
+      response.status(403).json({ error: "مصدر الطلب غير موثوق." });
+      return;
+    }
+  }
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [share] = await tx.select().from(purchaseOrderSharesTable).where(eq(
+        purchaseOrderSharesTable.tokenHash,
+        hashPurchaseOrderShareToken(token),
+      )).for("update");
+      const now = new Date();
+      if (!share || share.revokedAt || share.expiresAt <= now) {
+        throw new MutationRejected(404, "رابط أمر الشراء غير صالح أو منتهي.");
+      }
+      if (share.decisionStatus !== "pending") {
+        throw new MutationRejected(409, "تم اتخاذ قرار على هذا الرابط مسبقاً.");
+      }
+      const [order] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, share.purchaseOrderId),
+        eq(erpRecordsTable.organizationId, share.organizationId),
+        eq(erpRecordsTable.tableName, "purchaseOrders"),
+      )).for("update");
+      if (!order) throw new MutationRejected(404, "رابط أمر الشراء غير صالح أو منتهي.");
+      if (order.data.status !== "draft" && order.data.status !== "sent") {
+        throw new MutationRejected(409, "لم يعد أمر الشراء مفتوحاً لاتخاذ قرار المورد.");
+      }
+      const decidedAt = new Date();
+      const [updatedShare] = await tx.update(purchaseOrderSharesTable).set({
+        decisionStatus: decision,
+        decisionNote: note || null,
+        decidedAt,
+      }).where(eq(purchaseOrderSharesTable.id, share.id)).returning();
+      const [updatedOrder] = await tx.update(erpRecordsTable).set({
+        data: {
+          ...order.data,
+          supplierDecisionStatus: decision,
+          ...(note ? { supplierDecisionNote: note } : { supplierDecisionNote: "" }),
+          supplierDecisionAt: decidedAt.toISOString(),
+        },
+        updatedAt: decidedAt,
+      }).where(eq(erpRecordsTable.id, order.id)).returning();
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: share.organizationId,
+        actorId: null,
+        actorName: String(order.data.supplierName ?? "المورد"),
+        action: "purchase_order_supplier_decision",
+        entity: String(order.id),
+        details: JSON.stringify({
+          decision,
+          decidedAt: decidedAt.toISOString(),
+          hasNote: Boolean(note),
+        }),
+      });
+      return { share: updatedShare, order: updatedOrder };
+    });
+    response.json({
+      decision: {
+        status: result.share.decisionStatus,
+        note: result.share.decisionNote ?? "",
+        decidedAt: result.share.decidedAt?.toISOString() ?? null,
+      },
+      document: await publicPurchaseOrderDocument(db, result.order.organizationId, result.order),
+    });
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
 });
 
 router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
@@ -1116,6 +1436,9 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         };
       }
       if (access.tableName === "purchaseOrders") {
+        if (["supplierDecisionStatus", "supplierDecisionNote", "supplierDecisionAt"].some((field) => Object.hasOwn(body, field))) {
+          throw new MutationRejected(403, "قرار المورد لا يُعدّل إلا من رابط المشاركة الآمن.");
+        }
         if (current.data.status === "partial" || current.data.status === "received" || current.data.status === "cancelled" || current.data.received === true) {
           throw new MutationRejected(409, "لا يمكن تعديل أمر شراء بدأ استلامه أو أُلغي.");
         }
@@ -1143,6 +1466,13 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
           createdAt: current.data.createdAt,
           ...(nextStatus === "cancelled" ? { cancelledAt: new Date().toISOString() } : {}),
         };
+        if (nextStatus === "cancelled") {
+          await tx.update(purchaseOrderSharesTable).set({ revokedAt: new Date() }).where(and(
+            eq(purchaseOrderSharesTable.organizationId, currentAuth.organizationId),
+            eq(purchaseOrderSharesTable.purchaseOrderId, id),
+            isNull(purchaseOrderSharesTable.revokedAt),
+          ));
+        }
       }
       if (isAccountingSource(access.tableName) && await isClosedDate(
         currentAuth,

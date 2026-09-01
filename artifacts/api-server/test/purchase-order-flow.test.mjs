@@ -193,6 +193,107 @@ test("يعيد مستند الطباعة حقول المورد فقط دون ب�
   assert.equal(JSON.stringify(printed.payload).includes("receivedQuantity"), false);
 });
 
+test("ينشئ رابط مورد مؤقتاً ويعرض مستنداً منقّى ويسجل قراراً أحادياً", async () => {
+  const scenario = await fixture("اعتماد-المورد");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, {
+      status: "sent",
+      paymentMethod: "cash",
+      dueDate: "",
+      paid: 23,
+      notes: "يرجى تأكيد موعد التوريد",
+    }),
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+  const orderId = created.payload.record.id;
+
+  const createdShare = await request(`/data/purchaseOrders/${orderId}/share`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+  });
+  assert.equal(createdShare.response.status, 201, JSON.stringify(createdShare.payload));
+  assert.match(createdShare.payload.share.url, /\/purchase-order-share\/[A-Za-z0-9_-]{40,64}$/);
+  assert.equal(createdShare.payload.share.status, "pending");
+  assert.ok(new Date(createdShare.payload.share.expiresAt) > new Date());
+
+  const token = createdShare.payload.share.url.split("/").pop();
+  const publicDocument = await request(`/purchase-order-shares/${token}`, { headers: {} });
+  assert.equal(publicDocument.response.status, 200, JSON.stringify(publicDocument.payload));
+  assert.deepEqual(
+    Object.keys(publicDocument.payload.document).sort(),
+    ["expectedDate", "issueDate", "items", "notes", "orderNumber", "status", "subtotal", "supplierName", "total", "vat", "warehouseName"].sort(),
+  );
+  assert.equal(publicDocument.payload.document.items[0].productName, scenario.product.name);
+  assert.equal(JSON.stringify(publicDocument.payload).includes("paymentMethod"), false);
+  assert.equal(JSON.stringify(publicDocument.payload).includes("paid"), false);
+  assert.equal(JSON.stringify(publicDocument.payload).includes("receivedQuantity"), false);
+  assert.equal(JSON.stringify(publicDocument.payload).includes("warehouseId"), false);
+
+  const decision = await request(`/purchase-order-shares/${token}/decision`, {
+    method: "POST",
+    body: { decision: "confirmed", note: "تمت مراجعة الكميات وموعد التوريد." },
+  });
+  assert.equal(decision.response.status, 200, JSON.stringify(decision.payload));
+  assert.equal(decision.payload.decision.status, "confirmed");
+  assert.equal(decision.payload.decision.note, "تمت مراجعة الكميات وموعد التوريد.");
+  assert.ok(decision.payload.decision.decidedAt);
+
+  const replay = await request(`/purchase-order-shares/${token}/decision`, {
+    method: "POST",
+    body: { decision: "rejected", note: "لا ينبغي تغيير القرار" },
+  });
+  assert.equal(replay.response.status, 409, JSON.stringify(replay.payload));
+
+  const orders = await request("/data/purchaseOrders", { cookie: scenario.account.cookie });
+  const saved = orders.payload.records.find((record) => record.id === orderId);
+  assert.equal(saved.supplierDecisionStatus, "confirmed");
+  assert.equal(saved.supplierDecisionNote, "تمت مراجعة الكميات وموعد التوريد.");
+  assert.ok(saved.supplierDecisionAt);
+});
+
+test("يدوّر رابط المورد ويلغي الرابط السابق ويمنع قراراً من مصدر غير موثوق", async () => {
+  const scenario = await fixture("تدوير-الرابط");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, { status: "sent" }),
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+  const orderId = created.payload.record.id;
+
+  const first = await request(`/data/purchaseOrders/${orderId}/share`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+  });
+  const firstToken = first.payload.share.url.split("/").pop();
+  const second = await request(`/data/purchaseOrders/${orderId}/share`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+  });
+  assert.equal(second.response.status, 201, JSON.stringify(second.payload));
+  assert.equal(second.payload.rotated, true);
+  const secondToken = second.payload.share.url.split("/").pop();
+  assert.notEqual(firstToken, secondToken);
+  assert.equal((await request(`/purchase-order-shares/${firstToken}`)).response.status, 404);
+
+  const crossOrigin = await request(`/purchase-order-shares/${secondToken}/decision`, {
+    method: "POST",
+    headers: { Origin: "https://attacker.example" },
+    body: { decision: "confirmed" },
+  });
+  assert.equal(crossOrigin.response.status, 403, JSON.stringify(crossOrigin.payload));
+
+  const revoked = await request(`/data/purchaseOrders/${orderId}/share/revoke`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+  });
+  assert.equal(revoked.response.status, 200, JSON.stringify(revoked.payload));
+  assert.equal(revoked.payload.revoked, 1);
+  assert.equal((await request(`/purchase-order-shares/${secondToken}`)).response.status, 404);
+});
+
 test("يسجل الاستلام الجزئي والكامل ذرياً ويعيد الطلب نفسه بلا تكرار", async () => {
   const scenario = await fixture("استلام");
   const created = await request("/data/purchaseOrders", {

@@ -13,6 +13,11 @@ import {
   ReceiptText,
   Printer,
   Share2,
+  Link2,
+  RefreshCw,
+  XCircle,
+  Clock3,
+  CheckCircle2,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
@@ -87,6 +92,9 @@ type PurchaseOrder = {
   remaining?: number;
   notes?: string;
   createdAt: string;
+  supplierDecisionStatus?: 'pending' | 'confirmed' | 'rejected';
+  supplierDecisionNote?: string;
+  supplierDecisionAt?: string;
 };
 
 type PublicPurchaseOrderDocument = Pick<
@@ -103,6 +111,14 @@ type PublicPurchaseOrderDocument = Pick<
   | 'total'
   | 'notes'
 >;
+
+type PurchaseOrderShare = {
+  id: number;
+  url?: string;
+  status: 'pending' | 'confirmed' | 'rejected';
+  expiresAt: string;
+  createdAt: string;
+};
 
 const statusColors: Record<string, string> = {
   draft: 'bg-slate-100 text-slate-700',
@@ -124,6 +140,12 @@ const paymentStatusLabels: Record<string, string> = {
   unpaid: 'غير مدفوع',
   partial: 'مدفوع جزئياً',
   paid: 'مدفوع',
+};
+
+const supplierDecisionLabels: Record<string, string> = {
+  pending: 'بانتظار قرار المورد',
+  confirmed: 'أكد المورد الأمر',
+  rejected: 'رفض المورد الأمر',
 };
 
 const defaultForm = () => ({
@@ -164,6 +186,17 @@ const formatDocumentDate = (value?: string) => {
     ? value
     : new Intl.DateTimeFormat('ar-SA-u-ca-gregory', {
         dateStyle: 'medium',
+      }).format(date);
+};
+
+const formatDocumentDateTime = (value?: string) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat('ar-SA-u-ca-gregory', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
       }).format(date);
 };
 
@@ -320,6 +353,9 @@ export default function PurchaseOrders() {
   const [viewingOrder, setViewingOrder] = useState<PurchaseOrder | null>(null);
   const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
   const [sharingOrderId, setSharingOrderId] = useState<number | null>(null);
+  const [shareInfo, setShareInfo] = useState<PurchaseOrderShare | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [revokingShare, setRevokingShare] = useState(false);
 
   const [receiveOrder, setReceiveOrder] = useState<PurchaseOrder | null>(null);
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
@@ -375,6 +411,42 @@ export default function PurchaseOrders() {
           max: i.quantity - i.receivedQuantity,
         }))
     );
+  };
+
+  const loadShare = async (order: PurchaseOrder) => {
+    if (!currentUser) return;
+    setShareLoading(true);
+    try {
+      const response = await fetch(`/api/data/purchaseOrders/${order.id}/share`, {
+        credentials: 'include',
+        headers: { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'تعذر تحميل حالة رابط المشاركة');
+      setShareInfo(payload.share || null);
+      setViewingOrder((current) => current?.id === order.id
+        ? {
+            ...current,
+            supplierDecisionStatus: payload.decision?.status,
+            supplierDecisionNote: payload.decision?.note || '',
+            supplierDecisionAt: payload.decision?.decidedAt || undefined,
+          }
+        : current);
+    } catch (error) {
+      toast({
+        title: 'تعذر تحميل رابط المشاركة',
+        description: error instanceof Error ? error.message : 'حاول مرة أخرى.',
+        variant: 'destructive',
+      });
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const openOrderDetails = (order: PurchaseOrder) => {
+    setViewingOrder(order);
+    setShareInfo(null);
+    void loadShare(order);
   };
 
   const updateItem = (index: number, field: keyof PurchaseOrderItem, value: any) => {
@@ -618,46 +690,41 @@ export default function PurchaseOrders() {
     }
   };
 
-  const shareOrder = async (order: PurchaseOrder) => {
+  const createShareLink = async (order: PurchaseOrder, openShareSheet = true) => {
+    if (!currentUser) return;
+    if (shareInfo && !confirm('سيؤدي تدوير الرابط إلى إلغاء الرابط الحالي فوراً. هل تريد المتابعة؟')) return;
     setSharingOrderId(order.id);
     try {
-      const response = await fetch(`/api/data/purchaseOrders/${order.id}/print`, {
+      const response = await fetch(`/api/data/purchaseOrders/${order.id}/share`, {
+        method: 'POST',
         credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+        },
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload.document) {
-        throw new Error(payload.error || 'تعذر تجهيز بيانات المشاركة');
+      if (!response.ok || !payload.share?.url) {
+        throw new Error(payload.error || 'تعذر إنشاء رابط المشاركة');
       }
-      const document = payload.document as PublicPurchaseOrderDocument;
-      const itemSummary = document.items
-        .map((item) => `- ${itemDisplayName(item)}: ${Number(item.quantity) || 0}`)
-        .join('\n');
-      const text = [
-        `أمر شراء ${document.orderNumber}`,
-        `المورد: ${document.supplierName}`,
-        `موقع التسليم: ${document.warehouseName || '-'}`,
-        `تاريخ الإصدار: ${formatDocumentDate(document.issueDate)}`,
-        `الحالة: ${statusLabels[document.status] || document.status}`,
-        '',
-        'الأصناف:',
-        itemSummary,
-        '',
-        `الإجمالي الكلي: ${formatCurrencyValue(document.total)}`,
-      ].join('\n');
-      const shareCapableNavigator = navigator as Navigator & {
-        share?: (data: { title: string; text: string }) => Promise<void>;
-      };
-      if (shareCapableNavigator.share) {
-        await shareCapableNavigator.share({
-          title: `أمر شراء ${document.orderNumber}`,
-          text,
-        });
-        toast({ title: 'تم فتح خيارات المشاركة' });
-      } else if (navigator.clipboard) {
-        await navigator.clipboard.writeText(text);
-        toast({ title: 'تم نسخ ملخص الأمر', description: 'يمكنك لصقه وإرساله للمورد.' });
-      } else {
-        throw new Error('المشاركة غير مدعومة في هذا المتصفح.');
+      setShareInfo(payload.share as PurchaseOrderShare);
+      if (openShareSheet) {
+        const shareCapableNavigator = navigator as Navigator & {
+          share?: (data: { title: string; text: string; url: string }) => Promise<void>;
+        };
+        if (shareCapableNavigator.share) {
+          await shareCapableNavigator.share({
+            title: `أمر شراء ${order.orderNumber}`,
+            text: `يرجى مراجعة أمر الشراء ${order.orderNumber} وتأكيده أو رفضه من الرابط الآمن.`,
+            url: payload.share.url,
+          });
+          toast({ title: 'تم فتح خيارات المشاركة' });
+        } else if (navigator.clipboard) {
+          await navigator.clipboard.writeText(payload.share.url);
+          toast({ title: 'تم نسخ رابط المورد', description: 'يمكنك لصقه وإرساله للمورد.' });
+        } else {
+          toast({ title: 'تم إنشاء الرابط', description: payload.share.url });
+        }
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -668,6 +735,52 @@ export default function PurchaseOrders() {
       });
     } finally {
       setSharingOrderId(null);
+    }
+  };
+
+  const shareOrder = async (order: PurchaseOrder) => {
+    await createShareLink(order);
+  };
+
+  const copyShareLink = async () => {
+    if (!shareInfo?.url) return;
+    try {
+      if (!navigator.clipboard) throw new Error('المشاركة غير مدعومة في هذا المتصفح.');
+      await navigator.clipboard.writeText(shareInfo.url);
+      toast({ title: 'تم نسخ الرابط الآمن' });
+    } catch (error) {
+      toast({
+        title: 'تعذر نسخ الرابط',
+        description: error instanceof Error ? error.message : 'حاول مرة أخرى.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const revokeShare = async (order: PurchaseOrder) => {
+    if (!currentUser || !confirm('سيُلغى الرابط ولن يتمكن المورد من استخدامه بعد الآن. هل تريد المتابعة؟')) return;
+    setRevokingShare(true);
+    try {
+      const response = await fetch(`/api/data/purchaseOrders/${order.id}/share/revoke`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+        },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'تعذر إلغاء الرابط');
+      setShareInfo(null);
+      toast({ title: 'تم إلغاء رابط المورد' });
+    } catch (error) {
+      toast({
+        title: 'تعذر إلغاء الرابط',
+        description: error instanceof Error ? error.message : 'حاول مرة أخرى.',
+        variant: 'destructive',
+      });
+    } finally {
+      setRevokingShare(false);
     }
   };
 
@@ -796,7 +909,7 @@ export default function PurchaseOrders() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50"
-                          onClick={() => setViewingOrder(po)}
+                           onClick={() => openOrderDetails(po)}
                           title="عرض التفاصيل"
                           data-testid={`po-btn-view-${po.id}`}
                         >
@@ -1220,6 +1333,77 @@ export default function PurchaseOrders() {
                    {sharingOrderId === viewingOrder.id ? 'جارٍ التحضير...' : 'مشاركة مع المورد'}
                  </Button>
                </div>
+                <div className="rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="flex items-start gap-3">
+                      <div className="mt-0.5 rounded-xl bg-indigo-100 p-2 text-indigo-700">
+                        <Link2 className="h-5 w-5" aria-hidden="true" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900">اعتماد المورد عبر رابط آمن</h3>
+                        {shareLoading ? (
+                          <p className="mt-1 text-sm text-slate-500">جارٍ تحميل حالة الرابط...</p>
+                        ) : shareInfo ? (
+                          <p className="mt-1 text-sm text-slate-600">
+                            الرابط فعّال حتى {formatDocumentDateTime(shareInfo.expiresAt)}. لا تشارك الرابط إلا مع المورد المقصود.
+                          </p>
+                        ) : (
+                          <p className="mt-1 text-sm text-slate-600">أنشئ رابطاً مؤقتاً ليتمكن المورد من مراجعة الأمر وتأكيده أو رفضه.</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {shareInfo?.url ? (
+                        <Button type="button" variant="outline" className="gap-2 border-indigo-200 bg-white text-indigo-700" onClick={() => void copyShareLink()}>
+                          <Link2 className="h-4 w-4" /> نسخ الرابط
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant={shareInfo ? 'outline' : 'default'}
+                        className="gap-2"
+                        onClick={() => void createShareLink(viewingOrder, false)}
+                        disabled={shareLoading || sharingOrderId === viewingOrder.id || viewingOrder.status === 'cancelled' || viewingOrder.status === 'received' || viewingOrder.status === 'partial'}
+                      >
+                        {sharingOrderId === viewingOrder.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : shareInfo ? <RefreshCw className="h-4 w-4" /> : <Link2 className="h-4 w-4" />}
+                        {shareInfo ? 'تدوير الرابط' : 'إنشاء رابط'}
+                      </Button>
+                      {shareInfo && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="gap-2 text-rose-700 hover:bg-rose-100 hover:text-rose-800"
+                          onClick={() => void revokeShare(viewingOrder)}
+                          disabled={revokingShare}
+                        >
+                          {revokingShare ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                          إلغاء الرابط
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {shareInfo?.url && (
+                    <div className="mt-3 rounded-xl border border-indigo-100 bg-white px-3 py-2 text-left text-xs text-slate-600" dir="ltr">
+                      <span className="break-all">{shareInfo.url}</span>
+                    </div>
+                  )}
+                  <div className="mt-4 grid gap-3 border-t border-indigo-100 pt-4 sm:grid-cols-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      {viewingOrder.supplierDecisionStatus === 'confirmed' ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : viewingOrder.supplierDecisionStatus === 'rejected' ? <XCircle className="h-4 w-4 text-rose-600" /> : <Clock3 className="h-4 w-4 text-amber-600" />}
+                      <span className="font-bold text-slate-800">{supplierDecisionLabels[viewingOrder.supplierDecisionStatus || 'pending']}</span>
+                    </div>
+                    {viewingOrder.supplierDecisionAt && (
+                      <div className="text-sm text-slate-600">
+                        وقت القرار: <span className="font-semibold text-slate-800">{formatDocumentDateTime(viewingOrder.supplierDecisionAt)}</span>
+                      </div>
+                    )}
+                  </div>
+                  {viewingOrder.supplierDecisionNote && (
+                    <div className="mt-3 rounded-xl bg-white/70 px-3 py-2 text-sm text-slate-700">
+                      <span className="font-bold">ملاحظة المورد:</span> {viewingOrder.supplierDecisionNote}
+                    </div>
+                  )}
+                </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50 p-5 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
                   <div className="text-xs text-slate-500 mb-1">المورد</div>
