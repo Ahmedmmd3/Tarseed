@@ -10,6 +10,7 @@ const APP_SHELL = [
   new URL('favicon.png', SCOPE_URL).href,
   new URL('logo.png', SCOPE_URL).href,
   new URL('logo-transparent.png', SCOPE_URL).href,
+  new URL('logo-mark.png', SCOPE_URL).href,
   ...BUILD_ASSETS.map((asset) => new URL(asset, SCOPE_URL).href),
 ];
 

@@ -554,8 +554,8 @@ function PhoneChangeDialog({
 function BrandLockup({ dark = false }: { dark?: boolean }) {
   return (
     <div className={`flex items-center gap-3 ${dark ? 'text-white' : 'text-[#0A1328]'}`}>
-      <div className="relative h-11 w-11 shrink-0 overflow-hidden">
-        <img src={`${import.meta.env.BASE_URL}logo-transparent.png`} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} />
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center">
+        <img src={`${import.meta.env.BASE_URL}logo-mark.png`} alt="شعار ترصيد" className="h-full w-full object-contain" />
       </div>
       <div><p className="text-lg font-black leading-none">ترصيد</p><p className={`mt-1 text-[10px] font-semibold ${dark ? 'text-slate-400' : 'text-slate-500'}`}>إدارة أسهل لنمو أسرع</p></div>
     </div>

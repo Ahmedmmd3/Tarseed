@@ -77,8 +77,8 @@ export default function Guide() {
       <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0A1328]/95 shadow-lg backdrop-blur-xl">
         <div className="mx-auto flex min-h-[72px] max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-3 text-white" aria-label="العودة إلى الصفحة الرئيسية">
-            <span className="relative h-10 w-10 shrink-0 overflow-hidden">
-              <img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '105px', right: '-31px', top: '-20px' }} />
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center">
+              <img src={asset('logo-mark.png')} alt="شعار ترصيد" className="h-full w-full object-contain" />
             </span>
             <span className="text-lg font-black">ترصيد</span>
           </Link>

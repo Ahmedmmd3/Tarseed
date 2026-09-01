@@ -356,7 +356,7 @@ function BriefcaseIcon(props: React.ComponentProps<typeof Building2>) {
 }
 
 function BrandMark({ light = false }: { light?: boolean }) {
-  return <div className="relative h-11 w-11 shrink-0 overflow-hidden"><img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} /></div>;
+  return <div className="flex h-12 w-12 shrink-0 items-center justify-center"><img src={asset('logo-mark.png')} alt="شعار ترصيد" className="h-full w-full object-contain" /></div>;
 }
 
 export default MarketingShell;

@@ -244,12 +244,11 @@ export default function ManagerPortal() {
       {/* Top Bar */}
       <header className="px-6 py-4 flex items-center justify-between border-b border-white/5 bg-[#0A1328]/50 backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-white/5 flex items-center justify-center border border-white/10 shadow-inner">
+           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white/5 border border-white/10 shadow-inner">
              <img 
-               src={`${import.meta.env.BASE_URL}logo-transparent.png`} 
+               src={`${import.meta.env.BASE_URL}logo-mark.png`}
                alt="شعار ترصيد" 
-                className="absolute max-w-none"
-               style={{ width: '100px', right: '-30px', top: '-18px' }} 
+               className="h-full w-full object-contain p-1"
              />
           </div>
           <div>
