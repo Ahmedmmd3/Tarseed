@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { useStore } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 
-export function useCrud<T extends { id: number | string }>(table: string) {
+export function useCrud<T extends { id: number | string }>(table: string, enabled = true) {
   const { currentUser } = useStore();
   const { toast } = useToast();
   const [data, setData] = useState<T[]>([]);
@@ -31,7 +31,12 @@ export function useCrud<T extends { id: number | string }>(table: string) {
   };
 
   const load = useCallback(async () => {
-    if (!currentUser) return;
+    if (!currentUser || !enabled) {
+      setData([]);
+      setLoading(false);
+      setError('');
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -43,7 +48,7 @@ export function useCrud<T extends { id: number | string }>(table: string) {
     } finally {
       setLoading(false);
     }
-  }, [table, currentUser, getHeaders]);
+  }, [table, currentUser, enabled, getHeaders]);
 
   useEffect(() => {
     load();

@@ -57,6 +57,7 @@ export default function Sales() {
               { key: 'issueDate', label: 'التاريخ', type: 'date' },
               { key: 'total', label: 'الإجمالي', type: 'number' },
               { key: 'status', label: 'الحالة', type: 'select', options: [
+                { label: 'مسودة من عرض سعر', value: 'draft' },
                 { label: 'مسددة', value: 'paid' },
                 { label: 'غير مسددة', value: 'unpaid' },
                 { label: 'مسددة جزئياً', value: 'partial' },

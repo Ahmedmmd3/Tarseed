@@ -28,6 +28,7 @@ import EInvoicing from '@/pages/e-invoicing';
 import ResetPassword from '@/pages/reset-password';
 import POS from '@/pages/pos';
 import Sales from '@/pages/sales';
+import Quotations from '@/pages/quotations';
 import Purchases from '@/pages/purchases';
 import Inventory from '@/pages/inventory';
 import HR from '@/pages/hr';
@@ -86,6 +87,7 @@ function Router() {
         <Route path="/guide" component={Guide} />
         <Route path="/pos" component={() => <DashboardLayout><POS /></DashboardLayout>} />
         <Route path="/sales" component={() => <DashboardLayout><Sales /></DashboardLayout>} />
+        <Route path="/quotations" component={() => <DashboardLayout><Quotations /></DashboardLayout>} />
         <Route path="/purchases" component={() => <DashboardLayout><Purchases /></DashboardLayout>} />
         <Route path="/inventory" component={() => <DashboardLayout><Inventory /></DashboardLayout>} />
         <Route path="/hr" component={() => <DashboardLayout><HR /></DashboardLayout>} />

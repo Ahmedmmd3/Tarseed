@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, Copy, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
+import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
 import { Link } from 'wouter';
 import { useStore } from '@/context/store';
 import { Button } from '@/components/ui/button';
+import { useCrud } from '@/hooks/use-crud';
 
 type Module = { title: string; description: string; href: string; icon: LucideIcon; tone: string; permission: string; ready: boolean; id: string };
 
 const modules: Module[] = [
   { title: 'نقطة البيع', description: 'سجّل مبيعاتك وفواتيرك بسرعة من شاشة واحدة.', href: '/pos', icon: Store, tone: 'bg-teal-50 text-teal-700', permission: 'sales', ready: true, id: 'pos' },
   { title: 'المبيعات والعملاء', description: 'تابع العملاء والفواتير وحركة البيع اليومية.', href: '/sales', icon: ShoppingCart, tone: 'bg-blue-50 text-blue-700', permission: 'sales', ready: true, id: 'sales' },
+  { title: 'عروض الأسعار', description: 'أصدر عروض أسعار للعملاء وحولها لفواتير.', href: '/quotations', icon: ClipboardList, tone: 'bg-emerald-50 text-emerald-700', permission: 'sales', ready: true, id: 'quotations' },
   { title: 'المخزون والمنتجات', description: 'راقب الأرصدة والمنتجات وحركات المستودعات.', href: '/inventory', icon: Boxes, tone: 'bg-violet-50 text-violet-700', permission: 'inventory', ready: true, id: 'inventory' },
   { title: 'المشتريات والموردون', description: 'نظّم أوامر الشراء والتزامات الموردين.', href: '/purchases', icon: Truck, tone: 'bg-amber-50 text-amber-700', permission: 'inventory', ready: true, id: 'purchases' },
   { title: 'المحاسبة', description: 'الحسابات والقيود والذمم في سجل مترابط.', href: '/accounts', icon: ReceiptText, tone: 'bg-sky-50 text-sky-700', permission: 'accounting', ready: true, id: 'accounting' },
@@ -40,6 +42,13 @@ export default function Overview() {
   const totalPayables = receivables.filter((record) => record.type === 'payable').reduce((sum, record) => sum + (record.amount - record.paid), 0);
   const pendingReceivables = receivables.filter((record) => record.status !== 'paid').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 4);
   const topExpenses = accounts.filter((account) => account.type === 'expense').sort((a, b) => b.balance - a.balance).slice(0, 4);
+  const canReadSales = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.sales === true));
+  const quotationsCrud = useCrud<any>('quotations', canReadSales);
+  const today = new Date().toISOString().slice(0, 10);
+  const pendingQuotations = quotationsCrud.data.filter((q: any) =>
+    (q.status === 'draft' || q.status === 'sent')
+    && !q.convertedInvoiceId
+    && String(q.expiryDate ?? '') >= today);
   const visibleModules = modules.filter((module) => !currentUser || currentUser.roleId === 'owner' || currentUser.permissions[module.permission] === true);
   const canUseWeeklySummary = Boolean(
     currentUser
@@ -133,10 +142,11 @@ export default function Overview() {
               <Link href="/reports" data-testid="link-open-reports"><span className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/20 bg-white/5 px-5 text-sm font-bold text-white transition hover:bg-white/10">استكشف التقارير <BarChart3 className="h-4 w-4" /></span></Link>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:w-[390px]" aria-label="مؤشرات سريعة">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:w-[480px]" aria-label="مؤشرات سريعة">
             <QuickMetric label="حسابات نشطة" value={accounts.length.toLocaleString('ar-SA')} testId="accounts-count" />
             <QuickMetric label="قيود مسجلة" value={journals.length.toLocaleString('ar-SA')} testId="journals-count" />
             <QuickMetric label="ذمم معلقة" value={pendingReceivables.length.toLocaleString('ar-SA')} testId="receivables-count" />
+            <QuickMetric label="عروض معلقة" value={pendingQuotations.length.toLocaleString('ar-SA')} testId="pending-quotations" />
           </div>
         </div>
       </section>

@@ -11,7 +11,7 @@ type DatabaseExecutor = typeof db | DatabaseTransaction;
 type DemoIdSets = Map<string, Set<string>>;
 const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
-  products: ["inventory", "sales"], invoices: "sales", expenses: "accounting", customers: "sales", sales: "sales",
+  products: ["inventory", "sales"], invoices: "sales", quotations: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
   employees: "hr", projects: "operations", inventoryBalances: ["inventory", "sales"], stockTransfers: "inventory",
   stockAdjustments: "inventory",
@@ -25,6 +25,7 @@ const REFERENCE_TABLE_BY_KEY: Record<string, string> = {
   customerId: "customers",
   productId: "products",
   invoiceId: "invoices",
+  sourceQuotationId: "quotations",
   originalInvoiceId: "invoices",
   expenseId: "expenses",
   journalId: "journalEntries",
@@ -205,6 +206,108 @@ function validateJournal(data: Record<string, unknown>): string | null {
     credit += lineCredit;
   }
   return Math.abs(debit - credit) > 0.005 ? "إجمالي المدين يجب أن يساوي إجمالي الدائن." : null;
+}
+
+const quotationStatuses = new Set(["draft", "sent", "rejected"]);
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function quotationData(
+  data: Record<string, unknown>,
+  numberOverride?: string,
+): { data?: Record<string, unknown>; error?: string } {
+  const customerName = typeof data.customerName === "string" ? data.customerName.trim() : "";
+  const issueDate = typeof data.issueDate === "string" ? data.issueDate : "";
+  const expiryDate = typeof data.expiryDate === "string" ? data.expiryDate : "";
+  if (!customerName || customerName.length > 160) return { error: "اسم العميل مطلوب وبحد أقصى 160 حرفاً." };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(issueDate) || !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate)) {
+    return { error: "تاريخا الإصدار والانتهاء يجب أن يكونا بصيغة صحيحة." };
+  }
+  if (issueDate > expiryDate) return { error: "يجب أن يسبق تاريخ الإصدار تاريخ الانتهاء." };
+  const status = String(data.status ?? "draft");
+  if (!quotationStatuses.has(status)) return { error: "حالة عرض السعر غير قابلة للتعديل." };
+  if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 100) {
+    return { error: "يجب أن يحتوي عرض السعر على صنف واحد على الأقل وبحد أقصى 100 صنف." };
+  }
+
+  const items: Array<Record<string, unknown>> = [];
+  let subtotal = 0;
+  let discountTotal = 0;
+  let tax = 0;
+  for (const rawItem of data.items) {
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return { error: "أحد أصناف عرض السعر غير صحيح." };
+    const item = rawItem as Record<string, unknown>;
+    const description = typeof item.description === "string" ? item.description.trim() : "";
+    const quantity = Number(item.quantity);
+    const unitPrice = Number(item.unitPrice);
+    const discount = Number(item.discount ?? 0);
+    const vatRate = Number(item.vatRate ?? 15);
+    if (!description || description.length > 500
+      || !Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000
+      || !Number.isFinite(unitPrice) || unitPrice < 0 || unitPrice > 1_000_000_000
+      || !Number.isFinite(discount) || discount < 0
+      || !Number.isFinite(vatRate) || ![0, 5, 15].includes(vatRate)) {
+      return { error: "تحقق من وصف الصنف والكمية والسعر والخصم ونسبة الضريبة." };
+    }
+    const gross = roundMoney(quantity * unitPrice);
+    if (discount > gross) return { error: "لا يمكن أن يتجاوز خصم الصنف قيمته." };
+    const lineNet = roundMoney(gross - discount);
+    const vatAmount = roundMoney(lineNet * vatRate / 100);
+    const total = roundMoney(lineNet + vatAmount);
+    const productId = item.productId === undefined || item.productId === "" ? undefined : Number(item.productId);
+    if (productId !== undefined && (!Number.isInteger(productId) || productId <= 0)) {
+      return { error: "معرّف المنتج غير صحيح." };
+    }
+    items.push({
+      description,
+      ...(productId === undefined ? {} : { productId }),
+      quantity,
+      unitPrice: roundMoney(unitPrice),
+      discount: roundMoney(discount),
+      vatRate,
+      lineNet,
+      vatAmount,
+      total,
+    });
+    subtotal = roundMoney(subtotal + gross);
+    discountTotal = roundMoney(discountTotal + discount);
+    tax = roundMoney(tax + vatAmount);
+  }
+
+  const customerId = data.customerId === undefined || data.customerId === "" ? undefined : Number(data.customerId);
+  if (customerId !== undefined && (!Number.isInteger(customerId) || customerId <= 0)) return { error: "معرّف العميل غير صحيح." };
+  const notes = typeof data.notes === "string" ? data.notes.trim() : "";
+  if (notes.length > 5000) return { error: "الملاحظات طويلة جداً." };
+  return {
+    data: {
+      ...(numberOverride ? { number: numberOverride } : { number: typeof data.number === "string" ? data.number.trim() : "" }),
+      ...(customerId === undefined ? {} : { customerId }),
+      customerName,
+      issueDate,
+      expiryDate,
+      status,
+      items,
+      subtotal,
+      discount: discountTotal,
+      tax,
+      total: roundMoney(subtotal - discountTotal + tax),
+      ...(notes ? { notes } : {}),
+    },
+  };
+}
+
+async function nextQuotationNumber(executor: DatabaseExecutor, organizationId: number): Promise<string> {
+  const records = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "quotations"),
+  ));
+  const highest = records.reduce((max, record) => {
+    const match = /^QUO-(\d+)$/.exec(String(record.data.number ?? ""));
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return `QUO-${String(highest + 1).padStart(4, "0")}`;
 }
 
 class MutationRejected extends Error {
@@ -400,11 +503,12 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
   const data = body as Record<string, unknown>;
   const clientOperationId = typeof data.clientOperationId === "string" ? data.clientOperationId : "";
   const { clientOperationId: _clientOperationId, ...rawRecordData } = data;
-  const recordData = access.tableName === "products" ? normalizeProductData(rawRecordData) : rawRecordData;
-  if (!recordData) {
+  const initialRecordData = access.tableName === "products" ? normalizeProductData(rawRecordData) : rawRecordData;
+  if (!initialRecordData) {
     response.status(400).json({ error: "اختر ضريبة المنتج: بدون ضريبة أو 5٪ أو 15٪." });
     return;
   }
+  let recordData: Record<string, unknown> = initialRecordData;
   if (access.tableName === "products" && Object.hasOwn(body, "stock") && Number((body as Record<string, unknown>).stock) !== 0) {
     response.status(409).json({ error: "الرصيد الافتتاحي للمنتج يُسجّل بتسوية مخزون بعد إنشاء المنتج." });
     return;
@@ -463,6 +567,16 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       }
       if (access.tableName === "products") {
         await ensureUniqueProductBarcode(tx, currentAuth.organizationId, recordData);
+      }
+      if (access.tableName === "quotations") {
+        const normalized = quotationData(recordData);
+        if (!normalized.data) throw new MutationRejected(400, normalized.error ?? "بيانات عرض السعر غير صحيحة.");
+        const number = await nextQuotationNumber(tx, currentAuth.organizationId);
+        recordData = {
+          ...normalized.data,
+          number,
+          createdAt: new Date().toISOString(),
+        };
       }
       const [inserted] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
@@ -738,7 +852,18 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (access.tableName === "journalEntries" && current.data.status === "posted") {
         throw new MutationRejected(409, "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك.");
       }
-      const currentData = { ...current.data, ...(body as Record<string, unknown>) };
+      if (access.tableName === "quotations" && (current.data.convertedInvoiceId || current.data.status === "accepted")) {
+        throw new MutationRejected(409, "عرض السعر المحوّل إلى فاتورة غير قابل للتعديل.");
+      }
+      let currentData = { ...current.data, ...(body as Record<string, unknown>) };
+      if (access.tableName === "quotations") {
+        const normalized = quotationData(currentData, String(current.data.number ?? ""));
+        if (!normalized.data) throw new MutationRejected(400, normalized.error ?? "بيانات عرض السعر غير صحيحة.");
+        currentData = {
+          ...normalized.data,
+          createdAt: current.data.createdAt,
+        };
+      }
       if (isAccountingSource(access.tableName) && await isClosedDate(
         currentAuth,
         String(currentData.date ?? currentData.issueDate ?? ""),
@@ -774,6 +899,125 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
   }
   await audit(access.auth, response, `${access.tableName}_updated`, String(id));
   response.json({ record: { ...updated.data, id: updated.id, userId: access.auth.organizationId } });
+});
+
+router.post("/data/quotations/:id/convert", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const id = Number(request.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    response.status(400).json({ error: "معرّف عرض السعر غير صالح." });
+    return;
+  }
+  if (!hasTableAccess(auth, "quotations")) {
+    response.status(403).json({ error: "ليس لديك صلاحية لوحدة المبيعات." });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedMutationRejected(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasTableAccess(currentAuth, "quotations")) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      const [quotation] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, id),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "quotations"),
+      )).for("update");
+      if (!quotation || !isLocationAllowed(currentAuth, "quotations", quotation.data, quotation.id)) {
+        throw new MutationRejected(404, "عرض السعر غير متاح.");
+      }
+      if (quotation.data.convertedInvoiceId || quotation.data.status === "accepted") {
+        throw new MutationRejected(409, "تم تحويل عرض السعر إلى فاتورة مسبقاً.", "quotation_already_converted");
+      }
+      if (quotation.data.status === "rejected") {
+        throw new MutationRejected(409, "لا يمكن تحويل عرض سعر مرفوض.");
+      }
+      const normalized = quotationData(quotation.data, String(quotation.data.number ?? ""));
+      if (!normalized.data) throw new MutationRejected(409, normalized.error ?? "بيانات عرض السعر غير صحيحة.");
+      const today = new Date().toISOString().slice(0, 10);
+      if (String(normalized.data.expiryDate) < today) {
+        throw new MutationRejected(409, "انتهت صلاحية عرض السعر ولا يمكن تحويله.");
+      }
+
+      const createdAt = new Date().toISOString();
+      const [draftInvoice] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "invoices",
+        data: {
+          number: "",
+          issueDate: today,
+          customerId: normalized.data.customerId,
+          customerName: normalized.data.customerName,
+          status: "draft",
+          conversionState: "awaiting_fulfillment",
+          items: normalized.data.items,
+          subtotal: normalized.data.subtotal,
+          discount: normalized.data.discount,
+          tax: normalized.data.tax,
+          total: normalized.data.total,
+          paid: 0,
+          sourceQuotationId: quotation.id,
+          quotationNumber: normalized.data.number,
+          notes: normalized.data.notes,
+          createdAt,
+        },
+      }).returning();
+      if (!draftInvoice) throw new MutationRejected(500, "تعذر إنشاء الفاتورة.");
+      const invoiceNumber = `INV-${draftInvoice.id}`;
+      const [invoice] = await tx.update(erpRecordsTable).set({
+        data: {
+          ...draftInvoice.data,
+          number: invoiceNumber,
+        },
+        updatedAt: new Date(),
+      }).where(eq(erpRecordsTable.id, draftInvoice.id)).returning();
+      const [updatedQuotation] = await tx.update(erpRecordsTable).set({
+        data: {
+          ...quotation.data,
+          status: "accepted",
+          convertedInvoiceId: invoice.id,
+          convertedAt: createdAt,
+        },
+        updatedAt: new Date(),
+      }).where(eq(erpRecordsTable.id, quotation.id)).returning();
+      await tx.insert(teamAuditLogsTable).values([
+        {
+          organizationId: currentAuth.organizationId,
+          actorId: currentAuth.id,
+          actorName: currentAuth.name || currentAuth.email,
+          action: "quotation_converted",
+          entity: String(quotation.id),
+          details: JSON.stringify({ invoiceId: invoice.id }),
+        },
+        {
+          organizationId: currentAuth.organizationId,
+          actorId: currentAuth.id,
+          actorName: currentAuth.name || currentAuth.email,
+          action: "invoice_created_from_quotation",
+          entity: String(invoice.id),
+          details: JSON.stringify({ quotationId: quotation.id }),
+        },
+      ]);
+      return {
+        auth: currentAuth,
+        quotation: updatedQuotation,
+        invoice,
+      };
+    });
+    response.status(201).json({
+      quotation: { ...result.quotation.data, id: result.quotation.id, userId: result.auth.organizationId },
+      invoice: { ...result.invoice.data, id: result.invoice.id, userId: result.auth.organizationId },
+    });
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
 });
 
 router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
@@ -879,6 +1123,9 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       }
       if (access.tableName === "journalEntries" && current.data.status === "posted") {
         throw new MutationRejected(409, "القيد المرحّل غير قابل للحذف. أنشئ قيداً عكسياً بدلاً من ذلك.");
+      }
+      if (access.tableName === "quotations" && (current.data.convertedInvoiceId || current.data.status === "accepted")) {
+        throw new MutationRejected(409, "عرض السعر المحوّل إلى فاتورة غير قابل للحذف.");
       }
       if (isAccountingSource(access.tableName) && await isClosedDate(
         currentAuth,
