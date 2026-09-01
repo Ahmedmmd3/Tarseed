@@ -821,6 +821,89 @@ test("يعرض سجل دفعات المورد ويعكس الدفعة ذرياً
   assert.equal(reversalJournals.length, 1);
 });
 
+test("يرفض محاولة عكس دفعة المورد المتزامنة الثانية ويحافظ على قيد وخصم واحد", async () => {
+  const scenario = await fixture("عكس-دفعة-متزامن");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, {
+      status: "sent",
+      items: [{ productId: scenario.product.id, quantity: 2, unitCost: 10 }],
+    }),
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+  const orderId = created.payload.record.id;
+  const receipt = await request(`/data/purchaseOrders/${orderId}/receive`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { receiptDate: "2026-10-01", items: [{ productId: scenario.product.id, quantity: 2 }] },
+  });
+  assert.equal(receipt.response.status, 200, JSON.stringify(receipt.payload));
+  const payableId = receipt.payload.receipt.payableId;
+  const paid = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-10-02",
+      paymentMethod: "bank",
+      allocations: [{ payableId, amount: receipt.payload.receipt.total }],
+    },
+  });
+  assert.equal(paid.response.status, 201, JSON.stringify(paid.payload));
+
+  const [firstAttempt, secondAttempt] = await Promise.all([
+    request(`/accounting/supplier-payments/${paid.payload.payment.id}/reverse`, {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: { effectiveDate: "2026-10-03", reason: "عكس متزامن من الجهاز الأول" },
+    }),
+    request(`/accounting/supplier-payments/${paid.payload.payment.id}/reverse`, {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: { effectiveDate: "2026-10-03", reason: "عكس متزامن من الجهاز الثاني" },
+    }),
+  ]);
+  const attempts = [firstAttempt, secondAttempt];
+  const successfulAttempts = attempts.filter((attempt) => attempt.response.status === 201);
+  const conflictAttempts = attempts.filter((attempt) => attempt.response.status === 409);
+  assert.equal(successfulAttempts.length, 1, JSON.stringify(attempts.map((attempt) => attempt.payload)));
+  assert.equal(conflictAttempts.length, 1, JSON.stringify(attempts.map((attempt) => attempt.payload)));
+  assert.match(conflictAttempts[0].payload.error, /سبق عكس دفعة المورد/);
+
+  const reversed = successfulAttempts[0].payload;
+  assert.equal(reversed.replayed, false);
+  assert.equal(reversed.payment.status, "reversed");
+  assert.equal(reversed.payables.length, 1);
+  assert.equal(reversed.payables[0].id, payableId);
+  assert.equal(reversed.payables[0].paid, 0);
+  assert.equal(reversed.payables[0].status, "unpaid");
+  assert.equal(reversed.orders.length, 1);
+  assert.equal(reversed.orders[0].id, orderId);
+  assert.equal(reversed.orders[0].paid, 0);
+  assert.equal(reversed.orders[0].remaining, receipt.payload.receipt.total);
+  assert.equal(reversed.orders[0].paymentStatus, "unpaid");
+
+  const [journals, payables, orders] = await Promise.all([
+    request("/data/journalEntries", { cookie: scenario.account.cookie }),
+    request("/data/receivables", { cookie: scenario.account.cookie }),
+    request("/data/purchaseOrders", { cookie: scenario.account.cookie }),
+  ]);
+  const reversalJournals = journals.payload.records.filter((record) =>
+    record.sourceType === "supplier_payment_reversal" && record.sourceId === paid.payload.payment.id);
+  assert.equal(reversalJournals.length, 1);
+  assert.equal(payables.payload.records.find((record) => record.id === payableId).paid, 0);
+  const finalOrder = orders.payload.records.find((record) => record.id === orderId);
+  assert.equal(finalOrder.paid, 0);
+  assert.equal(finalOrder.remaining, receipt.payload.receipt.total);
+  assert.equal(finalOrder.paymentStatus, "unpaid");
+});
+
 test("يرفض عكس دفعة المورد عند وجود تسوية لاحقة أو فترة مالية مقفلة", async () => {
   const scenario = await fixture("عكس-تعارض");
   const created = await request("/data/purchaseOrders", {
