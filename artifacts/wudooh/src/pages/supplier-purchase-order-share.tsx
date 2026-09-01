@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { trackEvent } from '@/lib/analytics';
 
 type PublicItem = {
   productName: string;
@@ -100,6 +101,7 @@ export default function SupplierPurchaseOrderShare() {
         setDocument(payload.document as PublicDocument);
         setShare(payload.share as SharePayload);
         setNote(payload.share?.decisionNote || '');
+        trackEvent('supplier_share_opened', { source: 'supplier_share_link' });
       } catch (loadError) {
         if (active) setError(loadError instanceof Error ? loadError.message : 'تعذر تحميل أمر الشراء.');
       } finally {
@@ -134,6 +136,10 @@ export default function SupplierPurchaseOrderShare() {
           }
         : current);
       if (payload.document) setDocument(payload.document as PublicDocument);
+       trackEvent('supplier_share_decision', {
+         decision,
+         source: 'supplier_share_link',
+       });
     } catch (submissionError) {
       setError(submissionError instanceof Error ? submissionError.message : 'تعذر تسجيل قرارك.');
     } finally {

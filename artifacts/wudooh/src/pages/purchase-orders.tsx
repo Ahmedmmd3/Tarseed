@@ -18,6 +18,7 @@ import {
   XCircle,
   Clock3,
   CheckCircle2,
+  BarChart3,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
@@ -43,6 +44,7 @@ import { useCrud } from '@/hooks/use-crud';
 import { useStore } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { trackEvent } from '@/lib/analytics';
 
 type Product = {
   id: number | string;
@@ -366,6 +368,18 @@ export default function PurchaseOrders() {
 
   const [form, setForm] = useState(defaultForm());
   const [items, setItems] = useState<PurchaseOrderItem[]>([defaultItem()]);
+
+  const supplierDecisionSummary = useMemo(() => {
+    const summary = { confirmed: 0, rejected: 0, pending: 0, recorded: 0 };
+    for (const order of purchaseOrdersCrud.data) {
+      const decision = order.supplierDecisionStatus;
+      if (decision === 'confirmed' || decision === 'rejected' || decision === 'pending') {
+        summary[decision] += 1;
+        summary.recorded += 1;
+      }
+    }
+    return summary;
+  }, [purchaseOrdersCrud.data]);
 
   const resetForm = () => {
     setForm(defaultForm());
@@ -694,6 +708,7 @@ export default function PurchaseOrders() {
     if (!currentUser) return;
     if (shareInfo && !confirm('سيؤدي تدوير الرابط إلى إلغاء الرابط الحالي فوراً. هل تريد المتابعة؟')) return;
     setSharingOrderId(order.id);
+    let failureStage: 'create_link' | 'browser_share' | 'copy_link' = 'create_link';
     try {
       const response = await fetch(`/api/data/purchaseOrders/${order.id}/share`, {
         method: 'POST',
@@ -713,6 +728,7 @@ export default function PurchaseOrders() {
           share?: (data: { title: string; text: string; url: string }) => Promise<void>;
         };
         if (shareCapableNavigator.share) {
+          failureStage = 'browser_share';
           await shareCapableNavigator.share({
             title: `أمر شراء ${order.orderNumber}`,
             text: `يرجى مراجعة أمر الشراء ${order.orderNumber} وتأكيده أو رفضه من الرابط الآمن.`,
@@ -720,6 +736,7 @@ export default function PurchaseOrders() {
           });
           toast({ title: 'تم فتح خيارات المشاركة' });
         } else if (navigator.clipboard) {
+          failureStage = 'copy_link';
           await navigator.clipboard.writeText(payload.share.url);
           toast({ title: 'تم نسخ رابط المورد', description: 'يمكنك لصقه وإرساله للمورد.' });
         } else {
@@ -728,6 +745,10 @@ export default function PurchaseOrders() {
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
+      trackEvent('supplier_share_send_failed', {
+        source: 'purchase_orders',
+        stage: failureStage,
+      });
       toast({
         title: 'تعذرت مشاركة الأمر',
         description: error instanceof Error ? error.message : 'حاول مرة أخرى.',
@@ -831,6 +852,49 @@ export default function PurchaseOrders() {
           <TabsTrigger value="cancelled">ملغي</TabsTrigger>
         </TabsList>
       </Tabs>
+
+      <section
+        className="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50 via-white to-slate-50 p-5 shadow-sm"
+        aria-labelledby="supplier-decision-funnel-title"
+        data-testid="supplier-decision-funnel"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <div className="rounded-xl bg-indigo-100 p-2 text-indigo-700">
+              <BarChart3 className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div>
+              <h2 id="supplier-decision-funnel-title" className="font-black text-slate-900">مسار اعتماد المورد</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
+                قارن فتح الرابط بالتأكيد أو الرفض من التحليلات بعد نشر التطبيق.
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold text-slate-500">supplier_share_opened → supplier_share_decision</span>
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-indigo-100 bg-white p-4">
+            <p className="text-xs font-semibold text-slate-500">فتح رابط المورد</p>
+            <p className="mt-2 text-lg font-black text-indigo-700">من التحليلات</p>
+            <p className="mt-1 text-xs text-slate-500">supplier_share_opened</p>
+          </div>
+          <div className="rounded-xl border border-emerald-100 bg-white p-4">
+            <p className="text-xs font-semibold text-slate-500">تأكيد ناجح</p>
+            <p className="mt-2 text-2xl font-black text-emerald-700">{supplierDecisionSummary.confirmed}</p>
+            <p className="mt-1 text-xs text-slate-500">من القرارات المسجلة حالياً</p>
+          </div>
+          <div className="rounded-xl border border-rose-100 bg-white p-4">
+            <p className="text-xs font-semibold text-slate-500">رفض ناجح</p>
+            <p className="mt-2 text-2xl font-black text-rose-700">{supplierDecisionSummary.rejected}</p>
+            <p className="mt-1 text-xs text-slate-500">من القرارات المسجلة حالياً</p>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
+          <span>معلّق: <strong className="text-amber-700">{supplierDecisionSummary.pending}</strong></span>
+          <span>إجمالي القرارات المسجلة: <strong className="text-slate-700">{supplierDecisionSummary.recorded}</strong></span>
+          <span>يُستبعد من الحدث أي رمز رابط أو اسم مورد أو ملاحظة.</span>
+        </div>
+      </section>
 
       {purchaseOrdersCrud.error && (
         <div
