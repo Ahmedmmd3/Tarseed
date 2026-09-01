@@ -746,19 +746,6 @@ router.post("/accounting/supplier-payments", requireAuth, requireSubscriptionAcc
         candidatePayables.push(candidate);
       }
       const orderIds = [...new Set(candidatePayables.map((payable) => Number(payable.data.purchaseOrderId)))].sort((left, right) => left - right);
-      const orders = new Map<number, ErpRecord>();
-      for (const orderId of orderIds) {
-        const [order] = await tx.select().from(erpRecordsTable).where(and(
-          eq(erpRecordsTable.id, orderId),
-          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
-          eq(erpRecordsTable.tableName, "purchaseOrders"),
-        )).for("update");
-        if (!order || order.data.status === "cancelled" || !isLocationAllowed(currentAuth, "purchaseOrders", order.data, order.id)) {
-          throw new AccountingMutationError(403, "أحد أوامر الشراء خارج نطاق المواقع المسموح.");
-        }
-        orders.set(orderId, order);
-      }
-
       const payables: ErpRecord[] = [];
       for (const requestedAllocation of allocations) {
         const [payable] = await tx.select().from(erpRecordsTable).where(and(
@@ -797,6 +784,18 @@ router.post("/accounting/supplier-payments", requireAuth, requireSubscriptionAcc
           throw new AccountingMutationError(409, "قيمة السداد تتجاوز الرصيد المتبقي لإحدى الذمم.");
         }
         payables.push(payable);
+      }
+      const orders = new Map<number, ErpRecord>();
+      for (const orderId of orderIds) {
+        const [order] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, orderId),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "purchaseOrders"),
+        )).for("update");
+        if (!order || order.data.status === "cancelled" || !isLocationAllowed(currentAuth, "purchaseOrders", order.data, order.id)) {
+          throw new AccountingMutationError(403, "أحد أوامر الشراء خارج نطاق المواقع المسموح.");
+        }
+        orders.set(orderId, order);
       }
 
       const updatedPayables: Array<Record<string, unknown>> = [];

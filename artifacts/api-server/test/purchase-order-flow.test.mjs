@@ -1020,6 +1020,145 @@ test("يحمي عكس دفعة موزعة على أمرَي شراء عند ال
   }
 });
 
+test("يرفض عكس دفعة موزعة عند تزامنه مع سداد لاحق ويحافظ على كل الخصومات", async () => {
+  const scenario = await fixture("عكس-سداد-لاحق-متزامن");
+
+  const createReceivedOrder = async (quantity, receiptDate) => {
+    const created = await request("/data/purchaseOrders", {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      body: orderBody(scenario, {
+        status: "sent",
+        items: [{ productId: scenario.product.id, quantity, unitCost: 10 }],
+      }),
+    });
+    assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+    const receipt = await request(`/data/purchaseOrders/${created.payload.record.id}/receive`, {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: { receiptDate, items: [{ productId: scenario.product.id, quantity }] },
+    });
+    assert.equal(receipt.response.status, 200, JSON.stringify(receipt.payload));
+    return {
+      orderId: created.payload.record.id,
+      payableId: receipt.payload.receipt.payableId,
+      total: receipt.payload.receipt.total,
+    };
+  };
+
+  const first = await createReceivedOrder(2, "2026-12-01");
+  const second = await createReceivedOrder(3, "2026-12-02");
+  const original = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-12-03",
+      paymentMethod: "bank",
+      reference: "CONCURRENT-REVERSAL-100",
+      allocations: [
+        { payableId: first.payableId, amount: first.total },
+        { payableId: second.payableId, amount: second.total },
+      ],
+    },
+  });
+  assert.equal(original.response.status, 201, JSON.stringify(original.payload));
+
+  const laterPayment = request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-12-04",
+      paymentMethod: "cash",
+      reference: "CONCURRENT-SETTLEMENT-100",
+      allocations: [{ payableId: first.payableId, amount: 5 }],
+    },
+  });
+  const reversal = request(`/accounting/supplier-payments/${original.payload.payment.id}/reverse`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { effectiveDate: "2026-12-05", reason: "عكس دفعة مع سداد لاحق متزامن" },
+  });
+  const [paymentAttempt, reversalAttempt] = await Promise.all([laterPayment, reversal]);
+  const successfulAttempts = [paymentAttempt, reversalAttempt].filter((attempt) => attempt.response.status === 201);
+  const conflictAttempts = [paymentAttempt, reversalAttempt].filter((attempt) => attempt.response.status === 409);
+  assert.equal(successfulAttempts.length, 1, JSON.stringify([paymentAttempt.payload, reversalAttempt.payload]));
+  assert.equal(conflictAttempts.length, 1, JSON.stringify([paymentAttempt.payload, reversalAttempt.payload]));
+
+  const [payments, journals, payables, orders] = await Promise.all([
+    request("/accounting/supplier-payments", { cookie: scenario.account.cookie }),
+    request("/data/journalEntries", { cookie: scenario.account.cookie }),
+    request("/data/receivables", { cookie: scenario.account.cookie }),
+    request("/data/purchaseOrders", { cookie: scenario.account.cookie }),
+  ]);
+  assert.equal(payments.response.status, 200, JSON.stringify(payments.payload));
+  assert.equal(journals.response.status, 200, JSON.stringify(journals.payload));
+  assert.equal(payables.response.status, 200, JSON.stringify(payables.payload));
+  assert.equal(orders.response.status, 200, JSON.stringify(orders.payload));
+
+  const firstPayable = payables.payload.records.find((record) => record.id === first.payableId);
+  const secondPayable = payables.payload.records.find((record) => record.id === second.payableId);
+  const firstOrder = orders.payload.records.find((record) => record.id === first.orderId);
+  const secondOrder = orders.payload.records.find((record) => record.id === second.orderId);
+  if (paymentAttempt.response.status === 201) {
+    assert.match(reversalAttempt.payload.error, /تسوية لاحقة مرتبطة بإحدى ذممها/);
+    assert.equal(payments.payload.payments.length, 2);
+    assert.equal(paymentAttempt.payload.payment.amount, 5);
+    assert.equal(journals.payload.records.filter((record) =>
+      record.sourceType === "supplier_payment" &&
+      [original.payload.payment.id, paymentAttempt.payload.payment.id].includes(record.sourceId)).length, 2);
+    assert.equal(journals.payload.records.filter((record) =>
+      record.sourceType === "supplier_payment_reversal" && record.sourceId === original.payload.payment.id).length, 0);
+    assert.deepEqual(
+      { paid: firstPayable.paid, status: firstPayable.status },
+      { paid: first.total + 5, status: "paid" },
+    );
+    assert.deepEqual(
+      { paid: secondPayable.paid, status: secondPayable.status },
+      { paid: second.total, status: "paid" },
+    );
+    assert.deepEqual(
+      { paid: firstOrder.paid, remaining: firstOrder.remaining, paymentStatus: firstOrder.paymentStatus },
+      { paid: first.total + 5, remaining: 0, paymentStatus: "paid" },
+    );
+    assert.deepEqual(
+      { paid: secondOrder.paid, remaining: secondOrder.remaining, paymentStatus: secondOrder.paymentStatus },
+      { paid: second.total, remaining: 0, paymentStatus: "paid" },
+    );
+  } else {
+    assert.match(paymentAttempt.payload.error, /قيمة السداد تتجاوز الرصيد المتبقي/);
+    assert.equal(reversalAttempt.payload.payment.status, "reversed");
+    assert.equal(payments.payload.payments.length, 1);
+    assert.equal(journals.payload.records.filter((record) =>
+      record.sourceType === "supplier_payment" && record.sourceId === original.payload.payment.id).length, 1);
+    assert.equal(journals.payload.records.filter((record) =>
+      record.sourceType === "supplier_payment_reversal" && record.sourceId === original.payload.payment.id).length, 1);
+    assert.deepEqual(
+      { paid: firstPayable.paid, status: firstPayable.status },
+      { paid: 0, status: "unpaid" },
+    );
+    assert.deepEqual(
+      { paid: secondPayable.paid, status: secondPayable.status },
+      { paid: 0, status: "unpaid" },
+    );
+    assert.deepEqual(
+      { paid: firstOrder.paid, remaining: firstOrder.remaining, paymentStatus: firstOrder.paymentStatus },
+      { paid: 0, remaining: first.total, paymentStatus: "unpaid" },
+    );
+    assert.deepEqual(
+      { paid: secondOrder.paid, remaining: secondOrder.remaining, paymentStatus: secondOrder.paymentStatus },
+      { paid: 0, remaining: second.total, paymentStatus: "unpaid" },
+    );
+  }
+});
+
 test("يرفض عكس دفعة المورد عند وجود تسوية لاحقة أو فترة مالية مقفلة", async () => {
   const scenario = await fixture("عكس-تعارض");
   const created = await request("/data/purchaseOrders", {
