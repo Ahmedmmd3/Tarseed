@@ -477,7 +477,8 @@ function supplierPaymentAllocations(data: Record<string, unknown>): SupplierPaym
   return data.allocations
     .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
     .map((item) => ({ payableId: Number(item.payableId), amount: money(Number(item.amount)) }))
-    .filter((item) => Number.isInteger(item.payableId) && item.payableId > 0 && Number.isFinite(item.amount) && item.amount > 0);
+    .filter((item) => Number.isInteger(item.payableId) && item.payableId > 0 && Number.isFinite(item.amount) && item.amount > 0)
+    .sort((left, right) => left.payableId - right.payableId);
 }
 
 function reversedJournalLines(journal: Record<string, unknown>): Array<{ accountId: string; debit: number; credit: number }> {
