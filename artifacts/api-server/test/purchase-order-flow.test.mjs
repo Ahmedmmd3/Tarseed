@@ -720,6 +720,155 @@ test("يعيد حساب رصيد الأمر عند استلام دفعة جدي�
   assert.equal(secondReceipt.payload.order.paymentStatus, "partial");
 });
 
+test("يعرض سجل دفعات المورد ويعكس الدفعة ذرياً دون تكرار أو كسر القيد الأصلي", async () => {
+  const scenario = await fixture("عكس-دفعة");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, {
+      status: "sent",
+      items: [{ productId: scenario.product.id, quantity: 2, unitCost: 10 }],
+    }),
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+  const orderId = created.payload.record.id;
+  const receipt = await request(`/data/purchaseOrders/${orderId}/receive`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { receiptDate: "2026-09-21", items: [{ productId: scenario.product.id, quantity: 2 }] },
+  });
+  assert.equal(receipt.response.status, 200, JSON.stringify(receipt.payload));
+  const payableId = receipt.payload.receipt.payableId;
+  const paid = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-09-22",
+      paymentMethod: "bank",
+      reference: "REV-100",
+      allocations: [{ payableId, amount: receipt.payload.receipt.total }],
+    },
+  });
+  assert.equal(paid.response.status, 201, JSON.stringify(paid.payload));
+
+  const history = await request("/accounting/supplier-payments", { cookie: scenario.account.cookie });
+  assert.equal(history.response.status, 200, JSON.stringify(history.payload));
+  const historyPayment = history.payload.payments.find((item) => item.id === paid.payload.payment.id);
+  assert.equal(historyPayment.supplierName, scenario.supplier.name);
+  assert.equal(historyPayment.allocations[0].payableId, payableId);
+  assert.equal(historyPayment.allocations[0].purchaseOrderId, orderId);
+  assert.equal(historyPayment.allocations[0].amount, receipt.payload.receipt.total);
+
+  const reversalOperationId = crypto.randomUUID();
+  const reversed = await request(`/accounting/supplier-payments/${paid.payload.payment.id}/reverse`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": reversalOperationId },
+    body: { effectiveDate: "2026-09-23", reason: "تحويل مسجل على المورد الخطأ" },
+  });
+  assert.equal(reversed.response.status, 201, JSON.stringify(reversed.payload));
+  assert.equal(reversed.payload.replayed, false);
+  assert.equal(reversed.payload.payment.status, "reversed");
+  assert.equal(reversed.payload.payables[0].paid, 0);
+  assert.equal(reversed.payload.payables[0].status, "unpaid");
+  assert.equal(reversed.payload.orders[0].remaining, receipt.payload.receipt.total);
+  assert.equal(reversed.payload.orders[0].paymentStatus, "unpaid");
+  assert.equal(
+    reversed.payload.reversal.lines.reduce((sum, line) => sum + Number(line.debit), 0),
+    reversed.payload.reversal.lines.reduce((sum, line) => sum + Number(line.credit), 0),
+  );
+  assert.equal(reversed.payload.reversal.adjustsJournalId, paid.payload.payment.journalId);
+
+  const replay = await request(`/accounting/supplier-payments/${paid.payload.payment.id}/reverse`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": reversalOperationId },
+    body: { effectiveDate: "2026-09-23", reason: "تحويل مسجل على المورد الخطأ" },
+  });
+  assert.equal(replay.response.status, 200, JSON.stringify(replay.payload));
+  assert.equal(replay.payload.replayed, true);
+  assert.equal(replay.payload.reversal.id, reversed.payload.reversal.id);
+
+  const journals = await request("/data/journalEntries", { cookie: scenario.account.cookie });
+  const sourceJournals = journals.payload.records.filter((item) =>
+    item.sourceType === "supplier_payment" && item.sourceId === paid.payload.payment.id);
+  const reversalJournals = journals.payload.records.filter((item) =>
+    item.sourceType === "supplier_payment_reversal" && item.sourceId === paid.payload.payment.id);
+  assert.equal(sourceJournals.length, 1);
+  assert.equal(reversalJournals.length, 1);
+});
+
+test("يرفض عكس دفعة المورد عند وجود تسوية لاحقة أو فترة مالية مقفلة", async () => {
+  const scenario = await fixture("عكس-تعارض");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, {
+      status: "sent",
+      items: [{ productId: scenario.product.id, quantity: 4, unitCost: 10 }],
+    }),
+  });
+  const receipt = await request(`/data/purchaseOrders/${created.payload.record.id}/receive`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { receiptDate: "2026-09-24", items: [{ productId: scenario.product.id, quantity: 4 }] },
+  });
+  assert.equal(receipt.response.status, 200, JSON.stringify(receipt.payload));
+  const payableId = receipt.payload.receipt.payableId;
+  const first = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-09-25",
+      paymentMethod: "cash",
+      allocations: [{ payableId, amount: 10 }],
+    },
+  });
+  assert.equal(first.response.status, 201, JSON.stringify(first.payload));
+  const later = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-09-26",
+      paymentMethod: "cash",
+      allocations: [{ payableId, amount: 5 }],
+    },
+  });
+  assert.equal(later.response.status, 201, JSON.stringify(later.payload));
+  const laterConflict = await request(`/accounting/supplier-payments/${first.payload.payment.id}/reverse`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { effectiveDate: "2026-09-27", reason: "تصحيح دفعة قديمة" },
+  });
+  assert.equal(laterConflict.response.status, 409, JSON.stringify(laterConflict.payload));
+
+  const closure = await request("/accounting/close", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: { from: "2026-09-28", to: "2026-09-30", confirmation: "CLOSE_PERIOD" },
+  });
+  assert.equal(closure.response.status, 201, JSON.stringify(closure.payload));
+  const locked = await request(`/accounting/supplier-payments/${later.payload.payment.id}/reverse`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { effectiveDate: "2026-09-29", reason: "تصحيح دفعة لاحقة" },
+  });
+  assert.equal(locked.response.status, 409, JSON.stringify(locked.payload));
+});
+
 test("يسلسل السداد والاستلام المتزامنين دون تعارض أقفال أو رصيد قديم", async () => {
   const scenario = await fixture("سداد-واستلام-متزامن");
   const created = await request("/data/purchaseOrders", {

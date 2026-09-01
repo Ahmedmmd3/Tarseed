@@ -470,6 +470,87 @@ function supplierPaymentFingerprint(value: unknown): string {
   return createHash("sha256").update(stable(value)).digest("hex");
 }
 
+type SupplierPaymentAllocation = { payableId: number; amount: number };
+
+function supplierPaymentAllocations(data: Record<string, unknown>): SupplierPaymentAllocation[] {
+  if (!Array.isArray(data.allocations)) return [];
+  return data.allocations
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+    .map((item) => ({ payableId: Number(item.payableId), amount: money(Number(item.amount)) }))
+    .filter((item) => Number.isInteger(item.payableId) && item.payableId > 0 && Number.isFinite(item.amount) && item.amount > 0);
+}
+
+function reversedJournalLines(journal: Record<string, unknown>): Array<{ accountId: string; debit: number; credit: number }> {
+  return normalizeLines(journal.lines).map((line) => ({
+    accountId: line.accountId,
+    debit: line.credit,
+    credit: line.debit,
+  }));
+}
+
+async function paymentOrderScope(
+  auth: AuthContext,
+  payment: ErpRecord,
+  executor: DatabaseExecutor,
+  lock = false,
+): Promise<{ orders: Map<number, unknown>; allocations: SupplierPaymentAllocation[]; payables: Map<number, unknown> } | null> {
+  const allocations = supplierPaymentAllocations(payment.data);
+  if (!allocations.length || new Set(allocations.map((allocation) => allocation.payableId)).size !== allocations.length) return null;
+  const payables = new Map<number, unknown>();
+  for (const allocation of allocations) {
+    const query = executor.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, allocation.payableId),
+      eq(erpRecordsTable.organizationId, auth.organizationId),
+      eq(erpRecordsTable.tableName, "receivables"),
+    ));
+    const [payable] = lock ? await query.for("update") : await query;
+    if (!payable || payable.data.type !== "payable" || !payable.data.purchaseOrderId) return null;
+    payables.set(payable.id, payable);
+  }
+  const orderIds = [...new Set([...payables.values()].map((payable) => Number((payable as ErpRecord).data.purchaseOrderId)))].sort((left, right) => left - right);
+  const orders = new Map<number, unknown>();
+  for (const orderId of orderIds) {
+    const query = executor.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, orderId),
+      eq(erpRecordsTable.organizationId, auth.organizationId),
+      eq(erpRecordsTable.tableName, "purchaseOrders"),
+    ));
+    const [order] = lock ? await query.for("update") : await query;
+    if (!order || !isLocationAllowed(auth, "purchaseOrders", order.data, order.id)) return null;
+    orders.set(orderId, order);
+  }
+  return { orders, allocations, payables };
+}
+
+function supplierPaymentOutput(
+  payment: Record<string, unknown>,
+  scope: { orders: Map<number, unknown>; allocations: SupplierPaymentAllocation[]; payables: Map<number, unknown> },
+): Record<string, unknown> {
+  return {
+    ...payment,
+    id: payment.id,
+    allocations: scope.allocations.map((allocation) => {
+      const payable = scope.payables.get(allocation.payableId);
+      const payableData = payable && typeof payable === "object" && "data" in payable
+        ? (payable as { data: Record<string, unknown> }).data
+        : payable as Record<string, unknown> | undefined;
+      const orderId = Number(payableData?.purchaseOrderId);
+      const order = scope.orders.get(orderId);
+      const orderData = order && typeof order === "object" && "data" in order
+        ? (order as { data: Record<string, unknown> }).data
+        : order as Record<string, unknown> | undefined;
+      return {
+        ...allocation,
+        purchaseOrderId: Number.isInteger(orderId) ? orderId : undefined,
+        purchaseOrderNumber: orderData?.orderNumber ?? orderData?.number ?? undefined,
+        payableAmount: payableData?.amount,
+        payablePaid: payableData?.paid,
+        payableStatus: payableData?.status,
+      };
+    }),
+  };
+}
+
 function accountBalanceAt(accountId: number, account: AnyRecord, journals: AnyRecord[], to: string): number {
   const opening = asNumber(account.openingBalance ?? account.balance);
   return money(opening + journals
@@ -808,6 +889,261 @@ router.post("/accounting/supplier-payments", requireAuth, requireSubscriptionAcc
         action: "supplier_payment_recorded",
         entity: String(payment.id),
         details: JSON.stringify({ supplierId: supplierId ?? null, supplierName, amount: total, payableIds: allocations.map((item) => item.payableId), orderIds, journalId: journal.id }),
+      });
+      return { ...output, replayed: false };
+    });
+    response.status(result.replayed ? 200 : 201).json(result);
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+});
+
+router.get("/accounting/supplier-payments", requireAuth, requireSubscriptionAccess, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const [payments, payables, orders] = await Promise.all([
+    organizationRecordsFor(auth, "supplierPayments"),
+    organizationRecordsFor(auth, "receivables"),
+    organizationRecordsFor(auth, "purchaseOrders"),
+  ]);
+  const payableById = new Map(payables.filter((record) => record.type === "payable").map((record) => [record.id, record]));
+  const orderById = new Map(orders.map((record) => [record.id, record]));
+  const visiblePayments = payments
+    .map((payment) => {
+      const allocations = supplierPaymentAllocations(payment);
+      const linkedPayables = allocations.map((allocation) => payableById.get(allocation.payableId));
+      const orderIds = [...new Set(linkedPayables.map((payable) => Number(payable?.purchaseOrderId)))];
+      if (!allocations.length || linkedPayables.some((payable) => !payable) || orderIds.some((id) => {
+        const order = orderById.get(id);
+        return !order || !isLocationAllowed(auth, "purchaseOrders", order, order.id);
+      })) return null;
+      const scope = {
+        allocations,
+        payables: new Map(linkedPayables.filter((payable): payable is AnyRecord => Boolean(payable)).map((payable) => [payable.id, payable])),
+        orders: new Map(orderIds.map((id) => [id, orderById.get(id)!])),
+      };
+      return supplierPaymentOutput(payment, scope);
+    })
+    .filter((payment): payment is Record<string, unknown> => Boolean(payment))
+    .sort((left, right) => String(right.paymentDate ?? right.date ?? "").localeCompare(String(left.paymentDate ?? left.date ?? "")));
+  response.json({ payments: visiblePayments });
+});
+
+router.post("/accounting/supplier-payments/:id/reverse", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const paymentId = Number(request.params.id);
+  const operationId = request.get("Idempotency-Key")?.trim() ?? "";
+  const body = request.body;
+  if (!Number.isInteger(paymentId) || paymentId <= 0 || !operationId || operationId.length > 180) {
+    response.status(400).json({ error: "معرّف الدفعة ومعرّف عملية العكس مطلوبان." });
+    return;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    response.status(400).json({ error: "بيانات عكس دفعة المورد غير صحيحة." });
+    return;
+  }
+  const input = body as Record<string, unknown>;
+  const reason = typeof input.reason === "string" ? input.reason.trim() : "";
+  const effectiveDate = typeof input.effectiveDate === "string"
+    ? input.effectiveDate.trim()
+    : typeof input.reversalDate === "string"
+      ? input.reversalDate.trim()
+      : typeof input.date === "string"
+        ? input.date.trim()
+        : new Date().toISOString().slice(0, 10);
+  if (reason.length < 3 || reason.length > 1000) {
+    response.status(400).json({ error: "أدخل سبباً واضحاً من 3 إلى 1000 حرف لعكس الدفعة." });
+    return;
+  }
+  if (!isValidIsoDate(effectiveDate)) {
+    response.status(400).json({ error: "تاريخ عكس الدفعة غير صحيح." });
+    return;
+  }
+  const requestFingerprint = supplierPaymentFingerprint({ paymentId, reason, effectiveDate });
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedAccountingMutationError(response);
+      }
+      const [payment] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, paymentId),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "supplierPayments"),
+      )).for("update");
+      if (!payment) throw new AccountingMutationError(404, "دفعة المورد غير متاحة.");
+      const scope = await paymentOrderScope(currentAuth, payment, tx, true);
+      if (!scope) throw new AccountingMutationError(404, "دفعة المورد خارج نطاق المواقع المسموح.");
+
+      const [replayedOperation] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "supplierPaymentReversalOperations"),
+        eq(erpRecordsTable.clientOperationId, operationId),
+      )).limit(1);
+      if (replayedOperation) {
+        if (replayedOperation.data.requestFingerprint !== requestFingerprint) {
+          throw new AccountingMutationError(409, "معرّف عملية العكس مستخدم لطلب مختلف.");
+        }
+        if (replayedOperation.data.state !== "completed"
+          || !replayedOperation.data.result
+          || typeof replayedOperation.data.result !== "object"
+          || Array.isArray(replayedOperation.data.result)) {
+          throw new AccountingMutationError(409, "عملية العكس السابقة غير مكتملة وتحتاج مراجعة.");
+        }
+        return { ...(replayedOperation.data.result as Record<string, unknown>), replayed: true };
+      }
+
+      if (payment.data.status === "reversed" || payment.data.reversedAt) {
+        throw new AccountingMutationError(409, "سبق عكس دفعة المورد.");
+      }
+      const paymentDate = asDate(payment.data.paymentDate ?? payment.data.date);
+      if (!isValidIsoDate(paymentDate)) throw new AccountingMutationError(409, "تاريخ دفعة المورد الأصلي غير صالح.");
+      const closures = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      if (closures.some((closure) => closure.status === "closed"
+        && effectiveDate >= String(closure.from ?? "") && effectiveDate <= String(closure.to ?? ""))) {
+        throw new AccountingMutationError(409, "الفترة المالية المحددة مقفلة. اختر تاريخاً ضمن فترة مفتوحة.");
+      }
+
+      const [originalJournal] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "journalEntries"),
+        sql`${erpRecordsTable.data}->>'sourceType' = 'supplier_payment'`,
+        sql`${erpRecordsTable.data}->>'sourceId' = ${String(payment.id)}`,
+      )).for("update");
+      if (!originalJournal || originalJournal.data.status !== "posted") {
+        throw new AccountingMutationError(409, "لا يوجد قيد مرحّل صالح مرتبط بدفعة المورد.");
+      }
+      const originalLines = normalizeLines(originalJournal.data.lines);
+      const debitTotal = money(originalLines.reduce((sum, line) => sum + line.debit, 0));
+      const creditTotal = money(originalLines.reduce((sum, line) => sum + line.credit, 0));
+      if (debitTotal <= 0 || debitTotal !== creditTotal) {
+        throw new AccountingMutationError(409, "قيد دفعة المورد الأصلي غير متوازن ولا يمكن عكسه.");
+      }
+
+      const activePayments = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "supplierPayments"),
+      ));
+      const paymentCreatedAt = String(payment.data.createdAt ?? "");
+      const hasLaterSettlement = activePayments.some((other) => {
+        if (other.id === payment.id || other.data.status === "reversed" || other.data.reversedAt) return false;
+        const otherAllocations = supplierPaymentAllocations(other.data);
+        const sharesPayable = otherAllocations.some((otherAllocation) =>
+          scope.allocations.some((allocation) => allocation.payableId === otherAllocation.payableId));
+        if (!sharesPayable) return false;
+        const otherDate = asDate(other.data.paymentDate ?? other.data.date);
+        const otherCreatedAt = String(other.data.createdAt ?? "");
+        return otherDate > paymentDate
+          || (otherDate === paymentDate && Boolean(paymentCreatedAt) && otherCreatedAt > paymentCreatedAt)
+          || (!paymentCreatedAt && otherDate >= paymentDate);
+      });
+      if (hasLaterSettlement) {
+        throw new AccountingMutationError(409, "لا يمكن عكس الدفعة لوجود تسوية لاحقة مرتبطة بإحدى ذممها.");
+      }
+
+      const updatedPayables: Array<Record<string, unknown>> = [];
+      for (const allocation of scope.allocations) {
+        const payable = scope.payables.get(allocation.payableId)! as ErpRecord;
+        const amount = money(asNumber(payable.data.amount));
+        const paid = money(asNumber(payable.data.paid));
+        if (paid + 0.005 < allocation.amount) {
+          throw new AccountingMutationError(409, "الرصيد الحالي لإحدى الذمم أقل من مبلغ الدفعة المراد عكسها.");
+        }
+        const nextPaid = money(Math.max(0, paid - allocation.amount));
+        const [updated] = await tx.update(erpRecordsTable).set({
+          data: { ...payable.data, paid: nextPaid, status: paymentStatus(amount, nextPaid), lastPaymentDate: undefined },
+          updatedAt: new Date(),
+        }).where(eq(erpRecordsTable.id, payable.id)).returning();
+        updatedPayables.push({ ...updated.data, id: updated.id });
+      }
+
+      const updatedOrders: Array<Record<string, unknown>> = [];
+      for (const [orderId, rawOrder] of scope.orders) {
+        const order = rawOrder as ErpRecord;
+        const orderPayables = (await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "receivables"),
+          sql`${erpRecordsTable.data}->>'purchaseOrderId' = ${String(orderId)}`,
+        )).for("update")).filter((payable) =>
+          payable.data.type === "payable" && payable.data.purchaseReceiptOperationId && payable.data.status !== "cancelled");
+        const payableTotal = money(orderPayables.reduce((sum, payable) => sum + asNumber(payable.data.amount), 0));
+        const paid = money(orderPayables.reduce((sum, payable) => sum + asNumber(payable.data.paid), 0));
+        const remaining = money(Math.max(0, payableTotal - paid));
+        const [updated] = await tx.update(erpRecordsTable).set({
+          data: { ...order.data, payableTotal, paid, remaining, paymentStatus: paymentStatus(payableTotal, paid), lastPaymentDate: effectiveDate },
+          updatedAt: new Date(),
+        }).where(eq(erpRecordsTable.id, orderId)).returning();
+        updatedOrders.push({ ...updated.data, id: updated.id });
+      }
+
+      const [reversal] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "journalEntries",
+        data: {
+          date: effectiveDate,
+          description: `عكس سداد المورد ${String(payment.data.supplierName ?? "")}${payment.data.reference ? ` — ${String(payment.data.reference)}` : ""}`,
+          status: "posted",
+          sourceType: "supplier_payment_reversal",
+          sourceId: payment.id,
+          adjustsJournalId: originalJournal.id,
+          adjustmentType: "reversal",
+          adjustmentReason: reason,
+          lines: reversedJournalLines({ ...originalJournal.data, lines: originalLines }),
+        },
+      }).returning();
+      const paymentData = {
+        ...payment.data,
+        status: "reversed",
+        reversedAt: new Date().toISOString(),
+        reversedBy: currentAuth.id,
+        reversalReason: reason,
+        reversalDate: effectiveDate,
+        reversalJournalId: reversal.id,
+      };
+      await tx.update(erpRecordsTable).set({ data: paymentData, updatedAt: new Date() }).where(eq(erpRecordsTable.id, payment.id));
+      const output = {
+          payment: { ...paymentData, id: payment.id },
+        reversal: { ...reversal.data, id: reversal.id },
+        payables: updatedPayables,
+        orders: updatedOrders,
+      };
+      await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "supplierPaymentReversalOperations",
+        clientOperationId: operationId,
+        data: {
+          requestFingerprint,
+          state: "completed",
+          paymentId: payment.id,
+          originalJournalId: originalJournal.id,
+          reversalJournalId: reversal.id,
+          reason,
+          effectiveDate,
+          result: output,
+          actorId: currentAuth.id,
+          occurredAt: new Date().toISOString(),
+        },
+      });
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: currentAuth.organizationId,
+        actorId: currentAuth.id,
+        actorName: currentAuth.name || currentAuth.email,
+        action: "supplier_payment_reversed",
+        entity: String(payment.id),
+        details: JSON.stringify({
+          paymentId: payment.id,
+          amount: payment.data.amount,
+          payableIds: scope.allocations.map((allocation) => allocation.payableId),
+          orderIds: [...scope.orders.keys()],
+          originalJournalId: originalJournal.id,
+          reversalJournalId: reversal.id,
+          reason,
+        }),
       });
       return { ...output, replayed: false };
     });

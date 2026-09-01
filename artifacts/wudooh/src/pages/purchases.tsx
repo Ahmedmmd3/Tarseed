@@ -43,6 +43,27 @@ type SupplierPayable = {
   paid: number | string;
   status: 'unpaid' | 'partial' | 'paid';
 };
+type SupplierPaymentAllocation = {
+  payableId: number;
+  amount: number;
+  purchaseOrderId?: number;
+  purchaseOrderNumber?: string;
+  payableAmount?: number | string;
+  payablePaid?: number | string;
+  payableStatus?: string;
+};
+type SupplierPayment = {
+  id: number;
+  supplierName: string;
+  paymentDate: string;
+  paymentMethod: 'cash' | 'bank';
+  reference?: string;
+  amount: number | string;
+  status?: 'reversed' | string;
+  reversalReason?: string;
+  reversalDate?: string;
+  allocations: SupplierPaymentAllocation[];
+};
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
@@ -65,6 +86,13 @@ function SupplierPaymentsPanel() {
   const [reference, setReference] = useState('');
   const [operationId, setOperationId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [supplierPayments, setSupplierPayments] = useState<SupplierPayment[]>([]);
+  const [paymentsLoading, setPaymentsLoading] = useState(false);
+  const [reversingPayment, setReversingPayment] = useState<SupplierPayment | null>(null);
+  const [reversalReason, setReversalReason] = useState('');
+  const [reversalDate, setReversalDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reversalOperationId, setReversalOperationId] = useState('');
+  const [reversing, setReversing] = useState(false);
 
   const purchasePayables = payablesCrud.data.filter((item) =>
     item.type === 'payable' && item.purchaseOrderId && payableRemaining(item) > 0.005);
@@ -82,6 +110,32 @@ function SupplierPaymentsPanel() {
   });
   const activePayables = paymentSupplier ? payablesForSupplier(paymentSupplier) : [];
   const allocatedTotal = activePayables.reduce((sum, item) => sum + (Number(allocations[String(item.id)]) || 0), 0);
+
+  const loadPaymentHistory = useCallback(async () => {
+    if (!canUseAccounting) return;
+    setPaymentsLoading(true);
+    try {
+      const response = await fetch('/api/accounting/supplier-payments', {
+        credentials: 'include',
+        headers: { 'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? '') },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'تعذر تحميل سجل دفعات الموردين');
+      setSupplierPayments(Array.isArray(payload.payments) ? payload.payments : []);
+    } catch (error) {
+      toast({
+        title: 'تعذر تحميل سجل الدفعات',
+        description: error instanceof Error ? error.message : 'أعد المحاولة.',
+        variant: 'destructive',
+      });
+    } finally {
+      setPaymentsLoading(false);
+    }
+  }, [canUseAccounting, currentUser?.dataGeneration, toast]);
+
+  useEffect(() => {
+    void loadPaymentHistory();
+  }, [loadPaymentHistory]);
 
   const openPayment = (supplier: Supplier) => {
     const related = payablesForSupplier(supplier);
@@ -132,7 +186,7 @@ function SupplierPaymentsPanel() {
       toast({ title: 'تم تسجيل سداد المورد وتحديث الذمم' });
       setPaymentSupplier(null);
       setAllocations({});
-      await Promise.all([payablesCrud.load(), purchaseOrdersCrud.load()]);
+      await Promise.all([payablesCrud.load(), purchaseOrdersCrud.load(), loadPaymentHistory()]);
     } catch (error) {
       toast({
         title: 'تعذر تسجيل السداد',
@@ -141,6 +195,53 @@ function SupplierPaymentsPanel() {
       });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openReversal = (payment: SupplierPayment) => {
+    setReversingPayment(payment);
+    setReversalReason('');
+    setReversalDate(new Date().toISOString().slice(0, 10));
+    setReversalOperationId(crypto.randomUUID());
+  };
+
+  const submitReversal = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!currentUser || !reversingPayment) return;
+    if (reversalReason.trim().length < 3) {
+      toast({ title: 'أدخل سبباً واضحاً لعكس الدفعة', variant: 'destructive' });
+      return;
+    }
+    setReversing(true);
+    try {
+      const response = await fetch(`/api/accounting/supplier-payments/${reversingPayment.id}/reverse`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+          'Idempotency-Key': reversalOperationId || crypto.randomUUID(),
+        },
+        body: JSON.stringify({ reason: reversalReason.trim(), effectiveDate: reversalDate }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409 && payload.error?.includes('تغيّرت بيانات المنشأة')) {
+          window.dispatchEvent(new Event('wudooh:stale-data-generation'));
+        }
+        throw new Error(payload.error || 'تعذر عكس دفعة المورد');
+      }
+      toast({ title: 'تم عكس الدفعة وإعادة فتح الذمم المرتبطة' });
+      setReversingPayment(null);
+      await Promise.all([payablesCrud.load(), purchaseOrdersCrud.load(), loadPaymentHistory()]);
+    } catch (error) {
+      toast({
+        title: 'تعذر عكس الدفعة',
+        description: error instanceof Error ? error.message : 'أعد المحاولة.',
+        variant: 'destructive',
+      });
+    } finally {
+      setReversing(false);
     }
   };
 
@@ -203,6 +304,76 @@ function SupplierPaymentsPanel() {
           </Table>
         </div>
       )}
+
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-lg font-black text-slate-900">سجل دفعات الموردين</h2>
+          <p className="text-sm text-slate-500">راجع كل دفعة وتوزيعها على الذمم، واعكس الدفعة الخاطئة من دون تعديل القيد الأصلي.</p>
+        </div>
+        {paymentsLoading ? (
+          <div className="flex h-20 items-center justify-center rounded-xl border border-slate-100 bg-white">
+            <LoaderCircle className="h-5 w-5 animate-spin text-teal-600" />
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
+            <Table className="min-w-[920px]">
+              <TableHeader>
+                <TableRow>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>المورد</TableHead>
+                  <TableHead>المبلغ</TableHead>
+                  <TableHead>طريقة السداد</TableHead>
+                  <TableHead>التوزيعات</TableHead>
+                  <TableHead>الحالة</TableHead>
+                  <TableHead className="text-left">الإجراء</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {supplierPayments.map((payment) => (
+                  <TableRow key={payment.id} data-testid={`supplier-payment-row-${payment.id}`}>
+                    <TableCell className="whitespace-nowrap">{payment.paymentDate}</TableCell>
+                    <TableCell className="font-bold">{payment.supplierName}</TableCell>
+                    <TableCell className="font-black">{formatCurrency(Number(payment.amount))}</TableCell>
+                    <TableCell>{payment.paymentMethod === 'bank' ? 'البنك' : 'الصندوق'}</TableCell>
+                    <TableCell>
+                      <div className="space-y-1 text-xs">
+                        {payment.allocations.map((allocation) => (
+                          <div key={allocation.payableId}>
+                            <span className="font-bold">{allocation.purchaseOrderNumber ?? `ذمة #${allocation.payableId}`}</span>
+                            <span className="text-slate-500"> — {formatCurrency(Number(allocation.amount))}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {payment.status === 'reversed' ? (
+                        <span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700">معكوسة</span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">مرحّلة</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-left">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={payment.status === 'reversed'}
+                        onClick={() => openReversal(payment)}
+                        data-testid={`button-reverse-supplier-payment-${payment.id}`}
+                      >
+                        عكس الدفعة
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!supplierPayments.length && (
+                  <TableRow><TableCell colSpan={7} className="h-20 text-center text-slate-500">لا توجد دفعات موردين.</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </section>
 
       <Dialog open={Boolean(paymentSupplier)} onOpenChange={(open) => { if (!open) setPaymentSupplier(null); }}>
         <DialogContent dir="rtl" className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
@@ -267,6 +438,38 @@ function SupplierPaymentsPanel() {
               <Button type="button" variant="outline" onClick={() => setPaymentSupplier(null)}>إلغاء</Button>
               <Button type="submit" disabled={submitting || allocatedTotal <= 0} data-testid="button-submit-supplier-payment">
                 {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : 'حفظ السداد'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(reversingPayment)} onOpenChange={(open) => { if (!open) setReversingPayment(null); }}>
+        <DialogContent dir="rtl" className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>عكس دفعة المورد {reversingPayment?.reference ? `— ${reversingPayment.reference}` : ''}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={submitReversal} className="space-y-5 py-2">
+            <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+              سيُنشأ قيد عكسي مستقل وتُعاد مبالغ التوزيع إلى الذمم. لا يمكن العكس إذا وُجدت تسوية لاحقة أو كانت الفترة مقفلة.
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="supplier-payment-reversal-date">تاريخ العكس</Label>
+                <Input id="supplier-payment-reversal-date" type="date" required value={reversalDate} onChange={(event) => setReversalDate(event.target.value)} data-testid="input-supplier-payment-reversal-date" />
+              </div>
+              <div className="space-y-2">
+                <Label>مبلغ الدفعة</Label>
+                <div className="flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-black">{formatCurrency(Number(reversingPayment?.amount ?? 0))}</div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="supplier-payment-reversal-reason">سبب العكس</Label>
+              <Input id="supplier-payment-reversal-reason" required minLength={3} maxLength={1000} value={reversalReason} onChange={(event) => setReversalReason(event.target.value)} placeholder="مثال: تم تسجيل التحويل على المورد الخطأ" data-testid="input-supplier-payment-reversal-reason" />
+            </div>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" onClick={() => setReversingPayment(null)}>إلغاء</Button>
+              <Button type="submit" disabled={reversing || reversalReason.trim().length < 3} data-testid="button-submit-supplier-payment-reversal">
+                {reversing ? <LoaderCircle className="h-4 w-4 animate-spin" /> : 'تأكيد عكس الدفعة'}
               </Button>
             </DialogFooter>
           </form>
