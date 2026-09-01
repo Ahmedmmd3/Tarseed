@@ -727,6 +727,11 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
     return;
   }
   const data = body as Record<string, unknown>;
+  if (access.tableName === "receivables" && data.type === "payable"
+    && (data.purchaseOrderId || data.purchaseId || data.purchaseReceiptOperationId)) {
+    response.status(409).json({ error: "ذمم أوامر الشراء تُنشأ من استلام أمر الشراء فقط." });
+    return;
+  }
   const clientOperationId = typeof data.clientOperationId === "string" ? data.clientOperationId : "";
   const { clientOperationId: _clientOperationId, ...rawRecordData } = data;
   const initialRecordData = access.tableName === "products" ? normalizeProductData(rawRecordData) : rawRecordData;
@@ -1091,10 +1096,17 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (access.tableName === "journalEntries" && current.data.status === "posted") {
         throw new MutationRejected(409, "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك.");
       }
+      if (access.tableName === "receivables" && current.data.type === "payable" && current.data.purchaseOrderId) {
+        throw new MutationRejected(409, "ذمة أمر الشراء تُحدّث من مسار سداد المورد المعتمد فقط.");
+      }
       if (access.tableName === "quotations" && (current.data.convertedInvoiceId || current.data.status === "accepted")) {
         throw new MutationRejected(409, "عرض السعر المحوّل إلى فاتورة غير قابل للتعديل.");
       }
       let currentData = { ...current.data, ...(body as Record<string, unknown>) };
+      if (access.tableName === "receivables" && currentData.type === "payable"
+        && (currentData.purchaseOrderId || currentData.purchaseId || currentData.purchaseReceiptOperationId)) {
+        throw new MutationRejected(409, "ذمم أوامر الشراء تُنشأ وتُحدّث من مسارات الاستلام والسداد المعتمدة فقط.");
+      }
       if (access.tableName === "quotations") {
         const normalized = quotationData(currentData, String(current.data.number ?? ""));
         if (!normalized.data) throw new MutationRejected(400, normalized.error ?? "بيانات عرض السعر غير صحيحة.");
@@ -1397,6 +1409,9 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       }
       if (access.tableName === "purchaseOrders" && (current.data.status !== "draft" || current.data.received === true)) {
         throw new MutationRejected(409, "لا يمكن حذف أمر شراء بعد إرساله أو بدء استلامه. ألغِه بدلاً من ذلك.");
+      }
+      if (access.tableName === "receivables" && current.data.type === "payable" && current.data.purchaseOrderId) {
+        throw new MutationRejected(409, "لا يمكن حذف ذمة مرتبطة باستلام أمر شراء.");
       }
       if (isAccountingSource(access.tableName) && await isClosedDate(
         currentAuth,

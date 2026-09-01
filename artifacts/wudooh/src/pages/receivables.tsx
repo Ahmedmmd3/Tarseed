@@ -184,10 +184,13 @@ export default function Receivables() {
                     <TableCell className="text-left font-bold text-red-600">{remaining}</TableCell>
                     <TableCell>{getStatusBadge(rec.status)}</TableCell>
                     <TableCell className="text-left">
-                      {rec.status !== 'paid' && (
+                      {rec.status !== 'paid' && !(rec.type === 'payable' && rec.purchaseOrderId) && (
                         <Button size="sm" variant="outline" onClick={() => setPayId(rec.id)} data-testid={`button-pay-${rec.id}`}>
                           {activeTab === 'receivable' ? 'قبض' : 'سداد'}
                         </Button>
+                      )}
+                      {rec.status !== 'paid' && rec.type === 'payable' && rec.purchaseOrderId && (
+                        <span className="text-xs text-slate-500">السداد من صفحة الموردين</span>
                       )}
                     </TableCell>
                   </TableRow>

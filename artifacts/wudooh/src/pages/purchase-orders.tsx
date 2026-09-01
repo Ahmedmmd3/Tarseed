@@ -81,6 +81,10 @@ type PurchaseOrder = {
   subtotal: number;
   vat: number;
   total: number;
+  receivedTotal?: number;
+  payableTotal?: number;
+  paid?: number;
+  remaining?: number;
   notes?: string;
   createdAt: string;
 };
@@ -179,6 +183,16 @@ const itemDisplayUnitCost = (item: PurchaseOrderItem) =>
 
 const itemDisplayTotal = (item: PurchaseOrderItem) =>
   Number(item.total ?? item.lineGross) || 0;
+
+const orderPayableTotal = (order: PurchaseOrder) =>
+  Number(order.payableTotal ?? order.receivedTotal ?? (order.paymentMethod === 'cash' ? 0 : order.total)) || 0;
+
+const orderPaid = (order: PurchaseOrder) => Number(order.paid) || 0;
+
+const orderRemaining = (order: PurchaseOrder) =>
+  Number.isFinite(Number(order.remaining))
+    ? Math.max(0, Number(order.remaining))
+    : Math.max(0, orderPayableTotal(order) - orderPaid(order));
 
 function buildPurchaseOrderPrintHtml(order: PublicPurchaseOrderDocument) {
   const statusLabel = statusLabels[order.status] || order.status;
@@ -727,6 +741,7 @@ export default function PurchaseOrders() {
                   <TableHead>المورد</TableHead>
                   <TableHead>تاريخ الإصدار</TableHead>
                   <TableHead>الإجمالي</TableHead>
+                  <TableHead>المتبقي</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead>الدفع</TableHead>
                   <TableHead className="text-left">الإجراءات</TableHead>
@@ -749,6 +764,9 @@ export default function PurchaseOrders() {
                     <TableCell>{po.issueDate}</TableCell>
                     <TableCell className="font-bold">
                       {formatCurrency(po.total)}
+                    </TableCell>
+                    <TableCell className={`font-black ${orderRemaining(po) > 0.005 ? 'text-rose-700' : 'text-emerald-700'}`} data-testid={`po-remaining-${po.id}`}>
+                      {formatCurrency(orderRemaining(po))}
                     </TableCell>
                     <TableCell>
                       <span
@@ -844,7 +862,7 @@ export default function PurchaseOrders() {
                 {!filteredOrders.length && (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={8}
                       className="h-32 text-center text-slate-500"
                     >
                       لا توجد أوامر شراء مسجلة في هذا التصنيف.
@@ -1303,6 +1321,18 @@ export default function PurchaseOrders() {
                   <div className="flex justify-between text-lg font-bold border-t border-slate-700 pt-3">
                     <span>الإجمالي الكلي</span>
                     <span>{formatCurrency(viewingOrder.total)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-slate-300">
+                    <span>ذمم الاستلام</span>
+                    <span>{formatCurrency(orderPayableTotal(viewingOrder))}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-emerald-300">
+                    <span>المدفوع</span>
+                    <span>{formatCurrency(orderPaid(viewingOrder))}</span>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-700 pt-3 text-lg font-black text-rose-300">
+                    <span>المتبقي</span>
+                    <span data-testid="po-details-remaining">{formatCurrency(orderRemaining(viewingOrder))}</span>
                   </div>
                 </div>
               </div>

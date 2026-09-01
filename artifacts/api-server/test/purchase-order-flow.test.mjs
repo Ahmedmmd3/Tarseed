@@ -391,3 +391,278 @@ test("يرحل الاستلام النقدي للصندوق دون إنشاء ذ
   assert.ok(journal.lines.some((line) => line.accountId === String(cashAccount.id) && line.credit === 23));
   assert.equal(payables.payload.records.some((record) => record.purchaseOrderId === created.payload.record.id), false);
 });
+
+test("يوزع سداد المورد على ذمم أوامر متعددة ويحدّث الأرصدة بقيد واحد دون تكرار", async () => {
+  const scenario = await fixture("سداد-مورد");
+  const createReceivedOrder = async (quantity, date) => {
+    const created = await request("/data/purchaseOrders", {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      body: orderBody(scenario, {
+        status: "sent",
+        items: [{ productId: scenario.product.id, quantity, unitCost: 10 }],
+      }),
+    });
+    assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+    const receipt = await request(`/data/purchaseOrders/${created.payload.record.id}/receive`, {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: { receiptDate: date, items: [{ productId: scenario.product.id, quantity }] },
+    });
+    assert.equal(receipt.response.status, 200, JSON.stringify(receipt.payload));
+    return { orderId: created.payload.record.id, payableId: receipt.payload.receipt.payableId, total: receipt.payload.receipt.total };
+  };
+  const first = await createReceivedOrder(2, "2026-09-11");
+  const second = await createReceivedOrder(3, "2026-09-12");
+  const scopedEmail = `accountant-${crypto.randomUUID().slice(0, 8)}@example.test`;
+  const scopedPassword = "Safe-test-password-123";
+  const scopedMember = await request("/team/members", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: {
+      name: "محاسب موقع محدود",
+      email: scopedEmail,
+      password: scopedPassword,
+      roleId: "accountant",
+      permissions: { dashboard: true, accounting: true },
+      locationScope: "selected",
+      warehouseIds: [scenario.warehouses[1].id],
+    },
+  });
+  assert.equal(scopedMember.response.status, 201, JSON.stringify(scopedMember.payload));
+  const scopedCookie = await login(scopedEmail, scopedPassword);
+  const scopedPayment = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scopedCookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-09-13",
+      paymentMethod: "cash",
+      allocations: [{ payableId: first.payableId, amount: 1 }],
+    },
+  });
+  assert.equal(scopedPayment.response.status, 403, JSON.stringify(scopedPayment.payload));
+  const operationId = crypto.randomUUID();
+  const body = {
+    supplierId: scenario.supplier.id,
+    supplierName: scenario.supplier.name,
+    paymentDate: "2026-09-13",
+    paymentMethod: "bank",
+    reference: "TRX-100",
+    allocations: [
+      { payableId: first.payableId, amount: first.total },
+      { payableId: second.payableId, amount: 10 },
+    ],
+  };
+  const payment = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": operationId },
+    body,
+  });
+  assert.equal(payment.response.status, 201, JSON.stringify(payment.payload));
+  assert.equal(payment.payload.replayed, false);
+  assert.equal(payment.payload.payables.find((item) => item.id === first.payableId).status, "paid");
+  assert.equal(payment.payload.payables.find((item) => item.id === second.payableId).status, "partial");
+  assert.equal(payment.payload.orders.find((item) => item.id === first.orderId).remaining, 0);
+  assert.equal(payment.payload.orders.find((item) => item.id === second.orderId).remaining, second.total - 10);
+
+  const replay = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": operationId },
+    body,
+  });
+  assert.equal(replay.response.status, 200, JSON.stringify(replay.payload));
+  assert.equal(replay.payload.replayed, true);
+  assert.equal(replay.payload.payment.id, payment.payload.payment.id);
+
+  const conflict = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": operationId },
+    body: { ...body, reference: "TRX-DIFFERENT" },
+  });
+  assert.equal(conflict.response.status, 409, JSON.stringify(conflict.payload));
+
+  const [journals, payables, orders] = await Promise.all([
+    request("/data/journalEntries", { cookie: scenario.account.cookie }),
+    request("/data/receivables", { cookie: scenario.account.cookie }),
+    request("/data/purchaseOrders", { cookie: scenario.account.cookie }),
+  ]);
+  const paymentJournals = journals.payload.records.filter((record) =>
+    record.sourceType === "supplier_payment" && record.sourceId === payment.payload.payment.id);
+  assert.equal(paymentJournals.length, 1);
+  assert.equal(paymentJournals[0].lines.reduce((sum, line) => sum + Number(line.debit), 0), first.total + 10);
+  assert.equal(paymentJournals[0].lines.reduce((sum, line) => sum + Number(line.credit), 0), first.total + 10);
+  assert.equal(payables.payload.records.find((item) => item.id === first.payableId).paid, first.total);
+  assert.equal(orders.payload.records.find((item) => item.id === second.orderId).paymentStatus, "partial");
+
+  const genericUpdate = await request(`/data/receivables/${second.payableId}`, {
+    method: "PATCH",
+    cookie: scenario.account.cookie,
+    body: { paid: second.total, status: "paid" },
+  });
+  assert.equal(genericUpdate.response.status, 409, JSON.stringify(genericUpdate.payload));
+  const forgedPayable = await request("/data/receivables", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: {
+      type: "payable",
+      purchaseOrderId: second.orderId,
+      purchaseReceiptOperationId: 999999,
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      party: scenario.supplier.name,
+      amount: 500,
+      paid: 0,
+      status: "unpaid",
+      dueDate: "2026-09-30",
+    },
+  });
+  assert.equal(forgedPayable.response.status, 409, JSON.stringify(forgedPayable.payload));
+  const staged = await request("/data/receivables", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: {
+      type: "receivable",
+      party: "عميل اختبار",
+      amount: 25,
+      paid: 0,
+      status: "unpaid",
+      dueDate: "2026-09-30",
+    },
+  });
+  assert.equal(staged.response.status, 201, JSON.stringify(staged.payload));
+  const stagedForgery = await request(`/data/receivables/${staged.payload.record.id}`, {
+    method: "PATCH",
+    cookie: scenario.account.cookie,
+    body: {
+      type: "payable",
+      purchaseOrderId: second.orderId,
+      purchaseReceiptOperationId: 999999,
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+    },
+  });
+  assert.equal(stagedForgery.response.status, 409, JSON.stringify(stagedForgery.payload));
+  const cancelPaid = await request(`/accounting/sources/purchaseOrders/${first.orderId}/cancel`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { reason: "محاولة إلغاء أمر مدفوع", effectiveDate: "2026-09-14" },
+  });
+  assert.equal(cancelPaid.response.status, 409, JSON.stringify(cancelPaid.payload));
+
+  const other = await fixture("سداد-معزول");
+  const isolated = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: other.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: other.supplier.id,
+      supplierName: other.supplier.name,
+      paymentDate: "2026-09-13",
+      paymentMethod: "cash",
+      allocations: [{ payableId: second.payableId, amount: 1 }],
+    },
+  });
+  assert.equal(isolated.response.status, 404, JSON.stringify(isolated.payload));
+});
+
+test("يعيد حساب رصيد الأمر عند استلام دفعة جديدة بعد سداد الدفعة السابقة", async () => {
+  const scenario = await fixture("سداد-ثم-استلام");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, {
+      status: "sent",
+      items: [{ productId: scenario.product.id, quantity: 4, unitCost: 10 }],
+    }),
+  });
+  const orderId = created.payload.record.id;
+  const firstReceipt = await request(`/data/purchaseOrders/${orderId}/receive`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { receiptDate: "2026-09-15", items: [{ productId: scenario.product.id, quantity: 2 }] },
+  });
+  assert.equal(firstReceipt.response.status, 200, JSON.stringify(firstReceipt.payload));
+  const firstPayableId = firstReceipt.payload.receipt.payableId;
+  const paid = await request("/accounting/supplier-payments", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: {
+      supplierId: scenario.supplier.id,
+      supplierName: scenario.supplier.name,
+      paymentDate: "2026-09-16",
+      paymentMethod: "cash",
+      allocations: [{ payableId: firstPayableId, amount: firstReceipt.payload.receipt.total }],
+    },
+  });
+  assert.equal(paid.response.status, 201, JSON.stringify(paid.payload));
+  assert.equal(paid.payload.orders[0].remaining, 0);
+  const secondReceipt = await request(`/data/purchaseOrders/${orderId}/receive`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { receiptDate: "2026-09-17", items: [{ productId: scenario.product.id, quantity: 2 }] },
+  });
+  assert.equal(secondReceipt.response.status, 200, JSON.stringify(secondReceipt.payload));
+  assert.equal(secondReceipt.payload.order.payableTotal, 46);
+  assert.equal(secondReceipt.payload.order.paid, 23);
+  assert.equal(secondReceipt.payload.order.remaining, 23);
+  assert.equal(secondReceipt.payload.order.paymentStatus, "partial");
+});
+
+test("يسلسل السداد والاستلام المتزامنين دون تعارض أقفال أو رصيد قديم", async () => {
+  const scenario = await fixture("سداد-واستلام-متزامن");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, {
+      status: "sent",
+      items: [{ productId: scenario.product.id, quantity: 4, unitCost: 10 }],
+    }),
+  });
+  const orderId = created.payload.record.id;
+  const firstReceipt = await request(`/data/purchaseOrders/${orderId}/receive`, {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    headers: { "Idempotency-Key": crypto.randomUUID() },
+    body: { receiptDate: "2026-09-18", items: [{ productId: scenario.product.id, quantity: 2 }] },
+  });
+  assert.equal(firstReceipt.response.status, 200, JSON.stringify(firstReceipt.payload));
+  const [payment, secondReceipt] = await Promise.all([
+    request("/accounting/supplier-payments", {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: {
+        supplierId: scenario.supplier.id,
+        supplierName: scenario.supplier.name,
+        paymentDate: "2026-09-19",
+        paymentMethod: "bank",
+        allocations: [{ payableId: firstReceipt.payload.receipt.payableId, amount: firstReceipt.payload.receipt.total }],
+      },
+    }),
+    request(`/data/purchaseOrders/${orderId}/receive`, {
+      method: "POST",
+      cookie: scenario.account.cookie,
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+      body: { receiptDate: "2026-09-19", items: [{ productId: scenario.product.id, quantity: 2 }] },
+    }),
+  ]);
+  assert.equal(payment.response.status, 201, JSON.stringify(payment.payload));
+  assert.equal(secondReceipt.response.status, 200, JSON.stringify(secondReceipt.payload));
+  const orders = await request("/data/purchaseOrders", { cookie: scenario.account.cookie });
+  const order = orders.payload.records.find((item) => item.id === orderId);
+  assert.equal(order.payableTotal, 46);
+  assert.equal(order.paid, 23);
+  assert.equal(order.remaining, 23);
+  assert.equal(order.paymentStatus, "partial");
+});

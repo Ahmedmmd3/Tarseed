@@ -1115,6 +1115,7 @@ router.post("/data/purchaseOrders/:id/receive", requireAuth, requireSubscription
             purchaseId: order.id,
             purchaseOrderId: order.id,
             purchaseReceiptOperationId: claimedOperation.id,
+            ...(order.data.supplierId == null ? {} : { supplierId: order.data.supplierId }),
             party: String(order.data.supplierName ?? "مورد غير محدد"),
             supplierName: String(order.data.supplierName ?? "مورد غير محدد"),
             type: "payable",
@@ -1127,9 +1128,31 @@ router.post("/data/purchaseOrders/:id/receive", requireAuth, requireSubscription
           },
         }).returning()
         : [undefined];
+      let orderForOutput = updatedOrder;
+      if (isCreditPurchase) {
+        const orderPayables = (await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "receivables"),
+          sql`${erpRecordsTable.data}->>'purchaseOrderId' = ${String(order.id)}`,
+        )).for("update")).filter((item) =>
+          item.data.type === "payable" && item.data.purchaseReceiptOperationId && item.data.status !== "cancelled");
+        const payableTotal = money(orderPayables.reduce((sum, item) => sum + Number(item.data.amount ?? 0), 0));
+        const aggregatePaid = money(orderPayables.reduce((sum, item) => sum + Number(item.data.paid ?? 0), 0));
+        const remaining = money(Math.max(0, payableTotal - aggregatePaid));
+        [orderForOutput] = await tx.update(erpRecordsTable).set({
+          data: {
+            ...updatedOrder.data,
+            payableTotal,
+            paid: aggregatePaid,
+            remaining,
+            paymentStatus: aggregatePaid >= payableTotal - 0.005 ? "paid" : aggregatePaid > 0 ? "partial" : "unpaid",
+          },
+          updatedAt: new Date(),
+        }).where(eq(erpRecordsTable.id, order.id)).returning();
+      }
       await audit(tx, currentAuth, "automatic_accounting", `${order.id}:${journal.id}`);
       await audit(tx, currentAuth, "purchase_order_received", `${order.id}:${claimedOperation.id}`);
-      const orderOutput = output(updatedOrder, currentAuth.organizationId);
+      const orderOutput = output(orderForOutput, currentAuth.organizationId);
       const receiptOutput = { ...receiptRecord, journalId: journal.id, ...(payable ? { payableId: payable.id } : {}) };
       await tx.update(erpRecordsTable).set({
         data: {

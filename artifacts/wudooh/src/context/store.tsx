@@ -55,6 +55,9 @@ export type Receivable = {
   amount: number;
   paid: number;
   status: 'unpaid' | 'partial' | 'paid';
+  supplierId?: string;
+  supplierName?: string;
+  purchaseOrderId?: string;
 };
 
 export type FinancialClosure = {

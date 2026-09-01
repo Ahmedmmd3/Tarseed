@@ -1,11 +1,11 @@
 import { useState, useMemo, type FormEvent, useEffect, useCallback } from 'react';
-import { Truck, ChevronRight, Plus, LoaderCircle, Trash2, CalendarClock, Paperclip } from 'lucide-react';
+import { Truck, ChevronRight, Plus, LoaderCircle, Trash2, CalendarClock, Paperclip, CreditCard } from 'lucide-react';
 import { Link } from 'wouter';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useCrud } from '@/hooks/use-crud';
 import { useStore } from '@/context/store';
@@ -17,10 +17,263 @@ import { TransferDialog } from '@/components/transfer-dialog';
 type Product = { id: number | string; name: string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
 type Supplier = { id: number | string; name: string };
-type PurchaseOrder = { id: number | string; orderNumber: string; supplierName: string; date: string; status: string; total: number | string };
+type PurchaseOrder = {
+  id: number | string;
+  orderNumber: string;
+  supplierId?: number | string;
+  supplierName: string;
+  date: string;
+  status: string;
+  total: number | string;
+  receivedTotal?: number | string;
+  payableTotal?: number | string;
+  paid?: number | string;
+  remaining?: number | string;
+  paymentStatus?: 'unpaid' | 'partial' | 'paid';
+};
+type SupplierPayable = {
+  id: number | string;
+  type: 'payable';
+  supplierId?: number | string;
+  supplierName?: string;
+  party: string;
+  purchaseOrderId?: number | string;
+  reference: string;
+  amount: number | string;
+  paid: number | string;
+  status: 'unpaid' | 'partial' | 'paid';
+};
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
+}
+
+const payableRemaining = (payable: SupplierPayable) =>
+  Math.max(0, Number(payable.amount) - Number(payable.paid));
+
+function SupplierPaymentsPanel() {
+  const { currentUser } = useStore();
+  const { toast } = useToast();
+  const canUseAccounting = currentUser?.roleId === 'owner' || currentUser?.permissions.accounting === true;
+  const suppliersCrud = useCrud<Supplier>('suppliers');
+  const payablesCrud = useCrud<SupplierPayable>('receivables', canUseAccounting);
+  const purchaseOrdersCrud = useCrud<PurchaseOrder>('purchaseOrders');
+  const [paymentSupplier, setPaymentSupplier] = useState<Supplier | null>(null);
+  const [allocations, setAllocations] = useState<Record<string, string>>({});
+  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank');
+  const [reference, setReference] = useState('');
+  const [operationId, setOperationId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const purchasePayables = payablesCrud.data.filter((item) =>
+    item.type === 'payable' && item.purchaseOrderId && payableRemaining(item) > 0.005);
+  const payablesForSupplier = (supplier: Supplier) => purchasePayables.filter((item) =>
+    (item.supplierId != null && String(item.supplierId) === String(supplier.id))
+    || String(item.supplierName ?? item.party).trim() === supplier.name.trim());
+  const supplierRows = suppliersCrud.data.map((supplier) => {
+    const related = payablesCrud.data.filter((item) =>
+      item.type === 'payable' && item.purchaseOrderId
+      && ((item.supplierId != null && String(item.supplierId) === String(supplier.id))
+        || String(item.supplierName ?? item.party).trim() === supplier.name.trim()));
+    const total = related.reduce((sum, item) => sum + Number(item.amount), 0);
+    const paid = related.reduce((sum, item) => sum + Number(item.paid), 0);
+    return { supplier, total, paid, remaining: Math.max(0, total - paid), payables: related };
+  });
+  const activePayables = paymentSupplier ? payablesForSupplier(paymentSupplier) : [];
+  const allocatedTotal = activePayables.reduce((sum, item) => sum + (Number(allocations[String(item.id)]) || 0), 0);
+
+  const openPayment = (supplier: Supplier) => {
+    const related = payablesForSupplier(supplier);
+    setPaymentSupplier(supplier);
+    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentMethod('bank');
+    setReference('');
+    setOperationId(crypto.randomUUID());
+    setAllocations(Object.fromEntries(related.map((item) => [String(item.id), ''])));
+  };
+
+  const submitPayment = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!currentUser || !paymentSupplier) return;
+    const selected = activePayables
+      .map((item) => ({ payableId: Number(item.id), amount: Number(allocations[String(item.id)]) }))
+      .filter((item) => Number.isFinite(item.amount) && item.amount > 0);
+    if (!selected.length) {
+      toast({ title: 'أدخل مبلغاً لذمة واحدة على الأقل', variant: 'destructive' });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await fetch('/api/accounting/supplier-payments', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+          'Idempotency-Key': operationId || crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          supplierId: Number(paymentSupplier.id),
+          supplierName: paymentSupplier.name,
+          paymentDate,
+          paymentMethod,
+          reference,
+          allocations: selected,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409 && payload.error?.includes('تغيّرت بيانات المنشأة')) {
+          window.dispatchEvent(new Event('wudooh:stale-data-generation'));
+        }
+        throw new Error(payload.error || 'تعذر تسجيل سداد المورد');
+      }
+      toast({ title: 'تم تسجيل سداد المورد وتحديث الذمم' });
+      setPaymentSupplier(null);
+      setAllocations({});
+      await Promise.all([payablesCrud.load(), purchaseOrdersCrud.load()]);
+    } catch (error) {
+      toast({
+        title: 'تعذر تسجيل السداد',
+        description: error instanceof Error ? error.message : 'أعد المحاولة.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-lg font-black text-slate-900">أرصدة الموردين</h2>
+        <p className="text-sm text-slate-500">الأرصدة ناتجة عن استلامات أوامر الشراء الآجلة، والسداد يوزع على الذمم المحددة.</p>
+      </div>
+      {!canUseAccounting ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          عرض الذمم وتسجيل السداد يتطلب صلاحية المحاسبة.
+        </div>
+      ) : payablesCrud.loading || purchaseOrdersCrud.loading ? (
+        <div className="flex h-24 items-center justify-center rounded-xl border border-slate-100 bg-white">
+          <LoaderCircle className="h-5 w-5 animate-spin text-teal-600" />
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
+          <Table className="min-w-[720px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead>المورد</TableHead>
+                <TableHead>إجمالي الذمم</TableHead>
+                <TableHead>المدفوع</TableHead>
+                <TableHead>المتبقي</TableHead>
+                <TableHead>أوامر مفتوحة</TableHead>
+                <TableHead className="text-left">الإجراء</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {supplierRows.map(({ supplier, total, paid, remaining, payables }) => (
+                <TableRow key={supplier.id} data-testid={`supplier-balance-row-${supplier.id}`}>
+                  <TableCell className="font-bold text-slate-900">{supplier.name}</TableCell>
+                  <TableCell>{formatCurrency(total)}</TableCell>
+                  <TableCell className="font-bold text-emerald-700">{formatCurrency(paid)}</TableCell>
+                  <TableCell className="font-black text-rose-700" data-testid={`supplier-remaining-${supplier.id}`}>
+                    {formatCurrency(remaining)}
+                  </TableCell>
+                  <TableCell>{payables.filter((item) => payableRemaining(item) > 0.005).length}</TableCell>
+                  <TableCell className="text-left">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={remaining <= 0.005}
+                      onClick={() => openPayment(supplier)}
+                      data-testid={`button-pay-supplier-${supplier.id}`}
+                    >
+                      <CreditCard className="ml-2 h-4 w-4" />
+                      تسجيل سداد
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {!supplierRows.length && (
+                <TableRow><TableCell colSpan={6} className="h-20 text-center text-slate-500">لا يوجد موردون.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      <Dialog open={Boolean(paymentSupplier)} onOpenChange={(open) => { if (!open) setPaymentSupplier(null); }}>
+        <DialogContent dir="rtl" className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>تسجيل سداد للمورد {paymentSupplier?.name}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={submitPayment} className="space-y-5 py-2">
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div className="space-y-2">
+                <Label htmlFor="supplier-payment-date">تاريخ السداد</Label>
+                <Input id="supplier-payment-date" type="date" required value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} data-testid="input-supplier-payment-date" />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="supplier-payment-method">حساب السداد</Label>
+                <select id="supplier-payment-method" className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as 'cash' | 'bank')} data-testid="select-supplier-payment-method">
+                  <option value="bank">البنك</option>
+                  <option value="cash">الصندوق</option>
+                </select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="supplier-payment-reference">مرجع اختياري</Label>
+                <Input id="supplier-payment-reference" value={reference} onChange={(event) => setReference(event.target.value)} placeholder="رقم التحويل أو السند" data-testid="input-supplier-payment-reference" />
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label>توزيع مبلغ السداد</Label>
+                <Button type="button" size="sm" variant="ghost" onClick={() => setAllocations(Object.fromEntries(activePayables.map((item) => [String(item.id), String(payableRemaining(item))])))}>
+                  سداد كل الأرصدة
+                </Button>
+              </div>
+              <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                {activePayables.map((payable) => {
+                  const order = purchaseOrdersCrud.data.find((item) => String(item.id) === String(payable.purchaseOrderId));
+                  const remaining = payableRemaining(payable);
+                  return (
+                    <div key={payable.id} className="grid items-center gap-3 rounded-lg bg-white p-3 sm:grid-cols-[1fr_140px]">
+                      <div>
+                        <p className="font-bold text-slate-900">{order?.orderNumber ?? payable.reference}</p>
+                        <p className="text-xs text-slate-500">الرصيد المتبقي: {formatCurrency(remaining)}</p>
+                      </div>
+                      <Input
+                        type="number"
+                        min="0"
+                        max={remaining}
+                        step="0.01"
+                        value={allocations[String(payable.id)] ?? ''}
+                        onChange={(event) => setAllocations((current) => ({ ...current, [String(payable.id)]: event.target.value }))}
+                        placeholder="0.00"
+                        data-testid={`input-payable-allocation-${payable.id}`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex items-center justify-between rounded-xl bg-slate-900 px-4 py-3 text-white">
+              <span className="font-bold">إجمالي السداد</span>
+              <span className="text-lg font-black" data-testid="supplier-payment-total">{formatCurrency(allocatedTotal)}</span>
+            </div>
+            <DialogFooter className="gap-2">
+              <Button type="button" variant="outline" onClick={() => setPaymentSupplier(null)}>إلغاء</Button>
+              <Button type="submit" disabled={submitting || allocatedTotal <= 0} data-testid="button-submit-supplier-payment">
+                {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : 'حفظ السداد'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </section>
+  );
 }
 
 function PurchaseReceiptsWorkspace() {
@@ -367,16 +620,19 @@ export default function Purchases() {
         </TabsList>
         
         <TabsContent value="suppliers">
-          <CrudTable
-            table="suppliers"
-            title="إدارة الموردين"
-            fields={[
-              { key: 'name', label: 'اسم المورد', required: true },
-              { key: 'contactPerson', label: 'الشخص المسؤول' },
-              { key: 'phone', label: 'رقم الهاتف' },
-              { key: 'email', label: 'البريد الإلكتروني' },
-            ]}
-          />
+          <div className="space-y-8">
+            <SupplierPaymentsPanel />
+            <CrudTable
+              table="suppliers"
+              title="إدارة الموردين"
+              fields={[
+                { key: 'name', label: 'اسم المورد', required: true },
+                { key: 'contactPerson', label: 'الشخص المسؤول' },
+                { key: 'phone', label: 'رقم الهاتف' },
+                { key: 'email', label: 'البريد الإلكتروني' },
+              ]}
+            />
+          </div>
         </TabsContent>
         
         <TabsContent value="orders">
