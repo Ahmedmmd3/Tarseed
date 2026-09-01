@@ -40,8 +40,17 @@ type ServerSummary = {
   }>;
 };
 
+type FiscalYearStatus = {
+  fiscalYearClosed: boolean;
+  closedYear: number | null;
+  closedAt: string | null;
+  closedBy: number | null;
+  currentYear: number;
+  fiscalYearEnd: string;
+};
+
 export default function Reports() {
-  const { accounts, journals, closePeriod, connectionMode, currentUser } = useStore();
+  const { accounts, journals, closePeriod, connectionMode, currentUser, refreshSession } = useStore();
   const [reportType, setReportType] = useState<ReportType>('trial');
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
@@ -54,6 +63,18 @@ export default function Reports() {
   const [closureLoadError, setClosureLoadError] = useState('');
   const [confirmCloseOpen, setConfirmCloseOpen] = useState(false);
   const [closeConfirmation, setCloseConfirmation] = useState('');
+  const [fiscalYearStatus, setFiscalYearStatus] = useState<FiscalYearStatus>({
+    fiscalYearClosed: false,
+    closedYear: null,
+    closedAt: null,
+    closedBy: null,
+    currentYear: year,
+    fiscalYearEnd: `${year}-12-31`,
+  });
+  const [fiscalYearLoadError, setFiscalYearLoadError] = useState('');
+  const [fiscalYearCloseError, setFiscalYearCloseError] = useState('');
+  const [isFiscalYearClosing, setIsFiscalYearClosing] = useState(false);
+  const [fiscalYearConfirmOpen, setFiscalYearConfirmOpen] = useState(false);
 
   const handleClose = async () => {
     setCloseError(null);
@@ -68,6 +89,43 @@ export default function Reports() {
       setCloseError(error instanceof Error ? error.message : 'تعذر إقفال الفترة.');
     } finally {
       setIsClosing(false);
+    }
+  };
+
+  const handleFiscalYearClose = async () => {
+    setFiscalYearCloseError('');
+    setIsFiscalYearClosing(true);
+    try {
+      const response = await fetch('/api/accounting/fiscal-year/close', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0),
+        },
+        body: JSON.stringify({
+          year,
+          date: `${year}-12-31`,
+          confirmation: 'CLOSE_FISCAL_YEAR',
+        }),
+      });
+      const payload = await response.json().catch(() => ({})) as Partial<FiscalYearStatus> & { error?: string };
+      if (!response.ok || payload.fiscalYearClosed !== true) {
+        throw new Error(payload.error ?? 'تعذر إقفال السنة المالية.');
+      }
+      setFiscalYearStatus((current) => ({
+        ...current,
+        fiscalYearClosed: true,
+        closedYear: payload.closedYear ?? year,
+        closedAt: payload.closedAt ?? new Date().toISOString(),
+        closedBy: payload.closedBy ?? currentUser?.id ?? null,
+      }));
+      setFiscalYearConfirmOpen(false);
+      await refreshSession();
+    } catch (error) {
+      setFiscalYearCloseError(error instanceof Error ? error.message : 'تعذر إقفال السنة المالية.');
+    } finally {
+      setIsFiscalYearClosing(false);
     }
   };
 
@@ -104,6 +162,39 @@ export default function Reports() {
     })();
     return () => { active = false; };
   }, [connectionMode, currentUser]);
+
+  useEffect(() => {
+    if (connectionMode !== 'remote' || currentUser?.roleId !== 'owner') {
+      setFiscalYearStatus((current) => ({ ...current, fiscalYearClosed: false, closedYear: null, closedAt: null, closedBy: null }));
+      setFiscalYearLoadError('');
+      return;
+    }
+    let active = true;
+    void (async () => {
+      setFiscalYearLoadError('');
+      try {
+        const response = await fetch('/api/accounting/fiscal-year', {
+          credentials: 'include',
+          headers: { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) },
+        });
+        const payload = await response.json().catch(() => ({})) as Partial<FiscalYearStatus> & { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'تعذر تحميل حالة السنة المالية.');
+        if (active && typeof payload.fiscalYearClosed === 'boolean') {
+          setFiscalYearStatus({
+            fiscalYearClosed: payload.fiscalYearClosed,
+            closedYear: payload.closedYear ?? null,
+            closedAt: payload.closedAt ?? null,
+            closedBy: payload.closedBy ?? null,
+            currentYear: payload.currentYear ?? year,
+            fiscalYearEnd: payload.fiscalYearEnd ?? `${year}-12-31`,
+          });
+        }
+      } catch (error) {
+        if (active) setFiscalYearLoadError(error instanceof Error ? error.message : 'تعذر تحميل حالة السنة المالية.');
+      }
+    })();
+    return () => { active = false; };
+  }, [connectionMode, currentUser?.dataGeneration, currentUser?.roleId, year]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('ar-SA', { minimumFractionDigits: 2 }).format(amount);
@@ -632,6 +723,75 @@ export default function Reports() {
         )}
         </div>
       )}
+
+      {currentUser?.roleId === 'owner' && (
+        <Card className="border-slate-200 shadow-sm" data-testid="card-fiscal-year-close">
+          <CardContent className="p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="flex items-center gap-2">
+                  <LockKeyhole className="h-5 w-5 text-slate-700" />
+                  <h3 className="text-lg font-bold text-slate-900">إقفال السنة المالية</h3>
+                </div>
+                {fiscalYearStatus.fiscalYearClosed ? (
+                  <p className="mt-2 font-medium text-emerald-700" data-testid="text-fiscal-year-closed">
+                    السنة {fiscalYearStatus.closedYear ?? year} — مقفلة ✅
+                  </p>
+                ) : (
+                  <p className="mt-2 text-sm text-slate-600" data-testid="text-fiscal-year-open">
+                    السنة الحالية: {year} — غير مقفلة
+                  </p>
+                )}
+              </div>
+              {!fiscalYearStatus.fiscalYearClosed && (
+                <Button
+                  onClick={() => {
+                    setFiscalYearCloseError('');
+                    setFiscalYearConfirmOpen(true);
+                  }}
+                  disabled={isFiscalYearClosing || connectionMode !== 'remote' || Boolean(fiscalYearLoadError)}
+                  className="w-full sm:w-auto bg-slate-900 hover:bg-slate-800 text-white"
+                  data-testid="button-close-fiscal-year"
+                >
+                  <LockKeyhole className="ml-2 h-4 w-4" />
+                  إقفال السنة المالية {year}
+                </Button>
+              )}
+            </div>
+            {fiscalYearLoadError && <p className="mt-3 text-sm text-rose-700" role="alert">{fiscalYearLoadError}</p>}
+            {fiscalYearCloseError && <p className="mt-3 text-sm text-rose-700" role="alert" data-testid="text-fiscal-year-close-error">{fiscalYearCloseError}</p>}
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={fiscalYearConfirmOpen} onOpenChange={setFiscalYearConfirmOpen}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>تأكيد إقفال السنة المالية {year}</DialogTitle>
+            <DialogDescription>
+              هذا الإجراء لا يمكن التراجع عنه.
+              <br />
+              سيتم إنشاء قيد إقفال تلقائي وترحيل
+              <br />
+              صافي الربح لحساب الأرباح المحتجزة.
+              <br />
+              هل أنت متأكد؟
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="outline" onClick={() => setFiscalYearConfirmOpen(false)}>إلغاء</Button>
+            <Button
+              type="button"
+              disabled={isFiscalYearClosing || connectionMode !== 'remote' || fiscalYearStatus.fiscalYearClosed}
+              onClick={() => void handleFiscalYearClose()}
+              className="bg-red-700 hover:bg-red-800"
+              data-testid="button-confirm-close-fiscal-year"
+            >
+              {isFiscalYearClosing ? 'جارٍ الإقفال...' : 'تأكيد الإقفال'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

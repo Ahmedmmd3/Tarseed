@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { db, eInvoiceDocumentsTable, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
-import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
+import { db, eInvoiceDocumentsTable, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
+import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
 import { buildLedgerReport } from "../lib/accounting-ledger";
 import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type JournalAdjustmentAction, type JournalRecord } from "../lib/journal-adjustments";
@@ -303,7 +303,21 @@ function journalLinesForSource(
     if (!inventory || !inputVat || !settlement) throw new SourceCorrectionError(409, "الحسابات الافتراضية للشراء غير مكتملة.");
     return [{ accountId: String(inventory.id), debit: net, credit: 0 }, { accountId: String(inputVat.id), debit: tax, credit: 0 }, { accountId: String(settlement.id), debit: 0, credit: total }];
   }
-  const expense = account("5100"); const cash = account("1000");
+  const expenseCategoryMap: Record<string, string> = {
+    "إيجار": "5100",
+    "رواتب": "5200",
+    "مرافق": "5300",
+    "كهرباء": "5300",
+    "ماء": "5300",
+    "تسويق": "5400",
+    "إعلان": "5400",
+    "نقل": "5500",
+    "مواصلات": "5500",
+    "صيانة": "5600",
+    "مشتريات": "5000",
+    "أخرى": "5900",
+  };
+  const expense = account(expenseCategoryMap[String(data.category ?? "")] ?? "5900") ?? account("5100"); const cash = account("1000");
   if (!expense || !cash) throw new SourceCorrectionError(409, "الحسابات الافتراضية للمصروف غير مكتملة.");
   return [{ accountId: String(expense.id), debit: total, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: total }];
 }
@@ -513,6 +527,29 @@ router.get("/accounting/closures", requireAuth, requireSubscriptionAccess, requi
   const auth = response.locals.auth as AuthContext;
   const closures = await recordsFor(auth, "financialClosures");
   response.json({ closures: closures.sort((left, right) => String(right.to).localeCompare(String(left.to)) || right.id - left.id) });
+});
+
+router.get("/accounting/fiscal-year", requireAuth, requireSubscriptionAccess, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const [organization] = await db.select({
+    fiscalYearClosed: organizationsTable.fiscalYearClosed,
+    closedYear: organizationsTable.closedYear,
+    closedAt: organizationsTable.closedAt,
+    closedBy: organizationsTable.closedBy,
+  }).from(organizationsTable).where(eq(organizationsTable.id, auth.organizationId)).limit(1);
+  if (!organization) {
+    response.status(404).json({ error: "المنظمة غير موجودة." });
+    return;
+  }
+  const currentYear = new Date().getUTCFullYear();
+  response.json({
+    fiscalYearClosed: organization.fiscalYearClosed,
+    closedYear: organization.closedYear,
+    closedAt: organization.closedAt?.toISOString() ?? null,
+    closedBy: organization.closedBy,
+    currentYear,
+    fiscalYearEnd: `${currentYear}-12-31`,
+  });
 });
 
 router.post("/accounting/supplier-payments", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
@@ -2183,6 +2220,167 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
     return;
   }
   response.status(201).json({ closure: { ...closure.data, id: closure.id } });
+});
+
+router.post("/accounting/fiscal-year/close", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireOwner, async (request: Request, response: Response): Promise<void> => {
+  const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
+    ? request.body as Record<string, unknown>
+    : {};
+  const requestedDate = typeof body.date === "string" ? body.date.trim() : "";
+  const requestedYear = Number(body.year);
+  const year = Number.isInteger(requestedYear) ? requestedYear : Number(requestedDate.slice(0, 4));
+  const fiscalYearEnd = Number.isInteger(year) && year >= 1900 && year <= 9999 ? `${year}-12-31` : "";
+  const confirmation = typeof body.confirmation === "string" ? body.confirmation : "";
+
+  if (!Number.isInteger(year) || !fiscalYearEnd || requestedDate !== fiscalYearEnd || !isValidIsoDate(requestedDate)) {
+    response.status(400).json({ error: "يجب أن يكون التاريخ المحدد هو 31 ديسمبر من سنة مالية صحيحة." });
+    return;
+  }
+  if (confirmation !== "CLOSE_FISCAL_YEAR") {
+    response.status(400).json({
+      error: "إقفال السنة المالية إجراء نهائي. أرسل تأكيد الإقفال الصريح.",
+      code: "fiscal_year_close_confirmation_required",
+    });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || currentAuth.roleId !== "owner") {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw new AccountingMutationError(403, "إقفال السنة المالية متاح لمالك المنشأة فقط.");
+      }
+      const [organization] = await tx.select({
+        fiscalYearClosed: organizationsTable.fiscalYearClosed,
+        closedYear: organizationsTable.closedYear,
+      }).from(organizationsTable).where(eq(organizationsTable.id, currentAuth.organizationId)).for("update");
+      if (!organization) throw new AccountingMutationError(404, "المنظمة غير موجودة.");
+      if (organization.fiscalYearClosed === true) {
+        throw new AccountingMutationError(409, `السنة المالية ${organization.closedYear ?? year} مقفلة مسبقاً.`);
+      }
+
+      const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
+      const journals = await organizationRecordsFor(currentAuth, "journalEntries", tx);
+      const report = calculateReport(accounts, journals, `${year}-01-01`, fiscalYearEnd);
+      if (Math.abs(report.totals.trialDebit - report.totals.trialCredit) > 0.005) {
+        throw new AccountingMutationError(409, "لا يمكن إقفال السنة لأن ميزان المراجعة غير متوازن.");
+      }
+
+      const retainedEarnings = accounts.find((account) => String(account.code) === "3100" && account.status !== "inactive");
+      if (!retainedEarnings) {
+        throw new AccountingMutationError(409, "حساب الأرباح المحتجزة 3100 غير موجود أو غير نشط.");
+      }
+      const revenueLines = report.incomeStatement.revenue
+        .filter((account) => account.amount > 0.005)
+        .map((account) => ({
+          id: crypto.randomUUID(),
+          accountId: String(account.id),
+          debit: money(account.amount),
+          credit: 0,
+        }));
+      const expenseLines = report.incomeStatement.expense
+        .filter((account) => account.amount > 0.005)
+        .map((account) => ({
+          id: crypto.randomUUID(),
+          accountId: String(account.id),
+          debit: 0,
+          credit: money(account.amount),
+        }));
+      const netIncome = money(report.totals.netIncome);
+      const closingLines = [...revenueLines, ...expenseLines];
+      if (netIncome > 0.005) {
+        closingLines.push({ id: crypto.randomUUID(), accountId: String(retainedEarnings.id), debit: 0, credit: netIncome });
+      } else if (netIncome < -0.005) {
+        closingLines.push({ id: crypto.randomUUID(), accountId: String(retainedEarnings.id), debit: money(Math.abs(netIncome)), credit: 0 });
+      }
+      if (closingLines.length < 2) {
+        throw new AccountingMutationError(409, "لا توجد أرصدة إيرادات أو مصاريف قابلة للإقفال في السنة المحددة.");
+      }
+      const closingDebitTotal = closingLines.reduce((sum, line) => sum + line.debit, 0);
+      const closingCreditTotal = closingLines.reduce((sum, line) => sum + line.credit, 0);
+      if (Math.abs(closingDebitTotal - closingCreditTotal) > 0.005) {
+        throw new AccountingMutationError(409, "تعذر إنشاء قيد إقفال متوازن للسنة المالية.");
+      }
+
+      const closedAt = new Date();
+      const [closingJournal] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "journalEntries",
+        clientOperationId: `FISCAL-YEAR-CLOSE-${year}`,
+        data: {
+          number: `FY-CLOSE-${year}`,
+          date: fiscalYearEnd,
+          description: `إقفال السنة المالية ${year}`,
+          status: "posted",
+          sourceType: "fiscal_year_close",
+          fiscalYear: year,
+          lines: closingLines,
+        },
+      }).returning();
+      if (!closingJournal) throw new AccountingMutationError(500, "تعذر إنشاء قيد إقفال السنة المالية.");
+
+      const closureData = {
+        from: `${year}-01-01`,
+        to: fiscalYearEnd,
+        closedAt: closedAt.toISOString(),
+        closedBy: currentAuth.id,
+        status: "closed",
+        kind: "fiscal_year",
+        fiscalYear: year,
+        closingJournalId: closingJournal.id,
+        netIncome,
+        totals: report.totals,
+        trialBalance: report.trialBalance,
+      };
+      const [closure] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "financialClosures",
+        data: closureData,
+      }).returning();
+      if (!closure) throw new AccountingMutationError(500, "تعذر حفظ إقفال السنة المالية.");
+
+      const [updatedOrganization] = await tx.update(organizationsTable).set({
+        fiscalYearClosed: true,
+        closedYear: year,
+        closedAt,
+        closedBy: currentAuth.id,
+      }).where(eq(organizationsTable.id, currentAuth.organizationId)).returning({
+        fiscalYearClosed: organizationsTable.fiscalYearClosed,
+        closedYear: organizationsTable.closedYear,
+        closedAt: organizationsTable.closedAt,
+        closedBy: organizationsTable.closedBy,
+      });
+      if (!updatedOrganization) throw new AccountingMutationError(500, "تعذر تحديث حالة السنة المالية.");
+
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: currentAuth.organizationId,
+        actorId: currentAuth.id,
+        actorName: currentAuth.name || currentAuth.email,
+        action: "fiscal_year_closed",
+        entity: `fiscal-year:${year}`,
+        details: `إقفال السنة المالية ${year}`,
+      });
+      return { closingJournal, closure, organization: updatedOrganization, netIncome };
+    });
+
+    response.status(201).json({
+      fiscalYearClosed: result.organization.fiscalYearClosed,
+      closedYear: result.organization.closedYear,
+      closedAt: result.organization.closedAt?.toISOString() ?? null,
+      closedBy: result.organization.closedBy,
+      netIncome: result.netIncome,
+      journal: { ...result.closingJournal.data, id: result.closingJournal.id },
+      closure: { ...result.closure.data, id: result.closure.id },
+    });
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
 });
 
 export default router;

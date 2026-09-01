@@ -87,9 +87,14 @@ export const DEFAULT_ACCOUNT_DEFINITIONS = [
   { code: "3100", name: "الأرباح المبقاة", type: "equity", parent: null, openingBalance: 0, status: "active" },
   { code: "4000", name: "المبيعات", type: "revenue", parent: null, openingBalance: 0, status: "active" },
   { code: "4100", name: "إيرادات أخرى", type: "revenue", parent: null, openingBalance: 0, status: "active" },
-  { code: "5000", name: "مصروفات تشغيلية", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5100", name: "مصروفات الرواتب", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5500", name: "تكلفة المبيعات", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5000", name: "تكلفة البضاعة المباعة", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5100", name: "مصاريف إيجار", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5200", name: "مصاريف رواتب", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5300", name: "مصاريف مرافق", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5400", name: "مصاريف تسويق وإعلان", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5500", name: "مصاريف نقل ومواصلات", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5600", name: "مصاريف صيانة", type: "expense", parent: null, openingBalance: 0, status: "active" },
+  { code: "5900", name: "مصاريف أخرى", type: "expense", parent: null, openingBalance: 0, status: "active" },
 ] as const;
 
 const CUSTOMERS = [
@@ -114,11 +119,11 @@ const INVOICES = [
 ] as const;
 
 const EXPENSES = [
-  { description: "إيجار", amount: 3_500, category: "إيجار", accountCode: "5000", day: 3 },
-  { description: "رواتب", amount: 12_000, category: "رواتب", accountCode: "5100", day: 8 },
-  { description: "كهرباء", amount: 850, category: "مرافق", accountCode: "5000", day: 13 },
-  { description: "تسويق", amount: 1_200, category: "تسويق", accountCode: "5000", day: 18 },
-  { description: "صيانة", amount: 450, category: "صيانة", accountCode: "5000", day: 22 },
+  { description: "إيجار", amount: 3_500, category: "إيجار", accountCode: "5100", day: 3 },
+  { description: "رواتب", amount: 12_000, category: "رواتب", accountCode: "5200", day: 8 },
+  { description: "كهرباء", amount: 850, category: "مرافق", accountCode: "5300", day: 13 },
+  { description: "تسويق", amount: 1_200, category: "تسويق", accountCode: "5400", day: 18 },
+  { description: "صيانة", amount: 450, category: "صيانة", accountCode: "5600", day: 22 },
 ] as const;
 
 const money = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
