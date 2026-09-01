@@ -11,6 +11,8 @@ import {
   Building2,
   Ban,
   ReceiptText,
+  Printer,
+  Share2,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
@@ -50,13 +52,16 @@ type Warehouse = { id: number | string; name: string };
 type PurchaseOrderItem = {
   productId: number | string;
   productName: string;
+  name?: string;
   quantity: number;
   receivedQuantity: number;
   unitCost: number;
+  unitCostExVat?: number;
   vatRate: number;
   lineNet: number;
   vatAmount: number;
   total: number;
+  lineGross?: number;
 };
 
 type PurchaseOrder = {
@@ -79,6 +84,21 @@ type PurchaseOrder = {
   notes?: string;
   createdAt: string;
 };
+
+type PublicPurchaseOrderDocument = Pick<
+  PurchaseOrder,
+  | 'orderNumber'
+  | 'supplierName'
+  | 'warehouseName'
+  | 'issueDate'
+  | 'expectedDate'
+  | 'status'
+  | 'items'
+  | 'subtotal'
+  | 'vat'
+  | 'total'
+  | 'notes'
+>;
 
 const statusColors: Record<string, string> = {
   draft: 'bg-slate-100 text-slate-700',
@@ -127,6 +147,148 @@ const defaultItem = (): PurchaseOrderItem => ({
   total: 0,
 });
 
+const formatCurrencyValue = (amount: number) =>
+  new Intl.NumberFormat('ar-SA', {
+    style: 'currency',
+    currency: 'SAR',
+  }).format(Number(amount) || 0);
+
+const formatDocumentDate = (value?: string) => {
+  if (!value) return '-';
+  const date = new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime())
+    ? value
+    : new Intl.DateTimeFormat('ar-SA-u-ca-gregory', {
+        dateStyle: 'medium',
+      }).format(date);
+};
+
+const escapeHtml = (value: unknown) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+const itemDisplayName = (item: PurchaseOrderItem) =>
+  item.productName || item.name || 'صنف';
+
+const itemDisplayUnitCost = (item: PurchaseOrderItem) =>
+  Number(item.unitCost ?? item.unitCostExVat) || 0;
+
+const itemDisplayTotal = (item: PurchaseOrderItem) =>
+  Number(item.total ?? item.lineGross) || 0;
+
+function buildPurchaseOrderPrintHtml(order: PublicPurchaseOrderDocument) {
+  const statusLabel = statusLabels[order.status] || order.status;
+  const itemRows = order.items
+    .map(
+      (item, index) => `
+        <tr>
+          <td class="item-name"><span class="item-number">${index + 1}</span>${escapeHtml(item.productName)}</td>
+          <td>${escapeHtml(item.quantity)}</td>
+          <td>${escapeHtml(formatCurrencyValue(item.unitCost))}</td>
+          <td>${escapeHtml(item.vatRate)}٪</td>
+          <td class="amount">${escapeHtml(formatCurrencyValue(item.total))}</td>
+        </tr>`,
+    )
+    .join('');
+
+  return `<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>أمر شراء ${escapeHtml(order.orderNumber)}</title>
+    <style>
+      @page { size: A4; margin: 14mm; }
+      :root { color-scheme: light; font-family: Cairo, Tahoma, Arial, sans-serif; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #eef2f7; color: #17233d; font-family: Cairo, Tahoma, Arial, sans-serif; }
+      .page { width: 210mm; min-height: 267mm; margin: 24px auto; padding: 18mm; background: #fff; box-shadow: 0 16px 40px rgba(10, 19, 40, .12); }
+      .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; padding-bottom: 24px; border-bottom: 3px solid #0d47d9; }
+      .brand { color: #0d47d9; font-size: 25px; font-weight: 900; letter-spacing: -.03em; }
+      .brand-subtitle { margin-top: 4px; color: #65738c; font-size: 11px; }
+      .document-title { color: #0a1328; font-size: 25px; font-weight: 900; }
+      .document-number { margin-top: 5px; color: #0d47d9; font-size: 14px; font-weight: 700; }
+      .meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0; }
+      .meta-card { min-height: 70px; padding: 12px 14px; border: 1px solid #dce3ed; border-radius: 10px; background: #f7f9fc; }
+      .meta-label { margin-bottom: 5px; color: #65738c; font-size: 10px; font-weight: 700; }
+      .meta-value { color: #17233d; font-size: 13px; font-weight: 800; }
+      .status { display: inline-flex; padding: 5px 10px; border-radius: 999px; background: #eaf1ff; color: #0d47d9; font-size: 11px; font-weight: 800; }
+      .section-title { margin: 24px 0 10px; color: #0a1328; font-size: 15px; font-weight: 900; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 11px; }
+      th { padding: 11px 9px; background: #0a1328; color: #fff; text-align: right; font-weight: 800; }
+      th:first-child { width: 40%; }
+      th:nth-child(2) { width: 12%; }
+      th:nth-child(3) { width: 18%; }
+      th:nth-child(4) { width: 12%; }
+      th:last-child { width: 18%; }
+      td { padding: 12px 9px; border-bottom: 1px solid #e3e8f0; vertical-align: middle; }
+      tr:last-child td { border-bottom: 2px solid #b8c4d5; }
+      .item-name { font-weight: 800; }
+      .item-number { display: inline-flex; align-items: center; justify-content: center; width: 21px; height: 21px; margin-left: 8px; border-radius: 50%; background: #eaf1ff; color: #0d47d9; font-size: 10px; }
+      .amount { font-weight: 800; white-space: nowrap; }
+      .summary { width: min(100%, 260px); margin-top: 18px; margin-right: auto; padding: 15px 17px; border: 1px solid #dce3ed; border-radius: 12px; background: #f7f9fc; }
+      .summary-row { display: flex; justify-content: space-between; gap: 20px; padding: 5px 0; color: #65738c; font-size: 11px; }
+      .summary-total { margin-top: 8px; padding-top: 10px; border-top: 2px solid #0d47d9; color: #0a1328; font-size: 15px; font-weight: 900; }
+      .notes { margin-top: 24px; padding: 13px 15px; border-right: 4px solid #00a3ff; border-radius: 8px; background: #f2f8ff; color: #40516c; font-size: 11px; line-height: 1.9; white-space: pre-wrap; }
+      .footer { margin-top: 35px; padding-top: 14px; border-top: 1px solid #e3e8f0; color: #8a96a9; font-size: 10px; text-align: center; }
+      @media (max-width: 700px) {
+        body { background: #fff; }
+        .page { width: 100%; min-height: auto; margin: 0; padding: 20px 16px; box-shadow: none; }
+        .header { gap: 12px; padding-bottom: 18px; }
+        .brand, .document-title { font-size: 19px; }
+        .meta { grid-template-columns: repeat(2, 1fr); margin: 18px 0; }
+        .meta-card { min-height: 64px; padding: 10px; }
+        table { font-size: 10px; }
+        th, td { padding: 9px 5px; }
+        .item-number { width: 18px; height: 18px; margin-left: 4px; }
+        .summary { width: 100%; }
+      }
+      @media print {
+        body { background: #fff; }
+        .page { width: auto; min-height: auto; margin: 0; padding: 0; box-shadow: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <header class="header">
+        <div>
+          <div class="brand">ترصيد</div>
+          <div class="brand-subtitle">نظام الكاشير والمحاسبة</div>
+        </div>
+        <div>
+          <div class="document-title">أمر شراء</div>
+          <div class="document-number">${escapeHtml(order.orderNumber)}</div>
+        </div>
+      </header>
+      <section class="meta" aria-label="بيانات أمر الشراء">
+        <div class="meta-card"><div class="meta-label">المورد</div><div class="meta-value">${escapeHtml(order.supplierName)}</div></div>
+        <div class="meta-card"><div class="meta-label">موقع التسليم</div><div class="meta-value">${escapeHtml(order.warehouseName || '-')}</div></div>
+        <div class="meta-card"><div class="meta-label">تاريخ الإصدار</div><div class="meta-value">${escapeHtml(formatDocumentDate(order.issueDate))}</div></div>
+        <div class="meta-card"><div class="meta-label">التسليم المتوقع</div><div class="meta-value">${escapeHtml(formatDocumentDate(order.expectedDate))}</div></div>
+        <div class="meta-card"><div class="meta-label">حالة الأمر</div><div class="meta-value"><span class="status">${escapeHtml(statusLabel)}</span></div></div>
+      </section>
+      <h2 class="section-title">تفاصيل الأصناف</h2>
+      <table>
+        <thead><tr><th>الصنف / الوصف</th><th>الكمية</th><th>سعر الوحدة</th><th>الضريبة</th><th>الإجمالي</th></tr></thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+      <section class="summary" aria-label="ملخص المبالغ">
+        <div class="summary-row"><span>المجموع الفرعي</span><strong>${escapeHtml(formatCurrencyValue(order.subtotal))}</strong></div>
+        <div class="summary-row"><span>ضريبة القيمة المضافة</span><strong>${escapeHtml(formatCurrencyValue(order.vat))}</strong></div>
+        <div class="summary-row summary-total"><span>الإجمالي الكلي</span><strong>${escapeHtml(formatCurrencyValue(order.total))}</strong></div>
+      </section>
+      ${order.notes ? `<div class="notes"><strong>ملاحظات المورد</strong><br />${escapeHtml(order.notes)}</div>` : ''}
+      <footer class="footer">هذا المستند صادر من نظام ترصيد — يرجى مراجعة الأصناف والكميات عند الاستلام.</footer>
+    </main>
+  </body>
+</html>`;
+}
+
 export default function PurchaseOrders() {
   const { currentUser } = useStore();
   const { toast } = useToast();
@@ -142,6 +304,8 @@ export default function PurchaseOrders() {
   const [filter, setFilter] = useState('all');
 
   const [viewingOrder, setViewingOrder] = useState<PurchaseOrder | null>(null);
+  const [printingOrderId, setPrintingOrderId] = useState<number | null>(null);
+  const [sharingOrderId, setSharingOrderId] = useState<number | null>(null);
 
   const [receiveOrder, setReceiveOrder] = useState<PurchaseOrder | null>(null);
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
@@ -396,10 +560,101 @@ export default function PurchaseOrders() {
   }, [filter, purchaseOrdersCrud.data]);
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('ar-SA', {
-      style: 'currency',
-      currency: 'SAR',
-    }).format(amount);
+    return formatCurrencyValue(amount);
+  };
+
+  const printOrder = async (order: PurchaseOrder) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast({
+        title: 'تعذر فتح مستند الطباعة',
+        description: 'اسمح بالنوافذ المنبثقة لهذا الموقع ثم حاول مرة أخرى.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setPrintingOrderId(order.id);
+    printWindow.document.write('<!doctype html><html lang="ar" dir="rtl"><body style="font-family:Tahoma,Arial,sans-serif;padding:32px">جارٍ تجهيز مستند أمر الشراء...</body></html>');
+    printWindow.document.close();
+    try {
+      const response = await fetch(`/api/data/purchaseOrders/${order.id}/print`, {
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.document) {
+        throw new Error(payload.error || 'تعذر تجهيز مستند الطباعة');
+      }
+      printWindow.document.open();
+      printWindow.document.write(buildPurchaseOrderPrintHtml(payload.document as PublicPurchaseOrderDocument));
+      printWindow.document.close();
+      window.setTimeout(() => {
+        printWindow.focus();
+        printWindow.print();
+      }, 250);
+    } catch (error) {
+      printWindow.close();
+      toast({
+        title: 'تعذر تجهيز المستند',
+        description: error instanceof Error ? error.message : 'حاول مرة أخرى.',
+        variant: 'destructive',
+      });
+    } finally {
+      setPrintingOrderId(null);
+    }
+  };
+
+  const shareOrder = async (order: PurchaseOrder) => {
+    setSharingOrderId(order.id);
+    try {
+      const response = await fetch(`/api/data/purchaseOrders/${order.id}/print`, {
+        credentials: 'include',
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.document) {
+        throw new Error(payload.error || 'تعذر تجهيز بيانات المشاركة');
+      }
+      const document = payload.document as PublicPurchaseOrderDocument;
+      const itemSummary = document.items
+        .map((item) => `- ${itemDisplayName(item)}: ${Number(item.quantity) || 0}`)
+        .join('\n');
+      const text = [
+        `أمر شراء ${document.orderNumber}`,
+        `المورد: ${document.supplierName}`,
+        `موقع التسليم: ${document.warehouseName || '-'}`,
+        `تاريخ الإصدار: ${formatDocumentDate(document.issueDate)}`,
+        `الحالة: ${statusLabels[document.status] || document.status}`,
+        '',
+        'الأصناف:',
+        itemSummary,
+        '',
+        `الإجمالي الكلي: ${formatCurrencyValue(document.total)}`,
+      ].join('\n');
+      const shareCapableNavigator = navigator as Navigator & {
+        share?: (data: { title: string; text: string }) => Promise<void>;
+      };
+      if (shareCapableNavigator.share) {
+        await shareCapableNavigator.share({
+          title: `أمر شراء ${document.orderNumber}`,
+          text,
+        });
+        toast({ title: 'تم فتح خيارات المشاركة' });
+      } else if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+        toast({ title: 'تم نسخ ملخص الأمر', description: 'يمكنك لصقه وإرساله للمورد.' });
+      } else {
+        throw new Error('المشاركة غير مدعومة في هذا المتصفح.');
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      toast({
+        title: 'تعذرت مشاركة الأمر',
+        description: error instanceof Error ? error.message : 'حاول مرة أخرى.',
+        variant: 'destructive',
+      });
+    } finally {
+      setSharingOrderId(null);
+    }
   };
 
   return (
@@ -923,6 +1178,30 @@ export default function PurchaseOrders() {
           </DialogHeader>
           {viewingOrder && (
             <div className="space-y-6 py-2">
+               <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 sm:flex-row sm:justify-end">
+                 <Button
+                   type="button"
+                   variant="outline"
+                   className="w-full gap-2 border-indigo-200 text-indigo-700 hover:bg-indigo-50 sm:w-auto"
+                   onClick={() => void printOrder(viewingOrder)}
+                   disabled={printingOrderId === viewingOrder.id}
+                   data-testid={`po-btn-print-${viewingOrder.id}`}
+                 >
+                   {printingOrderId === viewingOrder.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+                   {printingOrderId === viewingOrder.id ? 'جارٍ تجهيز المستند...' : 'طباعة / حفظ PDF'}
+                 </Button>
+                 <Button
+                   type="button"
+                   variant="outline"
+                   className="w-full gap-2 sm:w-auto"
+                   onClick={() => void shareOrder(viewingOrder)}
+                   disabled={sharingOrderId === viewingOrder.id}
+                   data-testid={`po-btn-share-${viewingOrder.id}`}
+                 >
+                   {sharingOrderId === viewingOrder.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Share2 className="h-4 w-4" />}
+                   {sharingOrderId === viewingOrder.id ? 'جارٍ التحضير...' : 'مشاركة مع المورد'}
+                 </Button>
+               </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-slate-50 p-5 rounded-2xl border border-slate-100 shadow-sm">
                 <div>
                   <div className="text-xs text-slate-500 mb-1">المورد</div>
@@ -990,18 +1269,18 @@ export default function PurchaseOrders() {
                         {viewingOrder.items.map((item, i) => (
                           <TableRow key={i}>
                             <TableCell className="font-medium text-slate-900">
-                              {item.productName}
+                              {itemDisplayName(item)}
                             </TableCell>
-                            <TableCell>{formatCurrency(item.unitCost)}</TableCell>
-                            <TableCell>{item.quantity}</TableCell>
+                            <TableCell>{formatCurrency(itemDisplayUnitCost(item))}</TableCell>
+                            <TableCell>{Number(item.quantity) || 0}</TableCell>
                             <TableCell className="text-emerald-600 font-bold">
-                              {item.receivedQuantity}
+                              {Number(item.receivedQuantity) || 0}
                             </TableCell>
                             <TableCell className="text-rose-500 font-bold">
-                              {Math.max(0, item.quantity - item.receivedQuantity)}
+                              {Math.max(0, (Number(item.quantity) || 0) - (Number(item.receivedQuantity) || 0))}
                             </TableCell>
                             <TableCell className="font-bold">
-                              {formatCurrency(item.total)}
+                              {formatCurrency(itemDisplayTotal(item))}
                             </TableCell>
                           </TableRow>
                         ))}

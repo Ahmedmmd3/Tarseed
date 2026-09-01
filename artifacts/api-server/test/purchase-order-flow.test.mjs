@@ -144,6 +144,55 @@ test("يرقم أوامر الشراء ويحسب أصنافها وإجمالي�
   assert.equal(first.payload.record.items[0].receivedQuantity, 0);
 });
 
+test("يعيد مستند الطباعة حقول المورد فقط دون بيانات الدفع والاستلام الداخلية", async () => {
+  const scenario = await fixture("طباعة");
+  const created = await request("/data/purchaseOrders", {
+    method: "POST",
+    cookie: scenario.account.cookie,
+    body: orderBody(scenario, { status: "sent", notes: "التسليم في الموقع المحدد" }),
+  });
+  assert.equal(created.response.status, 201, JSON.stringify(created.payload));
+
+  const printed = await request(`/data/purchaseOrders/${created.payload.record.id}/print`, {
+    cookie: scenario.account.cookie,
+  });
+  assert.equal(printed.response.status, 200, JSON.stringify(printed.payload));
+  assert.deepEqual(
+    Object.keys(printed.payload.document).sort(),
+    [
+      "expectedDate",
+      "issueDate",
+      "items",
+      "notes",
+      "orderNumber",
+      "status",
+      "subtotal",
+      "supplierName",
+      "total",
+      "vat",
+      "warehouseName",
+    ].sort(),
+  );
+  assert.deepEqual(
+    Object.keys(printed.payload.document.items[0]).sort(),
+    [
+      "lineNet",
+      "productName",
+      "quantity",
+      "total",
+      "unitCost",
+      "vatAmount",
+      "vatRate",
+    ].sort(),
+  );
+  assert.equal(printed.payload.document.supplierName, scenario.supplier.name);
+  assert.equal(printed.payload.document.warehouseName, scenario.warehouses[0].name);
+  assert.equal(printed.payload.document.items[0].productName, scenario.product.name);
+  assert.equal(printed.payload.document.total, 57.5);
+  assert.equal(JSON.stringify(printed.payload).includes("paymentMethod"), false);
+  assert.equal(JSON.stringify(printed.payload).includes("receivedQuantity"), false);
+});
+
 test("يسجل الاستلام الجزئي والكامل ذرياً ويعيد الطلب نفسه بلا تكرار", async () => {
   const scenario = await fixture("استلام");
   const created = await request("/data/purchaseOrders", {

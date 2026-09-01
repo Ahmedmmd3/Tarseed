@@ -645,6 +645,70 @@ router.get("/data/:table", requireAuth, requireSubscriptionAccess, async (reques
   response.json({ records: data });
 });
 
+router.get("/data/purchaseOrders/:id/print", requireAuth, requireSubscriptionAccess, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const id = Number(request.params.id);
+  if (!hasTableAccess(auth, "purchaseOrders")) {
+    response.status(403).json({ error: "ليس لديك صلاحية لهذه الوحدة." });
+    return;
+  }
+  if (!Number.isInteger(id) || id <= 0) {
+    response.status(400).json({ error: "معرّف أمر الشراء غير صالح." });
+    return;
+  }
+
+  const [record] = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, id),
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    eq(erpRecordsTable.tableName, "purchaseOrders"),
+  )).limit(1);
+  if (!record || !isLocationAllowed(auth, "purchaseOrders", record.data, record.id)) {
+    response.status(404).json({ error: "أمر الشراء غير متاح." });
+    return;
+  }
+
+  const data = record.data as Record<string, unknown>;
+  const warehouseId = Number(data.warehouseId);
+  let warehouseName = String(data.warehouseName ?? "");
+  if (!warehouseName && Number.isInteger(warehouseId) && warehouseId > 0) {
+    const [warehouse] = await db.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, warehouseId),
+      eq(erpRecordsTable.organizationId, auth.organizationId),
+      eq(erpRecordsTable.tableName, "warehouses"),
+    )).limit(1);
+    warehouseName = warehouse ? String(warehouse.data.name ?? "") : "";
+  }
+  const items = Array.isArray(data.items)
+    ? data.items
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+      .map((item) => ({
+        productName: String(item.productName ?? item.name ?? ""),
+        quantity: Number(item.quantity) || 0,
+        unitCost: Number(item.unitCost ?? item.unitCostExVat) || 0,
+        vatRate: Number(item.vatRate) || 0,
+        lineNet: Number(item.lineNet) || 0,
+        vatAmount: Number(item.vatAmount) || 0,
+        total: Number(item.total ?? item.lineGross) || 0,
+      }))
+    : [];
+
+  response.json({
+    document: {
+      orderNumber: String(data.orderNumber ?? ""),
+      supplierName: String(data.supplierName ?? ""),
+      warehouseName,
+      issueDate: String(data.issueDate ?? data.date ?? ""),
+      expectedDate: data.expectedDate ? String(data.expectedDate) : undefined,
+      status: String(data.status ?? "draft"),
+      items,
+      subtotal: Number(data.subtotal) || 0,
+      vat: Number(data.vat ?? data.tax) || 0,
+      total: Number(data.total) || 0,
+      notes: data.notes ? String(data.notes) : "",
+    },
+  });
+});
+
 router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
   const access = requireTableAccess(request, response);
   if (!access) return;
