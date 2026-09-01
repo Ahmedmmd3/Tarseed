@@ -1,4 +1,4 @@
-import { useState, useMemo, FormEvent } from 'react';
+import { useState, useMemo, FormEvent, useEffect } from 'react';
 import {
   ShoppingCart,
   ChevronRight,
@@ -19,6 +19,7 @@ import {
   Clock3,
   CheckCircle2,
   BarChart3,
+  AlertTriangle,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
@@ -120,6 +121,14 @@ type PurchaseOrderShare = {
   status: 'pending' | 'confirmed' | 'rejected';
   expiresAt: string;
   createdAt: string;
+};
+
+type ExpiringPurchaseOrderShare = {
+  purchaseOrderId: number;
+  orderNumber: string;
+  supplierName: string;
+  expiresAt: string;
+  hoursRemaining: number;
 };
 
 const statusColors: Record<string, string> = {
@@ -358,6 +367,7 @@ export default function PurchaseOrders() {
   const [shareInfo, setShareInfo] = useState<PurchaseOrderShare | null>(null);
   const [shareLoading, setShareLoading] = useState(false);
   const [revokingShare, setRevokingShare] = useState(false);
+  const [expiringShareAlerts, setExpiringShareAlerts] = useState<ExpiringPurchaseOrderShare[]>([]);
 
   const [receiveOrder, setReceiveOrder] = useState<PurchaseOrder | null>(null);
   const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
@@ -368,6 +378,28 @@ export default function PurchaseOrders() {
 
   const [form, setForm] = useState(defaultForm());
   const [items, setItems] = useState<PurchaseOrderItem[]>([defaultItem()]);
+
+  const loadExpiringShareAlerts = async () => {
+    if (!currentUser) {
+      setExpiringShareAlerts([]);
+      return;
+    }
+    try {
+      const response = await fetch('/api/data/purchaseOrderShares/expiring', {
+        credentials: 'include',
+        headers: { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) },
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || 'تعذر تحميل تنبيهات الروابط');
+      setExpiringShareAlerts(Array.isArray(payload.alerts) ? payload.alerts : []);
+    } catch {
+      setExpiringShareAlerts([]);
+    }
+  };
+
+  useEffect(() => {
+    void loadExpiringShareAlerts();
+  }, [currentUser]);
 
   const supplierDecisionSummary = useMemo(() => {
     const summary = { confirmed: 0, rejected: 0, pending: 0, recorded: 0 };
@@ -704,9 +736,17 @@ export default function PurchaseOrders() {
     }
   };
 
-  const createShareLink = async (order: PurchaseOrder, openShareSheet = true) => {
+  const createShareLink = async (
+    order: Pick<PurchaseOrder, 'id' | 'orderNumber'>,
+    options: { openShareSheet?: boolean; confirmRotation?: boolean; updateDetails?: boolean } = {},
+  ) => {
     if (!currentUser) return;
-    if (shareInfo && !confirm('سيؤدي تدوير الرابط إلى إلغاء الرابط الحالي فوراً. هل تريد المتابعة؟')) return;
+    const {
+      openShareSheet = true,
+      confirmRotation = Boolean(shareInfo),
+      updateDetails = true,
+    } = options;
+    if (confirmRotation && !confirm('سيؤدي تدوير الرابط إلى إلغاء الرابط الحالي فوراً. هل تريد المتابعة؟')) return;
     setSharingOrderId(order.id);
     let failureStage: 'create_link' | 'browser_share' | 'copy_link' = 'create_link';
     try {
@@ -722,7 +762,10 @@ export default function PurchaseOrders() {
       if (!response.ok || !payload.share?.url) {
         throw new Error(payload.error || 'تعذر إنشاء رابط المشاركة');
       }
-      setShareInfo(payload.share as PurchaseOrderShare);
+      if (updateDetails || viewingOrder?.id === order.id) {
+        setShareInfo(payload.share as PurchaseOrderShare);
+      }
+      await loadExpiringShareAlerts();
       if (openShareSheet) {
         const shareCapableNavigator = navigator as Navigator & {
           share?: (data: { title: string; text: string; url: string }) => Promise<void>;
@@ -761,6 +804,13 @@ export default function PurchaseOrders() {
 
   const shareOrder = async (order: PurchaseOrder) => {
     await createShareLink(order);
+  };
+
+  const rotateShareFromAlert = async (alert: ExpiringPurchaseOrderShare) => {
+    await createShareLink(
+      { id: alert.purchaseOrderId, orderNumber: alert.orderNumber },
+      { openShareSheet: false, confirmRotation: true, updateDetails: false },
+    );
   };
 
   const copyShareLink = async () => {
@@ -903,6 +953,60 @@ export default function PurchaseOrders() {
         >
           {purchaseOrdersCrud.error}
         </div>
+      )}
+      {expiringShareAlerts.length > 0 && (
+        <section
+          className="rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm"
+          role="alert"
+          data-testid="po-share-expiry-alert"
+          dir="rtl"
+        >
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-xl bg-amber-100 p-2 text-amber-700">
+              <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="font-black text-amber-950">روابط موردين ستنتهي قريباً</h2>
+              <p className="mt-1 text-sm text-amber-800">
+                جدّد الرابط قبل انتهاء صلاحيته حتى لا يتعذر على المورد اتخاذ القرار.
+              </p>
+              <div className="mt-3 space-y-2">
+                {expiringShareAlerts.map((alert) => (
+                  <div
+                    key={alert.purchaseOrderId}
+                    className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-white/80 p-3 sm:flex-row sm:items-center sm:justify-between"
+                    data-testid={`po-share-expiry-item-${alert.purchaseOrderId}`}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-900">
+                        أمر شراء {alert.orderNumber}
+                      </div>
+                      <div className="text-sm text-slate-600">
+                        {alert.supplierName} · ينتهي خلال {alert.hoursRemaining} ساعة
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {formatDocumentDateTime(alert.expiresAt)}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="shrink-0 gap-2 bg-amber-600 text-white hover:bg-amber-700"
+                      onClick={() => void rotateShareFromAlert(alert)}
+                      disabled={sharingOrderId === alert.purchaseOrderId}
+                      data-testid={`po-btn-rotate-alert-${alert.purchaseOrderId}`}
+                    >
+                      {sharingOrderId === alert.purchaseOrderId
+                        ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                        : <RefreshCw className="h-4 w-4" />}
+                      تدوير الرابط
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
       )}
       {purchaseOrdersCrud.loading ? (
         <div className="flex h-32 items-center justify-center rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -1426,7 +1530,7 @@ export default function PurchaseOrders() {
                         type="button"
                         variant={shareInfo ? 'outline' : 'default'}
                         className="gap-2"
-                        onClick={() => void createShareLink(viewingOrder, false)}
+                        onClick={() => void createShareLink(viewingOrder, { openShareSheet: false })}
                         disabled={shareLoading || sharingOrderId === viewingOrder.id || viewingOrder.status === 'cancelled' || viewingOrder.status === 'received' || viewingOrder.status === 'partial'}
                       >
                         {sharingOrderId === viewingOrder.id ? <LoaderCircle className="h-4 w-4 animate-spin" /> : shareInfo ? <RefreshCw className="h-4 w-4" /> : <Link2 className="h-4 w-4" />}

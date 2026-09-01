@@ -29,5 +29,6 @@ export const purchaseOrderSharesTable = pgTable(
     uniqueIndex("purchase_order_shares_token_hash_unique").on(table.tokenHash),
     index("purchase_order_shares_order_idx").on(table.organizationId, table.purchaseOrderId),
     index("purchase_order_shares_expiry_idx").on(table.expiresAt),
+    index("purchase_order_shares_org_expiry_idx").on(table.organizationId, table.expiresAt),
   ],
 );

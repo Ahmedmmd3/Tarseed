@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { eq } from "drizzle-orm";
+import { db, purchaseOrderSharesTable } from "@workspace/db";
 
 const origin = process.env.PURCHASE_ORDER_TEST_ORIGIN ?? "http://127.0.0.1:80";
 const generations = new Map();
@@ -217,6 +219,23 @@ test("ينشئ رابط مورد مؤقتاً ويعرض مستنداً منقّ
   assert.match(createdShare.payload.share.url, /\/purchase-order-share\/[A-Za-z0-9_-]{40,64}$/);
   assert.equal(createdShare.payload.share.status, "pending");
   assert.ok(new Date(createdShare.payload.share.expiresAt) > new Date());
+
+  await db.update(purchaseOrderSharesTable)
+    .set({ expiresAt: new Date(Date.now() + 60 * 60 * 1000) })
+    .where(eq(purchaseOrderSharesTable.id, createdShare.payload.share.id));
+  const expiringAlerts = await request("/data/purchaseOrderShares/expiring", { cookie: scenario.account.cookie });
+  assert.equal(expiringAlerts.response.status, 200, JSON.stringify(expiringAlerts.payload));
+  assert.deepEqual(Object.keys(expiringAlerts.payload.alerts[0]).sort(), [
+    "expiresAt",
+    "hoursRemaining",
+    "orderNumber",
+    "purchaseOrderId",
+    "supplierName",
+  ].sort());
+  assert.equal(expiringAlerts.payload.alerts[0].purchaseOrderId, orderId);
+  assert.equal(JSON.stringify(expiringAlerts.payload).includes("token"), false);
+  assert.equal(JSON.stringify(expiringAlerts.payload).includes("url"), false);
+  assert.equal((await request("/data/purchaseOrderShares/expiring")).response.status, 401);
 
   const token = createdShare.payload.share.url.split("/").pop();
   const publicDocument = await request(`/purchase-order-shares/${token}`, { headers: {} });
