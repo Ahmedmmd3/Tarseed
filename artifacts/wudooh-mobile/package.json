@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "expo-camera": "~17.0.10",
+    "expo-notifications": "~0.32.17",
     "expo-secure-store": "~15.0.8"
   }
 }

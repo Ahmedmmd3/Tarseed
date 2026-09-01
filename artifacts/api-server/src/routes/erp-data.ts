@@ -814,6 +814,52 @@ router.get("/data/purchaseOrderShares/expiring", requireAuth, requireSubscriptio
     if (status !== "draft" && status !== "sent") return [];
     return [{
       purchaseOrderId: order.id,
+      shareId: share.id,
+      orderNumber: String(order.data.orderNumber ?? ""),
+      supplierName: String(order.data.supplierName ?? ""),
+      expiresAt: share.expiresAt.toISOString(),
+      hoursRemaining: Math.max(1, Math.ceil((share.expiresAt.getTime() - now.getTime()) / (60 * 60 * 1000))),
+    }];
+  });
+
+  response.json({ alerts });
+});
+
+router.get("/data/purchaseOrderShares/notification-schedules", requireAuth, requireSubscriptionAccess, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (!hasTableAccess(auth, "purchaseOrders")) {
+    response.status(403).json({ error: "ليس لديك صلاحية لهذه الوحدة." });
+    return;
+  }
+
+  const now = new Date();
+  const shares = await db.select().from(purchaseOrderSharesTable).where(and(
+    eq(purchaseOrderSharesTable.organizationId, auth.organizationId),
+    isNull(purchaseOrderSharesTable.revokedAt),
+    eq(purchaseOrderSharesTable.decisionStatus, "pending"),
+    gt(purchaseOrderSharesTable.expiresAt, now),
+  )).orderBy(asc(purchaseOrderSharesTable.expiresAt)).limit(200);
+
+  if (shares.length === 0) {
+    response.json({ alerts: [] });
+    return;
+  }
+
+  const orderIds = shares.map((share) => share.purchaseOrderId);
+  const orders = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    eq(erpRecordsTable.tableName, "purchaseOrders"),
+    inArray(erpRecordsTable.id, orderIds),
+  ));
+  const ordersById = new Map(orders.map((order) => [order.id, order]));
+  const alerts = shares.flatMap((share) => {
+    const order = ordersById.get(share.purchaseOrderId);
+    if (!order || !isLocationAllowed(auth, "purchaseOrders", order.data, order.id)) return [];
+    const status = String(order.data.status ?? "");
+    if (status !== "draft" && status !== "sent") return [];
+    return [{
+      purchaseOrderId: order.id,
+      shareId: share.id,
       orderNumber: String(order.data.orderNumber ?? ""),
       supplierName: String(order.data.supplierName ?? ""),
       expiresAt: share.expiresAt.toISOString(),

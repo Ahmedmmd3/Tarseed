@@ -109,6 +109,7 @@ function PurchaseOrderShareExpiryAlerts({
 }: {
   alerts: Array<{
     purchaseOrderId: number;
+    shareId: number;
     orderNumber: string;
     supplierName: string;
     expiresAt: string;

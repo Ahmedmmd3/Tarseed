@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
-import { AppState } from 'react-native';
+import * as Notifications from 'expo-notifications';
+import { AppState, Platform } from 'react-native';
 import {
   createContext,
   useCallback,
@@ -43,6 +44,7 @@ export type Invoice = { id: number | string; number?: string; customerName?: str
 export type Expense = { id: number | string; description?: string; amount?: number; date?: string; category?: string; vendor?: string };
 export type ExpiringPurchaseOrderShare = {
   purchaseOrderId: number;
+  shareId: number;
   orderNumber: string;
   supplierName: string;
   expiresAt: string;
@@ -81,6 +83,7 @@ type AppContextValue = Snapshot & {
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   rotatePurchaseOrderShare: (purchaseOrderId: number) => Promise<void>;
+  revokePurchaseOrderShare: (purchaseOrderId: number) => Promise<void>;
   checkout: (payload: Omit<CheckoutPayload, 'clientOperationId'>) => Promise<{ queued: boolean; invoice?: Invoice }>;
   addExpense: (expense: Omit<Expense, 'id'>) => Promise<{ queued: boolean }>;
   retrySync: () => Promise<void>;
@@ -100,6 +103,194 @@ const emptySnapshot: Snapshot = {
 };
 const cacheKey = (organizationId: number) => `tarseed-mobile-cache-v1:${organizationId}`;
 const queueKey = (organizationId: number) => `tarseed-mobile-queue-v1:${organizationId}`;
+const shareNotificationKey = (organizationId: number) => `tarseed-mobile-share-notifications-v1:${organizationId}`;
+const shareNotificationType = 'purchase-order-share-expiry';
+const shareNotificationLeadTimeMs = 24 * 60 * 60 * 1000;
+const shareNotificationChannelId = 'supplier-share-expiry';
+const shareNotificationSyncs = new Map<number, Promise<void>>();
+
+type PurchaseOrderShareNotification = {
+  purchaseOrderId: number;
+  shareId: number;
+  notificationId: string;
+};
+
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+function apiErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== 'object' || !('status' in error)) return undefined;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' ? status : undefined;
+}
+
+async function readShareNotificationRecords(organizationId: number): Promise<PurchaseOrderShareNotification[]> {
+  if (Platform.OS === 'web') return [];
+  try {
+    const stored = await AsyncStorage.getItem(shareNotificationKey(organizationId));
+    if (!stored) return [];
+    const parsed = JSON.parse(stored) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((record): record is PurchaseOrderShareNotification => (
+      Boolean(record)
+      && typeof record === 'object'
+      && Number.isInteger((record as PurchaseOrderShareNotification).purchaseOrderId)
+      && Number.isInteger((record as PurchaseOrderShareNotification).shareId)
+      && typeof (record as PurchaseOrderShareNotification).notificationId === 'string'
+    ));
+  } catch {
+    return [];
+  }
+}
+
+async function writeShareNotificationRecords(organizationId: number, records: PurchaseOrderShareNotification[]): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    await AsyncStorage.setItem(shareNotificationKey(organizationId), JSON.stringify(records));
+  } catch {
+    // A failed local cache write must not interrupt a successful API refresh.
+  }
+}
+
+async function cancelShareNotifications(records: PurchaseOrderShareNotification[]): Promise<void> {
+  if (Platform.OS === 'web') return;
+  await Promise.all(records.map(async (record) => {
+    try {
+      await Notifications.cancelScheduledNotificationAsync(record.notificationId);
+    } catch {
+      // The notification may already have fired or been removed by the OS.
+    }
+  }));
+}
+
+async function clearShareNotifications(organizationId: number): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const records = await readShareNotificationRecords(organizationId);
+  await cancelShareNotifications(records);
+  await writeShareNotificationRecords(organizationId, []);
+}
+
+async function cancelPurchaseOrderShareNotifications(organizationId: number, purchaseOrderId: number): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const records = await readShareNotificationRecords(organizationId);
+  const matching = records.filter((record) => record.purchaseOrderId === purchaseOrderId);
+  await cancelShareNotifications(matching);
+  await writeShareNotificationRecords(
+    organizationId,
+    records.filter((record) => record.purchaseOrderId !== purchaseOrderId),
+  );
+}
+
+async function syncShareNotificationsNow(
+  organizationId: number,
+  alerts: ExpiringPurchaseOrderShare[],
+  isSessionActive: () => boolean,
+): Promise<void> {
+  if (Platform.OS === 'web') return;
+  if (!isSessionActive()) return;
+
+  const stored = await readShareNotificationRecords(organizationId);
+  if (!isSessionActive()) return;
+  const byPurchaseOrder = new Map(alerts.map((alert) => [alert.purchaseOrderId, alert]));
+  const obsolete = stored.filter((record) => {
+    const alert = byPurchaseOrder.get(record.purchaseOrderId);
+    return !alert || alert.shareId !== record.shareId;
+  });
+  await cancelShareNotifications(obsolete);
+  if (!isSessionActive()) return;
+  let next = stored.filter((record) => !obsolete.includes(record));
+
+  if (alerts.length === 0) {
+    await writeShareNotificationRecords(organizationId, []);
+    return;
+  }
+
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync(shareNotificationChannelId, {
+      name: 'تنبيهات روابط الموردين',
+      importance: Notifications.AndroidImportance.DEFAULT,
+    });
+  }
+  let permission = await Notifications.getPermissionsAsync();
+  if (!permission.granted && permission.canAskAgain) {
+    permission = await Notifications.requestPermissionsAsync();
+  }
+  if (!permission.granted) {
+    await cancelShareNotifications(next);
+    await writeShareNotificationRecords(organizationId, []);
+    return;
+  }
+
+  const now = Date.now();
+  for (const alert of alerts) {
+    if (!isSessionActive()) return;
+    if (next.some((record) => record.purchaseOrderId === alert.purchaseOrderId && record.shareId === alert.shareId)) {
+      continue;
+    }
+    const expiresAt = Date.parse(alert.expiresAt);
+    if (!Number.isFinite(expiresAt)) continue;
+    const scheduleAt = Math.max(now + 60 * 1000, expiresAt - shareNotificationLeadTimeMs);
+    if (scheduleAt >= expiresAt) continue;
+
+    try {
+      const notificationId = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'رابط المورد ينتهي قريباً',
+          body: `رابط المورد لأمر شراء ${alert.orderNumber} ينتهي خلال أقل من 24 ساعة.`,
+          data: {
+            type: shareNotificationType,
+            organizationId,
+            purchaseOrderId: alert.purchaseOrderId,
+            shareId: alert.shareId,
+          },
+          sound: false,
+          ...(Platform.OS === 'android' ? { channelId: shareNotificationChannelId } : {}),
+        },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: new Date(scheduleAt),
+        },
+      });
+      next = [
+        ...next,
+        {
+          purchaseOrderId: alert.purchaseOrderId,
+          shareId: alert.shareId,
+          notificationId,
+        },
+      ];
+    } catch {
+      // The alert remains visible in the app even if the OS rejects scheduling.
+    }
+  }
+  if (!isSessionActive()) return;
+  await writeShareNotificationRecords(organizationId, next);
+}
+
+async function syncShareNotifications(
+  organizationId: number,
+  alerts: ExpiringPurchaseOrderShare[],
+  isSessionActive: () => boolean,
+): Promise<void> {
+  const previous = shareNotificationSyncs.get(organizationId) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(() => syncShareNotificationsNow(organizationId, alerts, isSessionActive));
+  shareNotificationSyncs.set(organizationId, current);
+  try {
+    await current;
+  } finally {
+    if (shareNotificationSyncs.get(organizationId) === current) shareNotificationSyncs.delete(organizationId);
+  }
+}
 
 async function readSessionToken(): Promise<string | null> {
   return await SecureStore.isAvailableAsync()
@@ -154,6 +345,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
             return null;
           })
         : Promise.resolve([]);
+      const notificationSchedulesPromise: Promise<ExpiringPurchaseOrderShare[] | null> = canReadPurchaseOrders
+        ? apiRequest<{ alerts?: ExpiringPurchaseOrderShare[] }>('/api/data/purchaseOrderShares/notification-schedules', { headers }, activeToken)
+          .then(async (payload) => {
+            const schedules = Array.isArray(payload.alerts) ? payload.alerts : [];
+            if (tokenRef.current === activeToken) {
+              await syncShareNotifications(
+                activeUser.organizationId,
+                schedules,
+                () => tokenRef.current === activeToken,
+              );
+            }
+            return schedules;
+          })
+          .catch((scheduleError: unknown) => {
+            const status = apiErrorStatus(scheduleError);
+            if (status === 401 || status === 403) void clearShareNotifications(activeUser.organizationId);
+            return null;
+          })
+        : clearShareNotifications(activeUser.organizationId).then(() => []);
       const [products, warehouses, balances, invoices, expenses, shareAlerts] = await Promise.all([
         apiRequest<{ records: Product[] }>('/api/data/products', { headers }, activeToken),
         apiRequest<{ records: Warehouse[] }>('/api/data/warehouses', { headers }, activeToken),
@@ -161,6 +371,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         apiRequest<{ records: Invoice[] }>('/api/data/invoices', { headers }, activeToken),
         apiRequest<{ records: Expense[] }>('/api/data/expenses', { headers }, activeToken),
         shareAlertsPromise,
+        notificationSchedulesPromise,
       ]);
       const next = {
         products: products.records,
@@ -169,6 +380,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         invoices: invoices.records,
         expenses: expenses.records,
       };
+      if (tokenRef.current !== activeToken) return;
       setSnapshot((current) => ({
         ...next,
         purchaseOrderShareAlerts: shareAlerts ?? current.purchaseOrderShareAlerts,
@@ -260,13 +472,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
         const session = JSON.parse(stored) as { user: User };
         const storedToken = await readSessionToken();
         if (!storedToken) {
+          await clearShareNotifications(session.user.organizationId);
           await AsyncStorage.removeItem(sessionKey);
           return;
         }
         const result = await apiRequest<{ user: User | null }>('/api/auth/me', {}, storedToken);
         if (active && result.user) await establishSession(result.user, storedToken);
-        else await AsyncStorage.removeItem(sessionKey);
-      } catch {
+        else {
+          await clearShareNotifications(session.user.organizationId);
+          await AsyncStorage.removeItem(sessionKey);
+        }
+      } catch (sessionError) {
+        const status = apiErrorStatus(sessionError);
+        if (status === 401 || status === 403) {
+          try {
+            const stored = await AsyncStorage.getItem(sessionKey);
+            const parsed = stored ? JSON.parse(stored) as { user?: User } : null;
+            if (parsed?.user?.organizationId) await clearShareNotifications(parsed.user.organizationId);
+          } catch {
+            // Keep the existing session-recovery error visible to the user.
+          }
+        }
         if (active) setError('تعذر التحقق من الجلسة. يمكنك تسجيل الدخول من جديد.');
       } finally {
         if (active) setBooting(false);
@@ -298,6 +524,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       if (tokenRef.current) await apiRequest('/api/auth/logout', { method: 'POST' }, tokenRef.current);
     } finally {
+      if (userRef.current) await clearShareNotifications(userRef.current.organizationId);
       await Promise.all([AsyncStorage.removeItem(sessionKey), removeSessionToken()]);
       userRef.current = null;
       tokenRef.current = null;
@@ -330,6 +557,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
       },
       activeToken,
     );
+    await cancelPurchaseOrderShareNotifications(activeUser.organizationId, purchaseOrderId);
+    setSnapshot((current) => ({
+      ...current,
+      purchaseOrderShareAlerts: current.purchaseOrderShareAlerts.filter((alert) => alert.purchaseOrderId !== purchaseOrderId),
+    }));
+    await loadRemote(activeUser, activeToken);
+  }, [loadRemote]);
+
+  const revokePurchaseOrderShare = useCallback(async (purchaseOrderId: number) => {
+    const activeUser = userRef.current;
+    const activeToken = tokenRef.current;
+    if (!activeUser || !activeToken) throw new Error('سجّل الدخول أولاً.');
+    if (activeUser.roleId !== 'owner' && activeUser.permissions.inventory !== true) {
+      throw new Error('ليس لديك صلاحية لإبطال روابط أوامر الشراء.');
+    }
+    await apiRequest<{ revoked: number }>(
+      `/api/data/purchaseOrders/${purchaseOrderId}/share/revoke`,
+      {
+        method: 'POST',
+        headers: { 'X-Wudooh-Data-Generation': String(activeUser.dataGeneration) },
+      },
+      activeToken,
+    );
+    await cancelPurchaseOrderShareNotifications(activeUser.organizationId, purchaseOrderId);
     setSnapshot((current) => ({
       ...current,
       purchaseOrderShareAlerts: current.purchaseOrderShareAlerts.filter((alert) => alert.purchaseOrderId !== purchaseOrderId),
@@ -404,8 +655,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AppContextValue>(() => ({
     ...snapshot, user, token, queue, booting, loading, error, purchaseOrderShareAlertsError,
-    login, logout, refresh, rotatePurchaseOrderShare, checkout, addExpense, retrySync, can,
-  }), [addExpense, booting, can, checkout, error, loading, login, logout, purchaseOrderShareAlertsError, queue, refresh, retrySync, rotatePurchaseOrderShare, snapshot, token, user]);
+    login, logout, refresh, rotatePurchaseOrderShare, revokePurchaseOrderShare, checkout, addExpense, retrySync, can,
+  }), [addExpense, booting, can, checkout, error, loading, login, logout, purchaseOrderShareAlertsError, queue, refresh, retrySync, rotatePurchaseOrderShare, revokePurchaseOrderShare, snapshot, token, user]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
