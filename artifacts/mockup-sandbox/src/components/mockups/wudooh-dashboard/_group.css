@@ -1,0 +1,65 @@
+@import url("https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap");
+
+:root {
+  --background: 216 20% 95.5%;
+  --foreground: 220 60% 9.8%;
+  --primary: 221 88.7% 45.1%;
+  --primary-foreground: 216 20% 95.5%;
+  --border: 221 20.8% 71.4%;
+  --input: 221 20.8% 71.4%;
+  --ring: 202 100% 50%;
+  --app-font-sans: "Cairo", sans-serif;
+  --font-sans: var(--app-font-sans);
+  --brand-primary: #0D47D9;
+  --brand-accent: #00A3FF;
+  --brand-dark: #0A1328;
+  --brand-muted: #A8B2C4;
+  --brand-light: #F1F3F6;
+  --color-white: #F1F3F6;
+  --color-slate-50: #F1F3F6;
+  --color-slate-100: #F1F3F6;
+  --color-slate-200: #A8B2C4;
+  --color-slate-300: #A8B2C4;
+  --color-slate-400: #A8B2C4;
+  --color-slate-500: #A8B2C4;
+  --color-slate-600: #0A1328;
+  --color-slate-700: #0A1328;
+  --color-slate-800: #0A1328;
+  --color-slate-900: #0A1328;
+  --color-slate-950: #0A1328;
+  --color-teal-50: #F1F3F6;
+  --color-teal-100: #F1F3F6;
+  --color-teal-200: #A8B2C4;
+  --color-teal-300: #00A3FF;
+  --color-teal-400: #00A3FF;
+  --color-teal-600: #0D47D9;
+  --color-teal-700: #0D47D9;
+  --color-blue-50: #F1F3F6;
+  --color-blue-600: #0D47D9;
+  --color-blue-700: #0D47D9;
+  --color-sky-50: #F1F3F6;
+  --color-sky-600: #1976F3;
+  --color-rose-50: #F1F3F6;
+  --color-rose-600: #0D47D9;
+  --color-indigo-50: #F1F3F6;
+  --color-indigo-100: #F1F3F6;
+  --color-indigo-200: #A8B2C4;
+  --color-indigo-700: #0D47D9;
+  --color-amber-50: #F1F3F6;
+  --color-amber-100: #F1F3F6;
+  --color-amber-300: #00A3FF;
+  --color-amber-700: #0D47D9;
+  --color-amber-900: #0A1328;
+  --color-emerald-100: #F1F3F6;
+  --color-emerald-700: #0D47D9;
+  --color-violet-50: #F1F3F6;
+  --color-violet-700: #0D47D9;
+  --color-indigo-700: #0D47D9;
+  --color-orange-50: #F1F3F6;
+  --color-orange-700: #0D47D9;
+  --color-rose-100: #F1F3F6;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; min-width: 320px; overflow-x: hidden; direction: rtl; }
