@@ -218,7 +218,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#0A1328] font-sans text-slate-900" dir="rtl">
+    <div className="production-shell min-h-screen bg-[#0A1328] font-sans text-slate-900" dir="rtl">
       <div className="flex min-h-screen flex-col md:flex-row">
         <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 pb-3 pt-[max(env(safe-area-inset-top),0.75rem)] md:hidden">
           <BrandLockup />
@@ -269,7 +269,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </div>
         </aside>
 
-        <main className="min-w-0 flex-1 overflow-x-hidden">
+        <main className="production-workspace min-w-0 flex-1 overflow-x-hidden">
           <div className="mx-auto max-w-[1440px] p-4 sm:p-6 lg:p-8">
             {currentUser && (
               <div className="mb-5 flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/10 px-4 py-3 text-white shadow-xl shadow-slate-950/10 backdrop-blur sm:flex-row sm:items-center sm:justify-between" data-testid="shared-account-bar">
@@ -554,9 +554,7 @@ function PhoneChangeDialog({
 function BrandLockup({ dark = false }: { dark?: boolean }) {
   return (
     <div className={`flex items-center gap-3 ${dark ? 'text-white' : 'text-[#0A1328]'}`}>
-      <div className="flex h-12 w-12 shrink-0 items-center justify-center">
-        <img src={`${import.meta.env.BASE_URL}logo-mark.png`} alt="شعار ترصيد" className="h-full w-full object-contain" />
-      </div>
+      <div className="production-brand-mark" aria-label="علامة ترصيد">ت</div>
       <div><p className="text-lg font-black leading-none">ترصيد</p><p className={`mt-1 text-[10px] font-semibold ${dark ? 'text-slate-400' : 'text-slate-500'}`}>إدارة أسهل لنمو أسرع</p></div>
     </div>
   );

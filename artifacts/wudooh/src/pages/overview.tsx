@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, FileText, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
 import { Link } from 'wouter';
 import { useStore } from '@/context/store';
 import { Button } from '@/components/ui/button';
 import { useCrud } from '@/hooks/use-crud';
+import './overview.css';
 
 type Module = { title: string; description: string; href: string; icon: LucideIcon; tone: string; permission: string; ready: boolean; id: string };
 
@@ -56,6 +57,7 @@ export default function Overview() {
     order.status === 'draft' || order.status === 'sent' || order.status === 'partial');
   const overduePurchaseOrders = pendingPurchaseOrders.filter((order: any) =>
     String(order.expectedDate ?? '') !== '' && String(order.expectedDate) < today);
+  const journalTrend = journalTrendFor(journals);
   const visibleModules = modules.filter((module) => !currentUser || currentUser.roleId === 'owner' || currentUser.permissions[module.permission] === true);
   const canUseWeeklySummary = Boolean(
     currentUser
@@ -135,7 +137,7 @@ export default function Overview() {
   };
 
   return (
-    <div className="space-y-6" data-testid="page-overview">
+    <div className="production-dashboard space-y-6" data-testid="page-overview">
       <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-br from-[#0D47D9] via-[#0A1328] to-[#0A1328] px-5 py-7 text-white shadow-2xl shadow-slate-950/20 sm:px-8 sm:py-9">
         <div className="pointer-events-none absolute -left-16 -top-20 h-64 w-64 rounded-full bg-teal-400/15 blur-3xl" />
         <div className="pointer-events-none absolute bottom-0 right-1/3 h-40 w-40 rounded-full bg-blue-400/10 blur-3xl" />
@@ -245,6 +247,31 @@ export default function Overview() {
         )}
       </section>}
 
+      <section className="overview-analytics-grid" aria-label="التحليلات والنشاط">
+        <DataPanel title="حركة القيود" subtitle="إجمالي القيود حسب تاريخ التسجيل" icon={BarChart3} testId="panel-journal-trend">
+          <div className="overview-bars" role="img" aria-label="مخطط مبسط لحركة القيود">
+            {journalTrend.map((item) => (
+              <div className="overview-bar-column" key={item.label}>
+                <div className="overview-bar-track"><span style={{ height: `${item.height}%` }} /></div>
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </DataPanel>
+        <DataPanel title="آخر النشاطات" subtitle="أحدث القيود المسجلة في السجل" icon={ReceiptText} testId="panel-recent-activity">
+          <div className="overview-activity-list">
+            {journals.slice(-4).reverse().map((journal) => (
+              <div className="overview-activity-row" key={journal.id} data-testid={`row-activity-${journal.id}`}>
+                <span className="overview-activity-icon"><FileText className="h-4 w-4" aria-hidden="true" /></span>
+                <div className="min-w-0 flex-1"><p className="truncate font-bold text-slate-800">{journal.description}</p><p className="text-xs text-slate-400">{journal.number} · {journal.date}</p></div>
+                <span className={`overview-status ${journal.status === 'posted' ? 'is-complete' : 'is-pending'}`}>{journal.status === 'posted' ? 'مرحل' : 'مسودة'}</span>
+              </div>
+            ))}
+            {journals.length === 0 && <EmptyState text="لا توجد نشاطات مسجلة" />}
+          </div>
+        </DataPanel>
+      </section>
+
       <section aria-labelledby="modules-heading">
         <div className="mb-4 flex items-end justify-between gap-4 text-white">
           <div><p className="text-xs font-bold text-teal-200">كل أعمالك في مكان واحد</p><h2 id="modules-heading" className="mt-1 text-xl font-black sm:text-2xl">الوحدات الرئيسية</h2></div>
@@ -258,7 +285,9 @@ export default function Overview() {
           <div className="space-y-1">{topExpenses.map((account) => <div key={account.id} className="flex items-center justify-between rounded-xl px-2 py-3 transition hover:bg-slate-50" data-testid={`row-expense-${account.id}`}><div><p className="text-sm font-bold text-slate-800">{account.name}</p><p className="mt-0.5 text-xs text-slate-400">{account.code}</p></div><span className="text-sm font-black text-rose-600" data-testid={`text-expense-${account.id}`}>{formatCurrency(account.balance)}</span></div>)}{topExpenses.length === 0 && <EmptyState text="لا توجد مصروفات مسجلة" />}</div>
         </DataPanel>
         <DataPanel title="مستحقات قريبة الأجل" subtitle="تابع التحصيل والدفع القادم" icon={Wallet} testId="panel-due-soon">
-          <div className="space-y-1">{pendingReceivables.map((record) => <div key={record.id} className="flex items-center justify-between rounded-xl px-2 py-3 transition hover:bg-slate-50" data-testid={`row-receivable-${record.id}`}><div><p className="text-sm font-bold text-slate-800">{record.party}</p><p className="mt-0.5 text-xs text-slate-400">تستحق في {record.dueDate}</p></div><div className="text-left"><p className={`text-sm font-black ${record.type === 'receivable' ? 'text-blue-600' : 'text-rose-600'}`}>{formatCurrency(record.amount - record.paid)}</p><p className="mt-0.5 text-xs text-slate-400">{record.type === 'receivable' ? 'تحصيل' : 'دفع'}</p></div></div>)}{pendingReceivables.length === 0 && <EmptyState text="لا توجد مستحقات معلقة" />}</div>
+          {pendingReceivables.length > 0 ? (
+            <div className="overflow-x-auto"><table className="overview-table"><thead><tr><th>الطرف</th><th>الاستحقاق</th><th>المبلغ</th></tr></thead><tbody>{pendingReceivables.map((record) => <tr key={record.id} data-testid={`row-receivable-${record.id}`}><td><strong>{record.party}</strong><small>{record.type === 'receivable' ? 'تحصيل' : 'دفع'}</small></td><td>{record.dueDate}</td><td className="overview-table-amount">{formatCurrency(record.amount - record.paid)}</td></tr>)}</tbody></table></div>
+          ) : <EmptyState text="لا توجد مستحقات معلقة" />}
         </DataPanel>
       </section>
     </div>
@@ -285,6 +314,19 @@ function DataPanel({ title, subtitle, icon: Icon, children, testId }: { title: s
 
 function EmptyState({ text }: { text: string }) {
   return <div className="py-8 text-center text-sm text-slate-400">{text}</div>;
+}
+
+function journalTrendFor(journals: Array<{ date: string }>) {
+  const byDate = journals.reduce<Record<string, number>>((counts, journal) => {
+    counts[journal.date] = (counts[journal.date] ?? 0) + 1;
+    return counts;
+  }, {});
+  const dates = Object.keys(byDate).sort().slice(-7);
+  const max = Math.max(1, ...dates.map((date) => byDate[date]));
+  return dates.map((date) => ({
+    label: date.slice(5),
+    height: Math.max(12, Math.round((byDate[date] / max) * 100)),
+  }));
 }
 
 function formatCurrency(amount: number) {
