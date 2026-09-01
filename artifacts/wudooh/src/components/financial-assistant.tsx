@@ -172,7 +172,7 @@ export function FinancialAssistant() {
         type="button"
         size="icon"
         onClick={() => setOpen(true)}
-        className="fixed bottom-6 left-6 z-40 h-14 w-14 rounded-full bg-teal-500 text-[#062344] shadow-xl shadow-teal-950/30 transition hover:bg-teal-300 focus-visible:ring-2 focus-visible:ring-teal-200"
+        className="fixed bottom-6 left-6 z-40 h-14 w-14 rounded-full bg-teal-500 text-[#0A1328] shadow-xl shadow-teal-950/30 transition hover:bg-teal-300 focus-visible:ring-2 focus-visible:ring-teal-200"
         aria-label="فتح المساعد المالي"
         data-testid="button-financial-assistant"
       >
@@ -207,7 +207,7 @@ export function FinancialAssistant() {
                 <div
                   className={`max-w-[88%] rounded-2xl px-4 py-3 text-sm leading-7 shadow-sm ${
                     message.role === 'user'
-                      ? 'rounded-br-md bg-[#062344] text-white'
+                      ? 'rounded-br-md bg-[#0A1328] text-white'
                       : 'rounded-bl-md border border-slate-200 bg-white text-slate-700'
                   }`}
                   data-testid={`assistant-message-${message.role}`}
@@ -269,7 +269,7 @@ export function FinancialAssistant() {
                 type="submit"
                 size="icon"
                 disabled={!question.trim() || isLoading}
-                className="h-10 w-10 shrink-0 rounded-xl bg-teal-500 text-[#062344] hover:bg-teal-300"
+                className="h-10 w-10 shrink-0 rounded-xl bg-teal-500 text-[#0A1328] hover:bg-teal-300"
                 aria-label="إرسال السؤال"
                 data-testid="button-send-financial-question"
               >

@@ -161,10 +161,12 @@ function sourceDate(data: Record<string, unknown>, fallback?: string): string {
 }
 
 function sourceAmount(data: Record<string, unknown>): number {
+  if (Array.isArray(data.receipts)) return asNumber(data.receivedTotal);
   return asNumber(data.total ?? data.amount ?? data.totalAmount);
 }
 
 function sourceTaxExclusiveAmount(data: Record<string, unknown>): number {
+  if (Array.isArray(data.receipts)) return asNumber(data.receivedSubtotal);
   const subtotal = asNumber(data.subtotal ?? data.netAmount);
   if (subtotal > 0) return subtotal;
   return Math.max(0, sourceAmount(data) - asNumber(data.tax ?? data.vatAmount));
@@ -232,7 +234,9 @@ function movementMap(tableName: SourceTable, data: Record<string, unknown>): Map
     const item = rawItem as Record<string, unknown>;
     const productId = Number(item.productId);
     const warehouseId = Number(item.warehouseId ?? fallbackWarehouse);
-    const quantity = Number(item.quantity);
+    const quantity = tableName === "purchaseOrders" && Array.isArray(data.receipts)
+      ? Number(item.receivedQuantity ?? 0)
+      : Number(item.quantity);
     if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(warehouseId) || warehouseId <= 0 || !Number.isFinite(quantity) || quantity <= 0) continue;
     const key = `${productId}:${warehouseId}`;
     const existing = result.get(key);
@@ -278,8 +282,8 @@ function journalLinesForSource(
   const type = sourceTypeFor(tableName);
   const account = (code: string) => accounts.find((item) => String(item.code) === code && item.status !== "inactive");
   const total = sourceAmount(data);
-  const net = asNumber(data.subtotal ?? total - asNumber(data.tax));
-  const tax = asNumber(data.tax);
+  const tax = Array.isArray(data.receipts) ? asNumber(data.receivedVat) : asNumber(data.tax);
+  const net = Array.isArray(data.receipts) ? asNumber(data.receivedSubtotal) : asNumber(data.subtotal ?? total - tax);
   const cogs = asNumber(data.cogsTotal);
   const cashOrAr = account(data.paymentMethod === "credit" || data.customerId ? "1200" : data.paymentMethod === "card" ? "1100" : "1000");
   if (total <= 0 || !cashOrAr) {
@@ -1507,7 +1511,8 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
       if (!originalJournal || originalJournal.data.status !== "posted") {
         throw new SourceCorrectionError(409, "لا يوجد قيد مرحّل صالح مرتبط بالمستند.");
       }
-      const originalLines = normalizeLines(originalJournal.data.lines);
+      const journalsToReverse = tableName === "purchaseOrders" && !correctedJournal ? baseJournals : [originalJournal];
+      const originalLines = journalsToReverse.flatMap((journal) => normalizeLines(journal.data.lines));
       const reversalData = {
         number: `REV-${String(originalJournal.data.number ?? `#${originalJournal.id}`)}`,
         date: effectiveDate,
@@ -1519,6 +1524,7 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
         sourceDocumentId: sourceId,
         adjustmentType: "reversal",
         adjustsJournalId: originalJournal.id,
+        ...(journalsToReverse.length > 1 ? { adjustsJournalIds: journalsToReverse.map((journal) => journal.id) } : {}),
         adjustmentReason: reason,
         sourceCorrectionOperationId: operationId,
         lines: originalLines.map((line, index) => ({ ...line, id: `source-reversal-${index + 1}`, debit: line.credit, credit: line.debit })),
@@ -1721,7 +1727,9 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
   const existingSources = new Set(existingJournals.map((journal) => `${journal.sourceType}:${journal.sourceId}`));
   const sources = [
     ...invoices.map((record) => ({ record, tableName: "invoices", type: "sale", label: "فاتورة بيع" })),
-    ...purchases.map((record) => ({ record, tableName: "purchaseOrders", type: "purchase", label: "أمر شراء" })),
+    ...purchases
+      .filter((record) => !Array.isArray(record.receipts) && (record.received === true || record.status === "completed"))
+      .map((record) => ({ record, tableName: "purchaseOrders", type: "purchase", label: "أمر شراء" })),
     ...expenses.map((record) => ({ record, tableName: "expenses", type: "expense", label: "مصروف" })),
   ];
   let created = 0;

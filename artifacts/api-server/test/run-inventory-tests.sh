@@ -51,4 +51,5 @@ INVENTORY_TEST_ORIGIN="$ORIGIN" \
 LOCATION_SCOPE_TEST_ORIGIN="$ORIGIN" \
 BACKUP_TEST_ORIGIN="$ORIGIN" \
 QUOTATION_TEST_ORIGIN="$ORIGIN" \
-node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs test/quotation-flow.test.mjs
+PURCHASE_ORDER_TEST_ORIGIN="$ORIGIN" \
+node --test test/inventory-concurrency.test.mjs test/location-scope-products.test.mjs test/backup-restore.test.mjs test/quotation-flow.test.mjs test/purchase-order-flow.test.mjs

@@ -171,11 +171,11 @@ function PurchaseReceiptsWorkspace() {
         <Dialog open={open} onOpenChange={(isOpen) => { setOpen(isOpen); if (!isOpen) setClientOperationId(''); }}>
           <DialogTrigger asChild>
             <Button className="gap-2 bg-teal-600 hover:bg-teal-700" data-testid="btn-create-purchase-receipt">
-              <Plus className="h-4 w-4" /> استلام مشتريات
+              <Plus className="h-4 w-4" /> استلام مباشر
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader><DialogTitle>استلام مشتريات جديد</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>استلام مباشر دون أمر شراء مسبق</DialogTitle></DialogHeader>
             <form onSubmit={submit} className="flex flex-col gap-6 py-4">
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
@@ -356,13 +356,14 @@ export default function Purchases() {
             <Truck className="h-8 w-8 text-amber-600" />
             المشتريات والموردون
           </h1>
+          <p className="mt-2 text-sm text-slate-500">لإنشاء أمر ومتابعة استلامه الجزئي استخدم <Link href="/purchase-orders" className="font-bold text-indigo-700 hover:underline">وحدة أوامر الشراء</Link>.</p>
         </div>
       </div>
       
       <Tabs defaultValue="suppliers" className="w-full">
         <TabsList className="mb-6 grid w-full grid-cols-2 md:w-[400px]">
           <TabsTrigger value="suppliers">الموردون</TabsTrigger>
-          <TabsTrigger value="orders">أوامر واستلامات الشراء</TabsTrigger>
+          <TabsTrigger value="orders">الاستلام المباشر</TabsTrigger>
         </TabsList>
         
         <TabsContent value="suppliers">

@@ -314,7 +314,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] max-w-md flex-col overflow-hidden border-slate-200 p-0" dir="rtl">
-        <div className="shrink-0 bg-[#001738] px-6 pb-6 pt-8 text-white">
+        <div className="shrink-0 bg-[#0A1328] px-6 pb-6 pt-8 text-white">
           <DialogHeader className="text-right sm:text-right">
             <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-teal-400/15 text-teal-300">
               <Building2 className="h-5 w-5" aria-hidden="true" />
@@ -461,7 +461,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               role="tab"
               aria-selected={mode === 'login'}
               onClick={() => selectMode('login')}
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'login' ? 'bg-white text-[#001738] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'login' ? 'bg-white text-[#0A1328] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
               data-testid="tab-login"
             >
               تسجيل الدخول
@@ -471,7 +471,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               role="tab"
               aria-selected={mode === 'register'}
               onClick={() => selectMode('register')}
-              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'register' ? 'bg-white text-[#001738] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${mode === 'register' ? 'bg-white text-[#0A1328] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
               data-testid="tab-register"
             >
               إنشاء منشأة
@@ -481,7 +481,7 @@ export function AuthDialog({ open, mode: initialMode, onOpenChange, onSuccess }:
               role="tab"
               aria-selected={mode === 'admin'}
               onClick={() => selectMode('admin')}
-              className={`rounded-md px-2 py-2 text-xs font-semibold transition-colors sm:text-sm ${mode === 'admin' ? 'bg-white text-[#001738] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              className={`rounded-md px-2 py-2 text-xs font-semibold transition-colors sm:text-sm ${mode === 'admin' ? 'bg-white text-[#0A1328] shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
               data-testid="tab-super-admin"
             >
               الإدارة العليا

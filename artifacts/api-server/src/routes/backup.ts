@@ -474,6 +474,13 @@ router.get("/backup/export", requireAuth, requireSubscriptionAccess, requireOwne
 
 router.post("/backup/restore", requireAuth, requireSubscriptionAccess, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
+  if (isPlainRecord(request.body)
+    && Number.isSafeInteger(request.body.organizationId)
+    && Number(request.body.organizationId) > 0
+    && Number(request.body.organizationId) !== auth.organizationId) {
+    response.status(409).json({ error: "هذه النسخة الاحتياطية تخص منشأة أخرى." });
+    return;
+  }
   const parsed = parseBackup(request.body);
   if (parsed.error || !parsed.records) {
     response.status(400).json({ error: parsed.error ?? "ملف النسخة الاحتياطية غير صالح." });

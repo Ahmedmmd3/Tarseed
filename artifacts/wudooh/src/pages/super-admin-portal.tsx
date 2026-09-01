@@ -392,7 +392,7 @@ export default function SuperAdminPortal() {
 
   if (sessionState === 'loading') {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-[#061d40] text-white" dir="rtl">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-[#0A1328] text-white" dir="rtl">
         <div className="text-center">
           <LoaderCircle className="mx-auto h-10 w-10 animate-spin text-teal-300" />
           <p className="mt-4 text-sm font-medium text-slate-300">جارٍ التحقق من جلسة الإدارة العليا...</p>
@@ -403,12 +403,12 @@ export default function SuperAdminPortal() {
 
   if (sessionState === 'unauthenticated') {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-[#061d40] px-5 text-white" dir="rtl">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-[#0A1328] px-5 text-white" dir="rtl">
         <div className="w-full max-w-md rounded-3xl border border-white/10 bg-white/5 p-8 text-center shadow-2xl">
           <ShieldCheck className="mx-auto h-11 w-11 text-teal-300" />
           <h1 className="mt-5 text-2xl font-black" data-testid="heading-super-admin-login-required">بوابة محمية</h1>
           <p className="mt-3 leading-7 text-slate-300">سجّل الدخول من الصفحة الرئيسية باستخدام اعتماد الإدارة العليا للوصول إلى هذه البوابة.</p>
-          <Link href="/" className="mt-7 inline-flex h-11 items-center justify-center rounded-xl bg-teal-400 px-6 text-sm font-bold text-[#061d40] hover:bg-teal-300" data-testid="link-super-admin-home">
+          <Link href="/" className="mt-7 inline-flex h-11 items-center justify-center rounded-xl bg-teal-400 px-6 text-sm font-bold text-[#0A1328] hover:bg-teal-300" data-testid="link-super-admin-home">
             العودة إلى تسجيل الدخول
           </Link>
         </div>
@@ -420,7 +420,7 @@ export default function SuperAdminPortal() {
 
   return (
     <div className="min-h-[100dvh] bg-slate-50 text-slate-900" dir="rtl">
-      <header className="sticky top-0 z-30 border-b border-slate-200 bg-[#061d40]/95 text-white shadow-sm backdrop-blur">
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-[#0A1328]/95 text-white shadow-sm backdrop-blur">
         <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-4 py-4 sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-teal-300/20 bg-teal-300/10 text-teal-300">
@@ -439,13 +439,13 @@ export default function SuperAdminPortal() {
       </header>
 
       <main className="mx-auto max-w-[1500px] space-y-6 px-4 py-6 sm:px-6 lg:py-8">
-        <section className="flex flex-col gap-4 rounded-3xl bg-gradient-to-l from-[#062344] to-[#0b315d] p-6 text-white shadow-xl sm:flex-row sm:items-end sm:justify-between lg:p-8">
+        <section className="flex flex-col gap-4 rounded-3xl bg-gradient-to-l from-[#0A1328] to-[#0D47D9] p-6 text-white shadow-xl sm:flex-row sm:items-end sm:justify-between lg:p-8">
           <div>
             <p className="text-sm font-bold text-teal-300">نظرة تشغيلية مباشرة</p>
             <h2 className="mt-2 text-2xl font-black sm:text-3xl">المنشآت والاشتراكات</h2>
             <p className="mt-2 max-w-2xl text-sm leading-7 text-slate-300">ملخص آمن لحالة حسابات العملاء من دون الوصول إلى بياناتهم المحاسبية أو التشغيلية.</p>
           </div>
-          <Button type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading} className="bg-teal-400 text-[#061d40] hover:bg-teal-300" data-testid="button-refresh-super-admin">
+          <Button type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading} className="bg-teal-400 text-[#0A1328] hover:bg-teal-300" data-testid="button-refresh-super-admin">
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             تحديث البيانات
           </Button>
@@ -633,7 +633,7 @@ export default function SuperAdminPortal() {
                     </td>
                     <td className="px-5 py-4">
                       <div className="flex flex-wrap gap-2">
-                        <Button type="button" size="sm" onClick={() => openActionDialog(organization)} className="gap-1.5 bg-[#061d40] text-white hover:bg-[#0b315d]" data-testid={`button-manage-subscription-${organization.id}`}>
+                        <Button type="button" size="sm" onClick={() => openActionDialog(organization)} className="gap-1.5 bg-[#0A1328] text-white hover:bg-[#0D47D9]" data-testid={`button-manage-subscription-${organization.id}`}>
                           <SlidersHorizontal className="h-3.5 w-3.5" />إدارة
                         </Button>
                         <Button type="button" size="sm" variant="outline" onClick={() => void openAuditDialog(organization)} className="gap-1.5" data-testid={`button-view-subscription-audit-${organization.id}`}>
@@ -784,7 +784,7 @@ export default function SuperAdminPortal() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isSubmittingAction} data-testid="button-cancel-subscription-action">إلغاء</AlertDialogCancel>
-            <AlertDialogAction onClick={(event) => { event.preventDefault(); void submitAction(); }} disabled={isSubmittingAction} className={action === 'suspend_access' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#061d40] hover:bg-[#0b315d]'} data-testid="button-confirm-subscription-action">
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); void submitAction(); }} disabled={isSubmittingAction} className={action === 'suspend_access' ? 'bg-rose-600 hover:bg-rose-700' : 'bg-[#0A1328] hover:bg-[#0D47D9]'} data-testid="button-confirm-subscription-action">
               {isSubmittingAction ? <LoaderCircle className="h-4 w-4 animate-spin" /> : null}
               تأكيد وتنفيذ
             </AlertDialogAction>

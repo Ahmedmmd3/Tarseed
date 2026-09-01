@@ -62,7 +62,7 @@ export default function ResetPassword() {
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-10" dir="rtl">
       <Card className="w-full max-w-md overflow-hidden border-slate-200 shadow-lg">
-        <CardHeader className="bg-[#001738] px-6 py-8 text-right text-white">
+      <CardHeader className="bg-[#0A1328] px-6 py-8 text-right text-white">
           <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-xl bg-teal-400/15 text-teal-300">
             <KeyRound className="h-5 w-5" aria-hidden="true" />
           </div>

@@ -30,6 +30,7 @@ import POS from '@/pages/pos';
 import Sales from '@/pages/sales';
 import Quotations from '@/pages/quotations';
 import Purchases from '@/pages/purchases';
+import PurchaseOrders from '@/pages/purchase-orders';
 import Inventory from '@/pages/inventory';
 import HR from '@/pages/hr';
 import Operations from '@/pages/operations';
@@ -89,6 +90,7 @@ function Router() {
         <Route path="/sales" component={() => <DashboardLayout><Sales /></DashboardLayout>} />
         <Route path="/quotations" component={() => <DashboardLayout><Quotations /></DashboardLayout>} />
         <Route path="/purchases" component={() => <DashboardLayout><Purchases /></DashboardLayout>} />
+        <Route path="/purchase-orders" component={() => <DashboardLayout><PurchaseOrders /></DashboardLayout>} />
         <Route path="/inventory" component={() => <DashboardLayout><Inventory /></DashboardLayout>} />
         <Route path="/hr" component={() => <DashboardLayout><HR /></DashboardLayout>} />
         <Route path="/operations" component={() => <DashboardLayout><Operations /></DashboardLayout>} />

@@ -19,8 +19,8 @@ export default function Landing() {
   }, []);
 
   return (
-    <div dir="rtl" className="min-h-screen bg-[#f6f9fc] font-sans text-slate-900">
-      <header className={`fixed inset-x-0 top-0 z-50 border-b transition-all ${scrolled ? 'border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl' : 'border-white/10 bg-[#061d40]/90 backdrop-blur-md'}`}>
+    <div dir="rtl" className="min-h-screen bg-[#F1F3F6] font-sans text-slate-900">
+      <header className={`fixed inset-x-0 top-0 z-50 border-b transition-all ${scrolled ? 'border-slate-200/80 bg-white/90 shadow-sm backdrop-blur-xl' : 'border-white/10 bg-[#0A1328]/90 backdrop-blur-md'}`}>
         <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <a href={route('/')} aria-label="الرئيسية"><BrandMark /></a>
           <nav className={`hidden items-center gap-7 text-sm font-semibold lg:flex ${scrolled ? 'text-slate-600' : 'text-slate-200'}`} aria-label="التنقل الرئيسي">
@@ -40,9 +40,9 @@ export default function Landing() {
       </header>
 
       <main>
-        <section className="relative overflow-hidden bg-[#061d40] px-4 pb-20 pt-36 text-white sm:px-6 lg:pb-28 lg:pt-48">
+        <section className="relative overflow-hidden bg-[#0A1328] px-4 pb-20 pt-36 text-white sm:px-6 lg:pb-28 lg:pt-48">
           <div className="absolute inset-0 opacity-30" style={{ backgroundImage: `url(${asset('features-bg.png')})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(28,198,180,0.2),transparent_32%),linear-gradient(120deg,#061d40,#092e57)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_15%_20%,rgba(0,163,255,0.2),transparent_32%),linear-gradient(120deg,#0A1328,#0D47D9)]" />
           <div className="relative mx-auto grid max-w-7xl items-center gap-14 lg:grid-cols-[1fr_0.9fr]">
             <div className="max-w-2xl">
               <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-200/10 px-4 py-2 text-sm font-semibold text-teal-100"><span className="h-2 w-2 rounded-full bg-teal-300" />الإصدار الجديد متاح الآن</div>
@@ -54,7 +54,7 @@ export default function Landing() {
             <div className="relative mx-auto w-full max-w-xl">
               <div className="absolute -inset-5 rounded-[2.5rem] bg-teal-300/10 blur-2xl" />
               <div className="relative overflow-hidden rounded-[2rem] border border-white/15 bg-white/10 p-3 shadow-2xl"><img src={asset('hero-abstract-ar-minimal.png')} alt="لوحة تحكم ترصيد" className="w-full rounded-2xl" width="1024" height="1024" /></div>
-              <div className="absolute -bottom-5 -right-5 rounded-2xl border border-white/15 bg-[#0b315d]/95 px-5 py-4 shadow-xl"><p className="text-xs text-slate-300">صافي الأرباح</p><p className="mt-1 text-2xl font-black text-teal-300">+ ١٢,٥٠٠ ر.س</p></div>
+              <div className="absolute -bottom-5 -right-5 rounded-2xl border border-white/15 bg-[#0D47D9]/95 px-5 py-4 shadow-xl"><p className="text-xs text-slate-300">صافي الأرباح</p><p className="mt-1 text-2xl font-black text-teal-300">+ ١٢,٥٠٠ ر.س</p></div>
             </div>
           </div>
         </section>
@@ -66,14 +66,14 @@ export default function Landing() {
           </div>
         </section>
 
-        <section className="bg-[#eef7f6] px-4 py-20 sm:px-6 lg:py-28">
-          <div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-2"><div><p className="text-sm font-bold text-primary">لماذا ترصيد؟</p><h2 className="mt-3 text-3xl font-black sm:text-4xl">قراراتك تبدأ من صورة واضحة</h2><p className="mt-5 text-base leading-8 text-slate-500">ترصيد ليس مجموعة أدوات منفصلة. هو مساحة عمل واحدة تجمع فريقك وبياناتك وعملياتك حتى تعرف أين تقف وإلى أين تتجه.</p><ul className="mt-7 grid gap-4">{[['أمان وصلاحيات تناسب فريقك', LockKeyhole], ['أداء سريع ومزامنة موثوقة', Zap], ['حلول تتوسع مع احتياجات منشأتك', Network]].map(([text, Icon]) => <li key={text as string} className="flex items-center gap-3 text-sm font-bold text-slate-700"><Icon className="h-5 w-5 text-primary" />{text as string}</li>)}</ul><a href={route('/why-tarseed')} className="mt-8 inline-flex items-center gap-2 text-sm font-bold text-primary">اكتشف لماذا ترصيد <ArrowLeft className="h-4 w-4" /></a></div><div className="rounded-3xl bg-[#061d40] p-5 shadow-2xl"><img src={asset('hero-abstract-ar-minimal.png')} alt="تقارير ولوحة تحكم ترصيد" className="rounded-2xl border border-white/10" /></div></div>
+        <section className="bg-[#F1F3F6] px-4 py-20 sm:px-6 lg:py-28">
+          <div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-2"><div><p className="text-sm font-bold text-primary">لماذا ترصيد؟</p><h2 className="mt-3 text-3xl font-black sm:text-4xl">قراراتك تبدأ من صورة واضحة</h2><p className="mt-5 text-base leading-8 text-slate-500">ترصيد ليس مجموعة أدوات منفصلة. هو مساحة عمل واحدة تجمع فريقك وبياناتك وعملياتك حتى تعرف أين تقف وإلى أين تتجه.</p><ul className="mt-7 grid gap-4">{[['أمان وصلاحيات تناسب فريقك', LockKeyhole], ['أداء سريع ومزامنة موثوقة', Zap], ['حلول تتوسع مع احتياجات منشأتك', Network]].map(([text, Icon]) => <li key={text as string} className="flex items-center gap-3 text-sm font-bold text-slate-700"><Icon className="h-5 w-5 text-primary" />{text as string}</li>)}</ul><a href={route('/why-tarseed')} className="mt-8 inline-flex items-center gap-2 text-sm font-bold text-primary">اكتشف لماذا ترصيد <ArrowLeft className="h-4 w-4" /></a></div><div className="rounded-3xl bg-[#0A1328] p-5 shadow-2xl"><img src={asset('hero-abstract-ar-minimal.png')} alt="تقارير ولوحة تحكم ترصيد" className="rounded-2xl border border-white/10" /></div></div>
         </section>
 
-        <section className="bg-[#061d40] px-4 py-20 text-center text-white sm:px-6 lg:py-24"><div className="mx-auto max-w-3xl"><p className="text-sm font-bold text-teal-300">ابدأ بخطوة بسيطة</p><h2 className="mt-4 text-3xl font-black sm:text-5xl">جاهز لإدارة أوضح؟</h2><p className="mt-5 text-base leading-8 text-slate-300">اختر الحل المناسب لمنشأتك، وابدأ تجربتك مع منصة صممت للنمو.</p><div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><button type="button" onClick={() => openAuth('register')} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary px-7 text-sm font-bold text-white hover:bg-teal-500">ابدأ تجربتك المجانية <ArrowLeft className="h-4 w-4" /></button><a href={route('/pricing')} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-white/20 px-7 text-sm font-bold text-white hover:bg-white/10">شاهد الخطط <ChevronLeft className="h-4 w-4" /></a></div></div></section>
+        <section className="bg-[#0A1328] px-4 py-20 text-center text-white sm:px-6 lg:py-24"><div className="mx-auto max-w-3xl"><p className="text-sm font-bold text-teal-300">ابدأ بخطوة بسيطة</p><h2 className="mt-4 text-3xl font-black sm:text-5xl">جاهز لإدارة أوضح؟</h2><p className="mt-5 text-base leading-8 text-slate-300">اختر الحل المناسب لمنشأتك، وابدأ تجربتك مع منصة صممت للنمو.</p><div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row"><button type="button" onClick={() => openAuth('register')} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary px-7 text-sm font-bold text-white hover:bg-teal-500">ابدأ تجربتك المجانية <ArrowLeft className="h-4 w-4" /></button><a href={route('/pricing')} className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-white/20 px-7 text-sm font-bold text-white hover:bg-white/10">شاهد الخطط <ChevronLeft className="h-4 w-4" /></a></div></div></section>
       </main>
 
-        <footer className="bg-[#04142d] px-4 pb-8 pt-14 text-slate-300 sm:px-6"><div className="mx-auto max-w-7xl"><div className="grid gap-10 border-b border-white/10 pb-12 md:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr]"><div><div className="flex items-center gap-3"><BrandMark light /><span className="text-lg font-black text-white">ترصيد</span></div><p className="mt-5 max-w-sm text-sm leading-7 text-slate-400">منصة عربية متكاملة تساعدك على إدارة أعمالك بسهولة وثقة.</p></div><FooterColumn title="المنتج" links={[['المميزات', '/features'], ['المحاسبة والمالية', '/products/accounting'], ['المبيعات والمخزون', '/products/sales'], ['نقاط البيع', '/products/pos']]} /><FooterColumn title="الشركة" links={[['لماذا ترصيد', '/why-tarseed'], ['الحلول المتكاملة', '/solutions'], ['الخطط', '/pricing'], ['الأمان والأداء', '/security-performance']]} /><FooterColumn title="المصادر" links={[['مركز المساعدة', '/resources/help'], ['دليل الاستخدام', '/guide'], ['العمليات والمشاريع', '/resources/operations'], ['الفاتورة الإلكترونية', '/resources/e-invoicing']]} /></div><p className="pt-6 text-xs text-slate-500">© {new Date().getFullYear()} ترصيد. جميع الحقوق محفوظة.</p></div></footer>
+        <footer className="bg-[#0A1328] px-4 pb-8 pt-14 text-slate-300 sm:px-6"><div className="mx-auto max-w-7xl"><div className="grid gap-10 border-b border-white/10 pb-12 md:grid-cols-2 lg:grid-cols-[1.4fr_1fr_1fr_1fr]"><div><div className="flex items-center gap-3"><BrandMark light /><span className="text-lg font-black text-white">ترصيد</span></div><p className="mt-5 max-w-sm text-sm leading-7 text-slate-400">منصة عربية متكاملة تساعدك على إدارة أعمالك بسهولة وثقة.</p></div><FooterColumn title="المنتج" links={[['المميزات', '/features'], ['المحاسبة والمالية', '/products/accounting'], ['المبيعات والمخزون', '/products/sales'], ['نقاط البيع', '/products/pos']]} /><FooterColumn title="الشركة" links={[['لماذا ترصيد', '/why-tarseed'], ['الحلول المتكاملة', '/solutions'], ['الخطط', '/pricing'], ['الأمان والأداء', '/security-performance']]} /><FooterColumn title="المصادر" links={[['مركز المساعدة', '/resources/help'], ['دليل الاستخدام', '/guide'], ['العمليات والمشاريع', '/resources/operations'], ['الفاتورة الإلكترونية', '/resources/e-invoicing']]} /></div><p className="pt-6 text-xs text-slate-500">© {new Date().getFullYear()} ترصيد. جميع الحقوق محفوظة.</p></div></footer>
       <AuthDialog open={authOpen} mode={authMode} onOpenChange={setAuthOpen} onSuccess={(destination) => window.location.assign(route(destination ?? '/manager'))} />
     </div>
   );
@@ -84,5 +84,5 @@ function FooterColumn({ title, links }: { title: string; links: string[][] }) {
 }
 
 function BrandMark({ light = false }: { light?: boolean }) {
-  return <div className={`relative h-11 w-11 shrink-0 overflow-hidden ${light ? 'brightness-0 invert' : ''}`}><img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} /></div>;
+  return <div className="relative h-11 w-11 shrink-0 overflow-hidden"><img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} /></div>;
 }

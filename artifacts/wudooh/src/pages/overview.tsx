@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
 import { Link } from 'wouter';
 import { useStore } from '@/context/store';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ const modules: Module[] = [
   { title: 'المبيعات والعملاء', description: 'تابع العملاء والفواتير وحركة البيع اليومية.', href: '/sales', icon: ShoppingCart, tone: 'bg-blue-50 text-blue-700', permission: 'sales', ready: true, id: 'sales' },
   { title: 'عروض الأسعار', description: 'أصدر عروض أسعار للعملاء وحولها لفواتير.', href: '/quotations', icon: ClipboardList, tone: 'bg-emerald-50 text-emerald-700', permission: 'sales', ready: true, id: 'quotations' },
   { title: 'المخزون والمنتجات', description: 'راقب الأرصدة والمنتجات وحركات المستودعات.', href: '/inventory', icon: Boxes, tone: 'bg-violet-50 text-violet-700', permission: 'inventory', ready: true, id: 'inventory' },
+  { title: 'أوامر الشراء', description: 'أنشئ أوامر الموردين وتابع الاستلام الجزئي والكامل.', href: '/purchase-orders', icon: PackageOpen, tone: 'bg-indigo-50 text-indigo-700', permission: 'inventory', ready: true, id: 'purchase-orders' },
   { title: 'المشتريات والموردون', description: 'نظّم أوامر الشراء والتزامات الموردين.', href: '/purchases', icon: Truck, tone: 'bg-amber-50 text-amber-700', permission: 'inventory', ready: true, id: 'purchases' },
   { title: 'المحاسبة', description: 'الحسابات والقيود والذمم في سجل مترابط.', href: '/accounts', icon: ReceiptText, tone: 'bg-sky-50 text-sky-700', permission: 'accounting', ready: true, id: 'accounting' },
   { title: 'التقارير المالية', description: 'اقرأ أداء منشأتك من أرقام واضحة ومترابطة.', href: '/reports', icon: BarChart3, tone: 'bg-indigo-50 text-indigo-700', permission: 'reports', ready: true, id: 'reports' },
@@ -43,12 +44,18 @@ export default function Overview() {
   const pendingReceivables = receivables.filter((record) => record.status !== 'paid').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 4);
   const topExpenses = accounts.filter((account) => account.type === 'expense').sort((a, b) => b.balance - a.balance).slice(0, 4);
   const canReadSales = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.sales === true));
+  const canReadInventory = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.inventory === true));
   const quotationsCrud = useCrud<any>('quotations', canReadSales);
+  const purchaseOrdersCrud = useCrud<any>('purchaseOrders', canReadInventory);
   const today = new Date().toISOString().slice(0, 10);
   const pendingQuotations = quotationsCrud.data.filter((q: any) =>
     (q.status === 'draft' || q.status === 'sent')
     && !q.convertedInvoiceId
     && String(q.expiryDate ?? '') >= today);
+  const pendingPurchaseOrders = purchaseOrdersCrud.data.filter((order: any) =>
+    order.status === 'draft' || order.status === 'sent' || order.status === 'partial');
+  const overduePurchaseOrders = pendingPurchaseOrders.filter((order: any) =>
+    String(order.expectedDate ?? '') !== '' && String(order.expectedDate) < today);
   const visibleModules = modules.filter((module) => !currentUser || currentUser.roleId === 'owner' || currentUser.permissions[module.permission] === true);
   const canUseWeeklySummary = Boolean(
     currentUser
@@ -129,7 +136,7 @@ export default function Overview() {
 
   return (
     <div className="space-y-6" data-testid="page-overview">
-      <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-br from-[#0b3b61] via-[#082b4e] to-[#061d40] px-5 py-7 text-white shadow-2xl shadow-slate-950/20 sm:px-8 sm:py-9">
+      <section className="relative overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-br from-[#0D47D9] via-[#0A1328] to-[#0A1328] px-5 py-7 text-white shadow-2xl shadow-slate-950/20 sm:px-8 sm:py-9">
         <div className="pointer-events-none absolute -left-16 -top-20 h-64 w-64 rounded-full bg-teal-400/15 blur-3xl" />
         <div className="pointer-events-none absolute bottom-0 right-1/3 h-40 w-40 rounded-full bg-blue-400/10 blur-3xl" />
         <div className="relative flex flex-col gap-7 lg:flex-row lg:items-end lg:justify-between">
@@ -142,14 +149,25 @@ export default function Overview() {
               <Link href="/reports" data-testid="link-open-reports"><span className="inline-flex h-11 items-center gap-2 rounded-xl border border-white/20 bg-white/5 px-5 text-sm font-bold text-white transition hover:bg-white/10">استكشف التقارير <BarChart3 className="h-4 w-4" /></span></Link>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:w-[480px]" aria-label="مؤشرات سريعة">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5 lg:w-[600px]" aria-label="مؤشرات سريعة">
             <QuickMetric label="حسابات نشطة" value={accounts.length.toLocaleString('ar-SA')} testId="accounts-count" />
             <QuickMetric label="قيود مسجلة" value={journals.length.toLocaleString('ar-SA')} testId="journals-count" />
             <QuickMetric label="ذمم معلقة" value={pendingReceivables.length.toLocaleString('ar-SA')} testId="receivables-count" />
             <QuickMetric label="عروض معلقة" value={pendingQuotations.length.toLocaleString('ar-SA')} testId="pending-quotations" />
+            <QuickMetric label="أوامر قيد الاستلام" value={pendingPurchaseOrders.length.toLocaleString('ar-SA')} testId="pending-purchase-orders" />
           </div>
         </div>
       </section>
+
+      {canReadInventory && overduePurchaseOrders.length > 0 && (
+        <section className="flex flex-col gap-4 rounded-2xl border border-amber-300 bg-amber-50 p-5 shadow-xl shadow-slate-950/10 sm:flex-row sm:items-center sm:justify-between" role="alert" data-testid="alert-overdue-purchase-orders">
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700"><AlertTriangle className="h-5 w-5" /></span>
+            <div><h2 className="font-black text-amber-950">هناك أوامر شراء متأخرة</h2><p className="mt-1 text-sm text-amber-800">{overduePurchaseOrders.length.toLocaleString('ar-SA')} أمر تجاوز تاريخ التسليم المتوقع وما زال ينتظر الاستلام.</p></div>
+          </div>
+          <Link href="/purchase-orders" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-900 px-4 text-sm font-bold text-white transition hover:bg-amber-950">مراجعة الأوامر <ArrowLeft className="h-4 w-4" /></Link>
+        </section>
+      )}
 
       <section aria-labelledby="financial-summary-heading">
         <div className="mb-4 flex items-end justify-between gap-4 text-white">

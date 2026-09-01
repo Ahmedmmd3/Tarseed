@@ -182,7 +182,7 @@ export default function ActivityLog() {
 
   return (
     <div className="space-y-6" data-testid="page-activity-log">
-      <section className="overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-br from-[#0b3b61] via-[#082b4e] to-[#061d40] px-5 py-7 text-white shadow-2xl shadow-slate-950/20 sm:px-8 sm:py-9">
+      <section className="overflow-hidden rounded-[28px] border border-white/10 bg-gradient-to-br from-[#0D47D9] via-[#0A1328] to-[#0A1328] px-5 py-7 text-white shadow-2xl shadow-slate-950/20 sm:px-8 sm:py-9">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-teal-200/20 bg-teal-200/10 px-3 py-1.5 text-xs font-bold text-teal-100">

@@ -23,6 +23,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { name: 'المبيعات والعملاء', href: '/sales', icon: ShoppingCart, permission: 'sales' },
       { name: 'عروض الأسعار', href: '/quotations', icon: ClipboardList, permission: 'sales' },
       { name: 'المخزون والمنتجات', href: '/inventory', icon: Boxes, permission: 'inventory' },
+      { name: 'أوامر الشراء', href: '/purchase-orders', icon: PackageOpen, permission: 'inventory' },
       { name: 'المشتريات والموردون', href: '/purchases', icon: Truck, permission: 'inventory' },
     ],
   },
@@ -203,12 +204,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, [anomalyIdentity, anomalyScope, currentUser?.id, currentUser?.organizationId, toast]);
 
   if (connectionMode === 'loading') {
-    return <div className="flex min-h-screen items-center justify-center bg-[#061d40] p-4" dir="rtl"><DashboardLoading /></div>;
+    return <div className="flex min-h-screen items-center justify-center bg-[#0A1328] p-4" dir="rtl"><DashboardLoading /></div>;
   }
 
   if (authenticationBlocked || subscriptionBlocked) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[#061d40] p-4" dir="rtl">
+      <div className="flex min-h-screen items-center justify-center bg-[#0A1328] p-4" dir="rtl">
         <div className="w-full max-w-2xl">
           {authenticationBlocked ? <AuthenticationRequiredRoute /> : <SubscriptionRestrictedRoute />}
         </div>
@@ -217,7 +218,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#061d40] font-sans text-slate-900" dir="rtl">
+    <div className="min-h-screen bg-[#0A1328] font-sans text-slate-900" dir="rtl">
       <div className="flex min-h-screen flex-col md:flex-row">
         <div className="flex items-center justify-between border-b border-slate-200 bg-white px-4 pb-3 pt-[max(env(safe-area-inset-top),0.75rem)] md:hidden">
           <BrandLockup />
@@ -228,7 +229,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {sidebarOpen && <button type="button" className="fixed inset-0 z-20 bg-slate-950/40 md:hidden" onClick={closeSidebar} aria-label="إغلاق القائمة" data-testid="button-close-menu-overlay" />}
 
-        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex w-[286px] flex-col border-l border-white/10 bg-[#062344] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
+        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex w-[286px] flex-col border-l border-white/10 bg-[#0A1328] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
           <div className="border-b border-white/10 px-6 py-6">
             <BrandLockup dark />
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
@@ -247,8 +248,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     const isActive = location === item.href;
                     return (
                       <Link key={item.href} href={item.href} onClick={closeSidebar} data-testid={`link-${item.href.replace('/', '') || 'home'}`}>
-                        <div className={`group flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${isActive ? 'bg-teal-400 text-[#062344] shadow-lg shadow-teal-950/20' : 'text-slate-200 hover:bg-white/10 hover:text-white'}`}>
-                          <item.icon className={`h-[18px] w-[18px] shrink-0 ${isActive ? 'text-[#062344]' : 'text-teal-200'}`} />
+                        <div className={`group flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${isActive ? 'bg-teal-400 text-[#0A1328] shadow-lg shadow-teal-950/20' : 'text-slate-200 hover:bg-white/10 hover:text-white'}`}>
+                          <item.icon className={`h-[18px] w-[18px] shrink-0 ${isActive ? 'text-[#0A1328]' : 'text-teal-200'}`} />
                           <span className="flex-1">{item.name}</span>
                           {isActive && <ChevronLeft className="h-4 w-4" />}
                         </div>
@@ -552,9 +553,9 @@ function PhoneChangeDialog({
 
 function BrandLockup({ dark = false }: { dark?: boolean }) {
   return (
-    <div className={`flex items-center gap-3 ${dark ? 'text-white' : 'text-[#062344]'}`}>
+    <div className={`flex items-center gap-3 ${dark ? 'text-white' : 'text-[#0A1328]'}`}>
       <div className="relative h-11 w-11 shrink-0 overflow-hidden">
-        <img src={`${import.meta.env.BASE_URL}logo-transparent.png`} alt="شعار ترصيد" className={`absolute max-w-none ${dark ? 'brightness-0 invert' : ''}`} style={{ width: '115px', right: '-34px', top: '-22px' }} />
+        <img src={`${import.meta.env.BASE_URL}logo-transparent.png`} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} />
       </div>
       <div><p className="text-lg font-black leading-none">ترصيد</p><p className={`mt-1 text-[10px] font-semibold ${dark ? 'text-slate-400' : 'text-slate-500'}`}>إدارة أسهل لنمو أسرع</p></div>
     </div>
@@ -574,7 +575,7 @@ function SubscriptionRestrictedRoute() {
     <CreditCard className="mx-auto h-9 w-9 text-amber-500" aria-hidden="true" />
     <h2 className="mt-4 text-xl font-bold text-slate-900">لوحة التحكم غير متاحة حالياً</h2>
     <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">يلزم اشتراك فعال أو فترة تجريبية سارية للدخول إلى مساحة العمل. يمكنك مراجعة حالة حسابك من بوابة المدير.</p>
-    <Link href="/manager" className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-[#062344] px-5 text-sm font-bold text-white transition hover:bg-[#0a426f]" data-testid="link-manager-portal">الذهاب إلى بوابة المدير</Link>
+    <Link href="/manager" className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-[#0D47D9] px-5 text-sm font-bold text-white transition hover:bg-[#1976F3]" data-testid="link-manager-portal">الذهاب إلى بوابة المدير</Link>
   </div>;
 }
 
@@ -583,19 +584,19 @@ function AuthenticationRequiredRoute() {
     <CloudOff className="mx-auto h-9 w-9 text-slate-400" aria-hidden="true" />
     <h2 className="mt-4 text-xl font-bold text-slate-900">سجّل الدخول للوصول إلى مساحة العمل</h2>
     <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">نحتاج إلى التحقق من حسابك وحالة اشتراك المنشأة قبل عرض بيانات لوحة التحكم.</p>
-    <Link href="/" className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-[#062344] px-5 text-sm font-bold text-white transition hover:bg-[#0a426f]" data-testid="link-sign-in">العودة لتسجيل الدخول</Link>
+    <Link href="/" className="mt-6 inline-flex h-11 items-center justify-center rounded-xl bg-[#0D47D9] px-5 text-sm font-bold text-white transition hover:bg-[#1976F3]" data-testid="link-sign-in">العودة لتسجيل الدخول</Link>
   </div>;
 }
 
 function isSubscriptionProtectedRoute(href: string): boolean {
-  return new Set(['/dashboard', '/pos', '/sales', '/quotations', '/inventory', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
+  return new Set(['/dashboard', '/pos', '/sales', '/quotations', '/inventory', '/purchase-orders', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
 }
 
 function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {
   if (user.roleId === 'owner') return true;
   if (href === '/e-invoicing') return user.permissions['accounting'] === true || user.permissions['sales'] === true;
   if (href === '/guide') return true;
-  const permissionByRoute: Record<string, string> = { '/dashboard': 'dashboard', '/pos': 'sales', '/sales': 'sales', '/quotations': 'sales', '/inventory': 'inventory', '/purchases': 'inventory', '/accounts': 'accounting', '/journals': 'accounting', '/receivables': 'accounting', '/expenses': 'accounting', '/reports': 'reports', '/hr': 'hr', '/operations': 'operations', '/team': '__owner__', '/operations-log': '__owner__' };
+  const permissionByRoute: Record<string, string> = { '/dashboard': 'dashboard', '/pos': 'sales', '/sales': 'sales', '/quotations': 'sales', '/inventory': 'inventory', '/purchase-orders': 'inventory', '/purchases': 'inventory', '/accounts': 'accounting', '/journals': 'accounting', '/receivables': 'accounting', '/expenses': 'accounting', '/reports': 'reports', '/hr': 'hr', '/operations': 'operations', '/team': '__owner__', '/operations-log': '__owner__' };
   const permission = permissionByRoute[href];
   return permission ? user.permissions[permission] === true : false;
 }
@@ -617,7 +618,7 @@ function ConnectionStatus({ mode, canRetrySharedConnection, syncQueue, onRetry }
   const indicator = (
     <span className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full border bg-white/5 ${mode === 'remote' ? 'border-emerald-300/30' : mode === 'local' ? 'border-rose-300/30' : 'border-white/20'}`} role={mode === 'local' ? 'alert' : 'status'} aria-live="polite" data-testid={statusTestId} aria-label={statusLabel}>
       <StatusIcon className={`h-[18px] w-[18px] ${statusColor} ${mode === 'loading' ? 'animate-spin' : ''}`} aria-hidden="true" />
-      {mode !== 'loading' && <span className={`absolute bottom-1 right-1 h-2 w-2 rounded-full border-2 border-[#102e54] ${mode === 'remote' ? 'bg-emerald-400' : 'bg-rose-400'}`} aria-hidden="true" />}
+      {mode !== 'loading' && <span className={`absolute bottom-1 right-1 h-2 w-2 rounded-full border-2 border-[#0A1328] ${mode === 'remote' ? 'bg-emerald-400' : 'bg-rose-400'}`} aria-hidden="true" />}
       <span className="sr-only">{statusLabel}: {statusDescription}</span>
     </span>
   );

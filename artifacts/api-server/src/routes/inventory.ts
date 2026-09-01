@@ -890,6 +890,263 @@ router.post("/inventory/purchase-receipts", requireAuth, requireSubscriptionAcce
   });
 });
 
+router.post("/data/purchaseOrders/:id/receive", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  await runAction(response, async () => {
+    const purchaseOrderId = integer(request.params.id, "معرّف أمر الشراء");
+    const body = bodyOf(request);
+    const receiptDate = saleDate(body.receiptDate);
+    const clientOperationId = requiredText(request.get("Idempotency-Key") ?? body.clientOperationId, "معرّف عملية الاستلام", 200);
+    if (!clientOperationId) throw new InventoryRouteError("معرّف عملية الاستلام مطلوب.", 400);
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!rawItems.length || rawItems.length > 100) throw new InventoryRouteError("أدخل كمية مستلمة لصنف واحد على الأقل.", 400);
+    const requestedQuantities = new Map<number, number>();
+    for (const rawItem of rawItems) {
+      if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+        throw new InventoryRouteError("أحد أصناف الاستلام غير صحيح.", 400);
+      }
+      const item = rawItem as RecordData;
+      const productId = integer(item.productId, "المنتج");
+      const quantity = Number(item.quantity);
+      if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000) {
+        throw new InventoryRouteError("كمية الاستلام غير صالحة.", 400);
+      }
+      requestedQuantities.set(productId, (requestedQuantities.get(productId) ?? 0) + quantity);
+    }
+    const requestItems = [...requestedQuantities.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([productId, quantity]) => ({ productId, quantity }));
+    const requestFingerprint = fingerprint({ purchaseOrderId, receiptDate, items: requestItems });
+
+    const result = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || (currentAuth.roleId !== "owner" && currentAuth.permissions.inventory !== true)) {
+        throw new InventoryRouteError("تغيرت صلاحيات المستخدم أثناء تنفيذ الاستلام.", 403);
+      }
+
+      const [claimedOperation] = await tx.insert(erpRecordsTable).values({
+        organizationId: currentAuth.organizationId,
+        tableName: "purchaseReceiptOperations",
+        clientOperationId,
+        data: {
+          purchaseOrderId,
+          requestFingerprint,
+          state: "pending",
+        },
+      }).onConflictDoNothing({
+        target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+      }).returning();
+      if (!claimedOperation) {
+        const [replay] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "purchaseReceiptOperations"),
+          eq(erpRecordsTable.clientOperationId, clientOperationId),
+        )).for("update");
+        if (!replay || replay.data.requestFingerprint !== requestFingerprint || Number(replay.data.purchaseOrderId) !== purchaseOrderId) {
+          throw new InventoryRouteError("معرّف عملية الاستلام مستخدم لطلب مختلف.");
+        }
+        if (!replay.data.order || !replay.data.receipt) {
+          throw new InventoryRouteError("عملية الاستلام السابقة غير مكتملة وتحتاج مراجعة.");
+        }
+        return {
+          order: replay.data.order as RecordData,
+          receipt: replay.data.receipt as RecordData,
+          replayed: true,
+        };
+      }
+
+      await requireOpenFinancialDate(tx, currentAuth.organizationId, receiptDate);
+      const order = await lockRecord(tx, currentAuth.organizationId, "purchaseOrders", purchaseOrderId);
+      const warehouseId = integer(order.data.warehouseId, "موقع الاستلام");
+      requireLocations(currentAuth, [warehouseId]);
+      if (!["draft", "sent", "partial"].includes(String(order.data.status))) {
+        throw new InventoryRouteError(
+          order.data.status === "received"
+            ? "تم استلام أمر الشراء بالكامل مسبقاً."
+            : "لا يمكن تسجيل استلام على أمر شراء ملغى.",
+          409,
+          order.data.status === "received" ? "purchase_order_already_received" : undefined,
+        );
+      }
+      await lockWarehouses(tx, currentAuth.organizationId, [warehouseId]);
+      const orderItems = Array.isArray(order.data.items) ? order.data.items : [];
+      if (!orderItems.length) throw new InventoryRouteError("أمر الشراء لا يحتوي على أصناف قابلة للاستلام.");
+      const orderItemsByProduct = new Map<number, RecordData>();
+      for (const rawItem of orderItems) {
+        if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) {
+          throw new InventoryRouteError("بيانات أصناف أمر الشراء تالفة.");
+        }
+        const item = rawItem as RecordData;
+        const productId = integer(item.productId, "منتج أمر الشراء");
+        orderItemsByProduct.set(productId, item);
+      }
+      for (const [productId, quantity] of requestedQuantities) {
+        const orderItem = orderItemsByProduct.get(productId);
+        if (!orderItem) throw new InventoryRouteError("أحد المنتجات ليس ضمن أمر الشراء.", 400);
+        const ordered = Number(orderItem.quantity);
+        const received = Number(orderItem.receivedQuantity ?? 0);
+        if (!Number.isFinite(ordered) || ordered <= 0 || !Number.isFinite(received) || received < 0 || received > ordered) {
+          throw new InventoryRouteError("بيانات الكميات السابقة في أمر الشراء غير صالحة.");
+        }
+        if (quantity > ordered - received + 0.000001) {
+          throw new InventoryRouteError(`كمية استلام «${String(orderItem.productName ?? productId)}» تتجاوز المتبقي.`);
+        }
+      }
+
+      const receiptItems: RecordData[] = [];
+      for (const { productId, quantity } of requestItems) {
+        const orderItem = orderItemsByProduct.get(productId)!;
+        const product = await lockRecord(tx, currentAuth.organizationId, "products", productId);
+        const balances = await lockBalancesForProduct(tx, currentAuth.organizationId, productId);
+        const balance = balanceFor(balances, warehouseId);
+        if (balance) {
+          await updateData(tx, balance, { ...balance.data, quantity: quantityOf(balance) + quantity });
+        } else {
+          await tx.insert(erpRecordsTable).values({
+            organizationId: currentAuth.organizationId,
+            tableName: "inventoryBalances",
+            data: { productId, warehouseId, quantity },
+          });
+        }
+        const unitCost = positiveMoney(orderItem.unitCost ?? orderItem.unitCostExVat, "تكلفة وحدة أمر الشراء");
+        const vatRate = Number(orderItem.vatRate ?? product.data.vatRate ?? 15);
+        if (![0, 5, 15].includes(vatRate)) throw new InventoryRouteError("نسبة ضريبة أحد أصناف أمر الشراء غير صالحة.");
+        const lineNet = money(quantity * unitCost);
+        const vatAmount = money(lineNet * vatRate / 100);
+        const [layer] = await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "inventoryLayers",
+          data: {
+            productId,
+            warehouseId,
+            originalQuantity: quantity,
+            remainingQuantity: quantity,
+            unitCostExVat: unitCost,
+            receivedDate: receiptDate,
+            purchaseOrderId,
+            purchaseReceiptOperationId: claimedOperation.id,
+          },
+        }).returning();
+        receiptItems.push({
+          productId,
+          productName: String(product.data.name ?? orderItem.productName ?? `صنف #${productId}`),
+          quantity,
+          unitCost,
+          unitCostExVat: unitCost,
+          vatRate,
+          lineNet,
+          vatAmount,
+          total: money(lineNet + vatAmount),
+          fifoLayerId: layer.id,
+        });
+        await reconcileProductTotal(tx, currentAuth.organizationId, product);
+      }
+
+      const receiptSubtotal = money(receiptItems.reduce((sum, item) => sum + Number(item.lineNet), 0));
+      const receiptVat = money(receiptItems.reduce((sum, item) => sum + Number(item.vatAmount), 0));
+      const receiptTotal = money(receiptSubtotal + receiptVat);
+      const isCreditPurchase = order.data.paymentMethod === "credit";
+      const updatedItems: RecordData[] = orderItems.map((rawItem): RecordData => {
+        const item = rawItem as RecordData;
+        const productId = Number(item.productId);
+        const receivedNow = requestedQuantities.get(productId) ?? 0;
+        return {
+          ...item,
+          receivedQuantity: Number(item.receivedQuantity ?? 0) + receivedNow,
+        };
+      });
+      const fullyReceived = updatedItems.every((item) => Number(item.receivedQuantity) >= Number(item.quantity) - 0.000001);
+      const receivedSubtotal = money(Number(order.data.receivedSubtotal ?? 0) + receiptSubtotal);
+      const receivedVat = money(Number(order.data.receivedVat ?? 0) + receiptVat);
+      const paid = isCreditPurchase ? money(Number(order.data.paid ?? 0)) : money(Number(order.data.paid ?? 0) + receiptTotal);
+      const orderTotal = money(Number(order.data.total ?? 0));
+      const receiptRecord: RecordData = {
+        operationId: claimedOperation.id,
+        clientOperationId,
+        receiptDate,
+        warehouseId,
+        items: receiptItems,
+        subtotal: receiptSubtotal,
+        vat: receiptVat,
+        tax: receiptVat,
+        total: receiptTotal,
+        createdAt: new Date().toISOString(),
+      };
+      const receipts = Array.isArray(order.data.receipts) ? order.data.receipts : [];
+      const [updatedOrder] = await tx.update(erpRecordsTable).set({
+        data: {
+          ...order.data,
+          items: updatedItems,
+          status: fullyReceived ? "received" : "partial",
+          received: true,
+          receivedSubtotal,
+          receivedVat,
+          receivedTotal: money(receivedSubtotal + receivedVat),
+          receipts: [...receipts, receiptRecord],
+          lastReceiptDate: receiptDate,
+          paid,
+          paymentStatus: paid >= orderTotal - 0.005 ? "paid" : paid > 0 ? "partial" : "unpaid",
+          ...(fullyReceived ? { receivedAt: new Date().toISOString() } : {}),
+        },
+        updatedAt: new Date(),
+      }).where(eq(erpRecordsTable.id, order.id)).returning();
+
+      const accounts = await accountsByCode(tx, currentAuth.organizationId);
+      const settlementAccountId = isCreditPurchase ? accounts.get("2000")!.id : accounts.get("1000")!.id;
+      const journal = await postJournal(
+        tx,
+        currentAuth.organizationId,
+        "purchase",
+        order.id,
+        receiptDate,
+        `استلام أمر شراء ${String(order.data.orderNumber ?? order.id)}`,
+        [
+          { accountId: String(accounts.get("1300")!.id), debit: receiptSubtotal, credit: 0 },
+          { accountId: String(accounts.get("1400")!.id), debit: receiptVat, credit: 0 },
+          { accountId: String(settlementAccountId), debit: 0, credit: receiptTotal },
+        ],
+      );
+      const [payable] = isCreditPurchase
+        ? await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "receivables",
+          data: {
+            purchaseId: order.id,
+            purchaseOrderId: order.id,
+            purchaseReceiptOperationId: claimedOperation.id,
+            party: String(order.data.supplierName ?? "مورد غير محدد"),
+            supplierName: String(order.data.supplierName ?? "مورد غير محدد"),
+            type: "payable",
+            reference: `${String(order.data.orderNumber ?? order.id)} / ${receiptDate}`,
+            date: receiptDate,
+            dueDate: String(order.data.dueDate ?? receiptDate),
+            amount: receiptTotal,
+            paid: 0,
+            status: "unpaid",
+          },
+        }).returning()
+        : [undefined];
+      await audit(tx, currentAuth, "automatic_accounting", `${order.id}:${journal.id}`);
+      await audit(tx, currentAuth, "purchase_order_received", `${order.id}:${claimedOperation.id}`);
+      const orderOutput = output(updatedOrder, currentAuth.organizationId);
+      const receiptOutput = { ...receiptRecord, journalId: journal.id, ...(payable ? { payableId: payable.id } : {}) };
+      await tx.update(erpRecordsTable).set({
+        data: {
+          purchaseOrderId,
+          requestFingerprint,
+          state: "completed",
+          order: orderOutput,
+          receipt: receiptOutput,
+        },
+        updatedAt: new Date(),
+      }).where(eq(erpRecordsTable.id, claimedOperation.id));
+      return { order: orderOutput, receipt: receiptOutput, replayed: false };
+    });
+    return result;
+  });
+});
+
 router.post("/inventory/adjustments", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {

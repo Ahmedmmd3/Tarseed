@@ -209,9 +209,159 @@ function validateJournal(data: Record<string, unknown>): string | null {
 }
 
 const quotationStatuses = new Set(["draft", "sent", "rejected"]);
+const purchaseOrderStatuses = new Set(["draft", "sent", "partial", "received", "cancelled"]);
+const purchaseOrderPaymentStatuses = new Set(["unpaid", "partial", "paid"]);
 
 function roundMoney(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function validDateKey(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+async function purchaseOrderData(
+  executor: DatabaseExecutor,
+  organizationId: number,
+  data: Record<string, unknown>,
+  numberOverride?: string,
+): Promise<{ data?: Record<string, unknown>; error?: string }> {
+  const supplierName = typeof data.supplierName === "string" ? data.supplierName.trim() : "";
+  if (!supplierName || supplierName.length > 160) return { error: "اسم المورد مطلوب وبحد أقصى 160 حرفاً." };
+  const supplierId = data.supplierId === undefined || data.supplierId === "" ? undefined : Number(data.supplierId);
+  if (supplierId !== undefined && (!Number.isInteger(supplierId) || supplierId <= 0)) return { error: "معرّف المورد غير صحيح." };
+  if (supplierId !== undefined) {
+    const [supplier] = await executor.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, supplierId),
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "suppliers"),
+    )).limit(1);
+    if (!supplier) return { error: "المورد غير موجود في هذه المنشأة." };
+    if (String(supplier.data.name ?? "").trim() !== supplierName) return { error: "اسم المورد لا يطابق سجل المورد المحدد." };
+  }
+
+  const issueDate = typeof (data.issueDate ?? data.date) === "string" ? String(data.issueDate ?? data.date) : "";
+  const expectedDate = typeof data.expectedDate === "string" ? data.expectedDate : "";
+  if (!validDateKey(issueDate)) return { error: "تاريخ أمر الشراء غير صالح." };
+  if (expectedDate && !validDateKey(expectedDate)) return { error: "تاريخ التسليم المتوقع غير صالح." };
+  if (expectedDate && expectedDate < issueDate) return { error: "لا يمكن أن يسبق تاريخ التسليم المتوقع تاريخ الأمر." };
+  const dueDate = typeof data.dueDate === "string" ? data.dueDate : "";
+  if (dueDate && (!validDateKey(dueDate) || dueDate < issueDate)) return { error: "تاريخ استحقاق المورد غير صالح." };
+
+  const warehouseId = Number(data.warehouseId);
+  if (!Number.isInteger(warehouseId) || warehouseId <= 0) return { error: "موقع الاستلام غير صالح." };
+  const [warehouse] = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, warehouseId),
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "warehouses"),
+  )).limit(1);
+  if (!warehouse || warehouse.data.status === "inactive") return { error: "موقع الاستلام غير موجود أو غير نشط." };
+
+  const status = String(data.status ?? "draft");
+  if (!purchaseOrderStatuses.has(status)) return { error: "حالة أمر الشراء غير صحيحة." };
+  const paymentMethod = data.paymentMethod === "cash" ? "cash" : "credit";
+  const paymentStatus = String(data.paymentStatus ?? "unpaid");
+  if (!purchaseOrderPaymentStatuses.has(paymentStatus)) return { error: "حالة دفع أمر الشراء غير صحيحة." };
+  if (paymentMethod === "credit" && !dueDate) return { error: "حدد تاريخ استحقاق المورد لأمر الشراء الآجل." };
+
+  if (!Array.isArray(data.items) || data.items.length < 1 || data.items.length > 100) {
+    return { error: "يجب أن يحتوي أمر الشراء على صنف واحد على الأقل وبحد أقصى 100 صنف." };
+  }
+  const items: Array<Record<string, unknown>> = [];
+  const seenProducts = new Set<number>();
+  let subtotal = 0;
+  let vat = 0;
+  let receivedSubtotal = 0;
+  let receivedVat = 0;
+  for (const rawItem of data.items) {
+    if (!rawItem || typeof rawItem !== "object" || Array.isArray(rawItem)) return { error: "أحد أصناف أمر الشراء غير صحيح." };
+    const item = rawItem as Record<string, unknown>;
+    const productId = Number(item.productId);
+    const quantity = Number(item.quantity);
+    const unitCost = Number(item.unitCost ?? item.unitCostExVat);
+    const receivedQuantity = Number(item.receivedQuantity ?? 0);
+    if (!Number.isInteger(productId) || productId <= 0 || seenProducts.has(productId)) {
+      return { error: "كل منتج يجب أن يظهر مرة واحدة فقط في أمر الشراء." };
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0 || quantity > 1_000_000
+      || !Number.isFinite(unitCost) || unitCost < 0 || unitCost > 1_000_000_000
+      || !Number.isFinite(receivedQuantity) || receivedQuantity < 0 || receivedQuantity > quantity) {
+      return { error: "تحقق من كميات وتكاليف أصناف أمر الشراء." };
+    }
+    const [product] = await executor.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, productId),
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "products"),
+    )).limit(1);
+    if (!product) return { error: "أحد المنتجات غير موجود في هذه المنشأة." };
+    const vatRate = Number(product.data.vatRate ?? item.vatRate ?? 15);
+    if (![0, 5, 15].includes(vatRate)) return { error: "نسبة ضريبة أحد المنتجات غير صالحة." };
+    const lineNet = roundMoney(quantity * unitCost);
+    const vatAmount = roundMoney(lineNet * vatRate / 100);
+    const receivedLineNet = roundMoney(receivedQuantity * unitCost);
+    const receivedVatAmount = roundMoney(receivedLineNet * vatRate / 100);
+    items.push({
+      productId,
+      productName: String(product.data.name ?? `صنف #${productId}`),
+      quantity,
+      receivedQuantity,
+      unitCost: roundMoney(unitCost),
+      unitCostExVat: roundMoney(unitCost),
+      vatRate,
+      lineNet,
+      vatAmount,
+      total: roundMoney(lineNet + vatAmount),
+    });
+    seenProducts.add(productId);
+    subtotal = roundMoney(subtotal + lineNet);
+    vat = roundMoney(vat + vatAmount);
+    receivedSubtotal = roundMoney(receivedSubtotal + receivedLineNet);
+    receivedVat = roundMoney(receivedVat + receivedVatAmount);
+  }
+  const receivedUnits = items.reduce((sum, item) => sum + Number(item.receivedQuantity), 0);
+  const orderedUnits = items.reduce((sum, item) => sum + Number(item.quantity), 0);
+  if (status === "received" && receivedUnits !== orderedUnits) return { error: "الأمر المستلم بالكامل يجب أن تكون كل كمياته مستلمة." };
+  if (status === "partial" && (receivedUnits <= 0 || receivedUnits >= orderedUnits)) return { error: "حالة الاستلام الجزئي لا تطابق الكميات المستلمة." };
+  if ((status === "draft" || status === "sent" || status === "cancelled") && receivedUnits > 0) {
+    return { error: "لا يمكن حفظ كميات مستلمة في هذه الحالة." };
+  }
+  const notes = typeof data.notes === "string" ? data.notes.trim() : "";
+  if (notes.length > 5000) return { error: "ملاحظات أمر الشراء طويلة جداً." };
+  const paid = roundMoney(Number(data.paid ?? 0));
+  const total = roundMoney(subtotal + vat);
+  if (!Number.isFinite(paid) || paid < 0 || paid > total) return { error: "المبلغ المدفوع غير صالح." };
+  return {
+    data: {
+      ...(numberOverride ? { orderNumber: numberOverride } : {}),
+      ...(supplierId === undefined ? {} : { supplierId }),
+      supplierName,
+      issueDate,
+      date: issueDate,
+      ...(expectedDate ? { expectedDate } : {}),
+      warehouseId,
+      warehouseName: String(warehouse.data.name ?? `موقع #${warehouseId}`),
+      status,
+      paymentMethod,
+      paymentStatus,
+      ...(dueDate ? { dueDate } : {}),
+      items,
+      subtotal,
+      vat,
+      tax: vat,
+      total,
+      receivedSubtotal,
+      receivedVat,
+      receivedTotal: roundMoney(receivedSubtotal + receivedVat),
+      received: receivedUnits > 0,
+      paid,
+      ...(notes ? { notes } : {}),
+    },
+  };
 }
 
 function quotationData(
@@ -308,6 +458,18 @@ async function nextQuotationNumber(executor: DatabaseExecutor, organizationId: n
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
   return `QUO-${String(highest + 1).padStart(4, "0")}`;
+}
+
+async function nextPurchaseOrderNumber(executor: DatabaseExecutor, organizationId: number): Promise<string> {
+  const records = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "purchaseOrders"),
+  ));
+  const highest = records.reduce((max, record) => {
+    const match = /^PO-(\d+)$/.exec(String(record.data.orderNumber ?? ""));
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return `PO-${String(highest + 1).padStart(4, "0")}`;
 }
 
 class MutationRejected extends Error {
@@ -578,6 +740,19 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
           createdAt: new Date().toISOString(),
         };
       }
+      if (access.tableName === "purchaseOrders") {
+        const requestedStatus = String(recordData.status ?? "draft");
+        if (requestedStatus !== "draft" && requestedStatus !== "sent") {
+          throw new MutationRejected(409, "يمكن إنشاء أمر الشراء كمسودة أو مرسل فقط.");
+        }
+        const number = await nextPurchaseOrderNumber(tx, currentAuth.organizationId);
+        const normalized = await purchaseOrderData(tx, currentAuth.organizationId, { ...recordData, status: requestedStatus }, number);
+        if (!normalized.data) throw new MutationRejected(400, normalized.error ?? "بيانات أمر الشراء غير صحيحة.");
+        recordData = {
+          ...normalized.data,
+          createdAt: new Date().toISOString(),
+        };
+      }
       const [inserted] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
         tableName: access.tableName,
@@ -626,7 +801,7 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
-  if (isAccountingSource(access.tableName)) {
+  if (isAccountingSource(access.tableName) && access.tableName !== "purchaseOrders") {
     response.status(405).json({ error: "يُلغى أو يُصحح المستند المحاسبي من مساره المتخصص حتى تتطابق القيود والمخزون والذمم." });
     return;
   }
@@ -864,6 +1039,35 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
           createdAt: current.data.createdAt,
         };
       }
+      if (access.tableName === "purchaseOrders") {
+        if (current.data.status === "partial" || current.data.status === "received" || current.data.status === "cancelled" || current.data.received === true) {
+          throw new MutationRejected(409, "لا يمكن تعديل أمر شراء بدأ استلامه أو أُلغي.");
+        }
+        const nextStatus = String(currentData.status ?? current.data.status);
+        if (nextStatus !== "draft" && nextStatus !== "sent" && nextStatus !== "cancelled") {
+          throw new MutationRejected(409, "لا يمكن تغيير حالة أمر الشراء يدوياً إلى حالة استلام.");
+        }
+        const normalized = await purchaseOrderData(
+          tx,
+          currentAuth.organizationId,
+          {
+            ...currentData,
+            status: nextStatus,
+            items: Array.isArray(currentData.items)
+              ? currentData.items.map((item) => item && typeof item === "object" && !Array.isArray(item)
+                ? { ...(item as Record<string, unknown>), receivedQuantity: 0 }
+                : item)
+              : currentData.items,
+          },
+          String(current.data.orderNumber ?? ""),
+        );
+        if (!normalized.data) throw new MutationRejected(400, normalized.error ?? "بيانات أمر الشراء غير صحيحة.");
+        currentData = {
+          ...normalized.data,
+          createdAt: current.data.createdAt,
+          ...(nextStatus === "cancelled" ? { cancelledAt: new Date().toISOString() } : {}),
+        };
+      }
       if (isAccountingSource(access.tableName) && await isClosedDate(
         currentAuth,
         String(currentData.date ?? currentData.issueDate ?? ""),
@@ -1032,7 +1236,7 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
-  if (isAccountingSource(access.tableName)) {
+  if (isAccountingSource(access.tableName) && access.tableName !== "purchaseOrders") {
     response.status(405).json({ error: "لا يُحذف المستند المحاسبي مباشرة. ألغِه من مساره المتخصص حتى تُعكس آثاره كاملة." });
     return;
   }
@@ -1126,6 +1330,9 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       }
       if (access.tableName === "quotations" && (current.data.convertedInvoiceId || current.data.status === "accepted")) {
         throw new MutationRejected(409, "عرض السعر المحوّل إلى فاتورة غير قابل للحذف.");
+      }
+      if (access.tableName === "purchaseOrders" && (current.data.status !== "draft" || current.data.received === true)) {
+        throw new MutationRejected(409, "لا يمكن حذف أمر شراء بعد إرساله أو بدء استلامه. ألغِه بدلاً من ذلك.");
       }
       if (isAccountingSource(access.tableName) && await isClosedDate(
         currentAuth,

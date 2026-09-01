@@ -7,7 +7,7 @@ const APP_SHELL = [
   SCOPE_URL,
   INDEX_URL,
   new URL('manifest.webmanifest', SCOPE_URL).href,
-  new URL('favicon.svg', SCOPE_URL).href,
+  new URL('favicon.png', SCOPE_URL).href,
   new URL('logo.png', SCOPE_URL).href,
   new URL('logo-transparent.png', SCOPE_URL).href,
   ...BUILD_ASSETS.map((asset) => new URL(asset, SCOPE_URL).href),

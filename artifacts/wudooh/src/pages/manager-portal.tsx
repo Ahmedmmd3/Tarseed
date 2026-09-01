@@ -99,7 +99,7 @@ export default function ManagerPortal() {
 
   if (!currentUser) {
     return (
-      <div className="min-h-[100dvh] bg-[#061d40] flex flex-col items-center justify-center text-white" dir="rtl">
+      <div className="min-h-[100dvh] bg-[#0A1328] flex flex-col items-center justify-center text-white" dir="rtl">
         {connectionMode === 'loading' ? (
           <>
             <LoaderCircle className="mb-6 h-10 w-10 animate-spin text-teal-400" />
@@ -110,7 +110,7 @@ export default function ManagerPortal() {
             <CreditCard className="mx-auto mb-5 h-10 w-10 text-teal-300" />
             <h1 className="text-2xl font-black text-white">سجّل الدخول لعرض بوابة الحساب</h1>
             <p className="mt-3 leading-7 text-slate-300">ستظهر هنا بيانات منشأتك وخطتك وحالة الوصول إلى مساحة العمل.</p>
-            <Link href="/" className="mt-7 inline-flex h-11 items-center justify-center rounded-xl bg-teal-400 px-5 text-sm font-bold text-[#061d40] transition hover:bg-teal-300" data-testid="link-login-from-manager">العودة إلى الصفحة الرئيسية</Link>
+            <Link href="/" className="mt-7 inline-flex h-11 items-center justify-center rounded-xl bg-teal-400 px-5 text-sm font-bold text-[#0A1328] transition hover:bg-teal-300" data-testid="link-login-from-manager">العودة إلى الصفحة الرئيسية</Link>
           </div>
         )}
       </div>
@@ -240,15 +240,15 @@ export default function ManagerPortal() {
   const StatusIcon = currentStatus.icon;
 
   return (
-    <div className="min-h-[100dvh] bg-[#061d40] flex flex-col font-sans selection:bg-teal-500/30 text-slate-200" dir="rtl">
+    <div className="min-h-[100dvh] bg-[#0A1328] flex flex-col font-sans selection:bg-teal-500/30 text-slate-200" dir="rtl">
       {/* Top Bar */}
-      <header className="px-6 py-4 flex items-center justify-between border-b border-white/5 bg-[#062344]/50 backdrop-blur-md">
+      <header className="px-6 py-4 flex items-center justify-between border-b border-white/5 bg-[#0A1328]/50 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <div className="relative h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-white/5 flex items-center justify-center border border-white/10 shadow-inner">
              <img 
                src={`${import.meta.env.BASE_URL}logo-transparent.png`} 
                alt="شعار ترصيد" 
-               className="absolute max-w-none brightness-0 invert" 
+                className="absolute max-w-none"
                style={{ width: '100px', right: '-30px', top: '-18px' }} 
              />
           </div>
@@ -288,7 +288,7 @@ export default function ManagerPortal() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
             {/* Organization Card */}
-            <div className="bg-[#0a2a4e]/80 backdrop-blur-xl border border-white/10 rounded-3xl p-5 md:p-6 shadow-2xl transition-all hover:border-white/20 hover:bg-[#0a2a4e]">
+            <div className="bg-[#0D47D9]/80 backdrop-blur-xl border border-white/10 rounded-3xl p-5 md:p-6 shadow-2xl transition-all hover:border-white/20 hover:bg-[#0D47D9]">
               <div className="flex items-center gap-4 mb-6">
                 <div className="p-3 bg-teal-500/20 text-teal-400 rounded-2xl shadow-inner shrink-0">
                   <Building2 className="h-6 w-6" />
@@ -312,7 +312,7 @@ export default function ManagerPortal() {
             </div>
 
             {/* User Details Card */}
-            <div className="bg-[#0a2a4e]/80 backdrop-blur-xl border border-white/10 rounded-3xl p-5 md:p-6 shadow-2xl transition-all hover:border-white/20 hover:bg-[#0a2a4e]">
+            <div className="bg-[#0D47D9]/80 backdrop-blur-xl border border-white/10 rounded-3xl p-5 md:p-6 shadow-2xl transition-all hover:border-white/20 hover:bg-[#0D47D9]">
               <div className="flex items-center gap-4 mb-6">
                 <div className="p-3 bg-blue-500/20 text-blue-400 rounded-2xl shadow-inner shrink-0">
                   <User className="h-6 w-6" />
@@ -342,9 +342,9 @@ export default function ManagerPortal() {
           </div>
 
           {/* Subscription Status Card - Full Width */}
-          <div className="bg-gradient-to-br from-[#062344] to-[#0a2a4e] border border-white/10 rounded-3xl p-1 shadow-2xl relative overflow-hidden">
+          <div className="bg-gradient-to-br from-[#0A1328] to-[#0D47D9] border border-white/10 rounded-3xl p-1 shadow-2xl relative overflow-hidden">
              {/* Inner border line for premium feel */}
-            <div className="bg-[#061d40]/90 rounded-[22px] p-5 md:p-8 backdrop-blur-xl h-full w-full">
+            <div className="bg-[#0A1328]/90 rounded-[22px] p-5 md:p-8 backdrop-blur-xl h-full w-full">
               
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-5 mb-8">
                 <div className="flex items-center gap-4">
@@ -436,7 +436,7 @@ export default function ManagerPortal() {
                                type="button"
                                disabled={!isOwner || isActive || billingAction !== null}
                                onClick={() => void checkout(price.id)}
-                               className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-[#061d40] px-3 py-3 text-right transition hover:border-teal-300/50 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                               className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-[#0A1328] px-3 py-3 text-right transition hover:border-teal-300/50 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                                data-testid={`button-checkout-${price.id}`}
                              >
                                <span className="text-sm font-bold text-white">{formatPrice(price)}</span>
@@ -503,7 +503,7 @@ export default function ManagerPortal() {
                   {sub?.accessActive ? (
                     <Link 
                       href="/dashboard"
-                      className="inline-flex w-full md:w-auto shrink-0 items-center justify-center rounded-xl px-8 h-12 text-sm md:text-base font-bold shadow-lg transition-all bg-teal-500 hover:bg-teal-400 text-[#061d40] shadow-teal-500/25 hover:shadow-teal-400/40 hover:-translate-y-0.5"
+                      className="inline-flex w-full md:w-auto shrink-0 items-center justify-center rounded-xl px-8 h-12 text-sm md:text-base font-bold shadow-lg transition-all bg-teal-500 hover:bg-teal-400 text-[#0A1328] shadow-teal-500/25 hover:shadow-teal-400/40 hover:-translate-y-0.5"
                       data-testid="button-dashboard-action"
                     >
                       الدخول لمساحة العمل

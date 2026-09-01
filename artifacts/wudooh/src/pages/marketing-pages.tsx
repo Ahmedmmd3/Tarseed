@@ -59,7 +59,7 @@ function MarketingShell({ children, eyebrow, title, description, actions }: Mark
   };
 
   return (
-    <div dir="rtl" className="min-h-screen bg-[#f6f9fc] font-sans text-slate-900">
+    <div dir="rtl" className="min-h-screen bg-[#F1F3F6] font-sans text-slate-900">
       <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
         <div className="mx-auto flex h-[76px] max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
           <a href={route('/')} className="flex items-center gap-3" aria-label="العودة إلى الصفحة الرئيسية"><BrandMark /></a>
@@ -95,9 +95,9 @@ function MarketingShell({ children, eyebrow, title, description, actions }: Mark
       </header>
 
       <main>
-        <section className="relative overflow-hidden bg-[#061d40] px-4 pb-20 pt-16 text-white sm:px-6 lg:pb-24 lg:pt-24">
+        <section className="relative overflow-hidden bg-[#0A1328] px-4 pb-20 pt-16 text-white sm:px-6 lg:pb-24 lg:pt-24">
           <div className="absolute inset-0 opacity-30" style={{ backgroundImage: `url(${asset('features-bg.png')})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(28,198,180,0.2),transparent_34%),linear-gradient(120deg,#061d40_15%,#092f58_100%)]" />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(0,163,255,0.2),transparent_34%),linear-gradient(120deg,#0A1328_15%,#0D47D9_100%)]" />
           <div className="relative mx-auto max-w-5xl text-center">
             {eyebrow && <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-teal-300/20 bg-teal-300/10 px-4 py-2 text-sm font-semibold text-teal-100"><Sparkles className="h-4 w-4 text-teal-300" />{eyebrow}</div>}
             <h1 className="text-4xl font-black leading-tight tracking-tight sm:text-5xl lg:text-6xl">{title}</h1>
@@ -134,7 +134,7 @@ function MarketingFooter({ onRegister }: { onRegister: () => void }) {
     ['الفاتورة الإلكترونية', '/resources/e-invoicing'],
   ];
   return (
-    <footer className="bg-[#06152f] px-4 pb-8 pt-16 text-slate-300 sm:px-6">
+    <footer className="bg-[#0A1328] px-4 pb-8 pt-16 text-slate-300 sm:px-6">
       <div className="mx-auto max-w-7xl">
         <div className="grid gap-12 border-b border-white/10 pb-12 md:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr]">
           <div>
@@ -210,7 +210,7 @@ export function WhyTarseed() {
               {['معلومات مترابطة بين كل الوحدات', 'صلاحيات واضحة لكل عضو وموقع', 'تقارير تساعدك على التحرك لا مجرد العرض'].map((item) => <li key={item} className="flex items-center gap-3 text-sm font-semibold text-slate-700"><CheckCircle2 className="h-5 w-5 shrink-0 text-primary" />{item}</li>)}
             </ul>
           </div>
-          <div className="relative overflow-hidden rounded-3xl bg-[#071d3d] p-5 shadow-2xl shadow-slate-300/50">
+          <div className="relative overflow-hidden rounded-3xl bg-[#0A1328] p-5 shadow-2xl shadow-slate-300/50">
             <img src={asset('hero-abstract-ar-minimal.png')} alt="لوحة تحكم ترصيد" className="w-full rounded-2xl border border-white/10" />
           </div>
         </div>
@@ -246,7 +246,7 @@ function PlansPreview() {
     { name: 'المؤسسات', label: 'للتشغيل المتكامل', text: 'للفرق متعددة الوحدات التي تحتاج عمليات مترابطة وتحكماً أوسع.', items: ['كل ما في النمو', 'الموارد البشرية والعمليات', 'تخصيص حسب الاحتياج'] },
   ];
   return (
-    <section className="bg-[#eef7f6] px-4 py-20 sm:px-6 lg:py-24">
+    <section className="bg-[#F1F3F6] px-4 py-20 sm:px-6 lg:py-24">
       <SectionHeading eyebrow="خطط مرنة" title="ادفع مقابل ما تحتاجه فعلاً" description="تبدأ كل منشأة من مستوى مختلف. استكشف المسار المناسب لك، وتواصل معنا إذا كان احتياجك يتطلب إعداداً خاصاً." />
       <div className="mx-auto mt-14 grid max-w-6xl gap-5 lg:grid-cols-3">
         {plans.map((plan, index) => <div key={plan.name} className={`relative rounded-3xl border bg-white p-7 ${index === 1 ? 'border-primary shadow-xl shadow-primary/10' : 'border-slate-200'}`}>{index === 1 && <span className="absolute -top-3 right-6 rounded-full bg-primary px-3 py-1 text-xs font-bold text-white">الأكثر اختياراً</span>}<p className="text-sm font-bold text-primary">{plan.label}</p><h3 className="mt-2 text-2xl font-black">{plan.name}</h3><p className="mt-3 min-h-14 text-sm leading-7 text-slate-500">{plan.text}</p><ul className="mt-6 space-y-3 border-t border-slate-100 pt-6">{plan.items.map((item) => <li key={item} className="flex items-center gap-2 text-sm font-semibold text-slate-700"><Check className="h-4 w-4 text-primary" />{item}</li>)}</ul><a href={route('/pricing')} className="mt-7 flex h-11 items-center justify-center rounded-xl border border-slate-200 text-sm font-bold text-slate-700 transition hover:border-primary hover:text-primary">عرض تفاصيل الخطط</a></div>)}
@@ -277,7 +277,7 @@ export function SecurityPerformance() {
 
 function FeatureRows({ title, description, items, tone, reversed = false }: { title: string; description: string; items: Array<{ icon: typeof ShieldCheck; title: string; text: string }>; tone: 'navy' | 'mint'; reversed?: boolean }) {
   return (
-    <section className={`px-4 py-20 sm:px-6 lg:py-24 ${tone === 'navy' ? 'bg-white' : 'bg-[#eef7f6]'}`}>
+    <section className={`px-4 py-20 sm:px-6 lg:py-24 ${tone === 'navy' ? 'bg-white' : 'bg-[#F1F3F6]'}`}>
       <div className={`mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-2 ${reversed ? 'lg:[&>*:first-child]:order-2' : ''}`}>
         <div><p className="text-sm font-bold text-primary">تفاصيل تهمك</p><h2 className="mt-3 text-3xl font-black text-slate-900 sm:text-4xl">{title}</h2><p className="mt-5 max-w-xl text-base leading-8 text-slate-500">{description}</p></div>
         <div className="grid gap-4 sm:grid-cols-2">{items.map(({ icon: Icon, title: itemTitle, text }) => <div key={itemTitle} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Icon className="h-5 w-5" /></div><h3 className="mt-4 font-black text-slate-900">{itemTitle}</h3><p className="mt-2 text-sm leading-6 text-slate-500">{text}</p></div>)}</div>
@@ -298,7 +298,7 @@ export function Features() {
   return (
     <MarketingShell eyebrow="كل ما تحتاجه في مساحة واحدة" title="مميزات صممت لتعمل معاً" description="ترصيد لا يضيف أدوات منفصلة فقط؛ بل يربط العمليات التي يعتمد بعضها على بعض حتى تصبح الصورة أسهل والفريق أسرع." actions={<ActionButtons secondary="/solutions" />}>
       <section className="px-4 py-20 sm:px-6 lg:py-28">
-        <div className="mx-auto grid max-w-6xl gap-5 sm:grid-cols-2 lg:grid-cols-3">{features.map(({ icon: Icon, title, text, href }) => <a key={title} href={route(href)} className="group rounded-3xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl hover:shadow-primary/10"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#e9f8f6] text-primary"><Icon className="h-6 w-6" /></div><h2 className="mt-6 text-xl font-black">{title}</h2><p className="mt-3 text-sm leading-7 text-slate-500">{text}</p><span className="mt-6 inline-flex items-center text-sm font-bold text-primary">اعرف المزيد <ChevronLeft className="ms-1 h-4 w-4 transition group-hover:-translate-x-1" /></span></a>)}</div>
+        <div className="mx-auto grid max-w-6xl gap-5 sm:grid-cols-2 lg:grid-cols-3">{features.map(({ icon: Icon, title, text, href }) => <a key={title} href={route(href)} className="group rounded-3xl border border-slate-200 bg-white p-7 shadow-sm transition hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl hover:shadow-primary/10"><div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[#F1F3F6] text-primary"><Icon className="h-6 w-6" /></div><h2 className="mt-6 text-xl font-black">{title}</h2><p className="mt-3 text-sm leading-7 text-slate-500">{text}</p><span className="mt-6 inline-flex items-center text-sm font-bold text-primary">اعرف المزيد <ChevronLeft className="ms-1 h-4 w-4 transition group-hover:-translate-x-1" /></span></a>)}</div>
       </section>
     </MarketingShell>
   );
@@ -308,7 +308,7 @@ export function Pricing() {
   return (
     <MarketingShell eyebrow="اختر ما يناسب مرحلتك" title="خطط مرنة لنمو أسرع" description="ابدأ بالوحدات التي تحتاجها الآن، وتوسع مع ترصيد كلما كبر فريقك وعملياتك. نساعدك على اختيار المسار المناسب دون تعقيد." actions={<ActionButtons secondary="/solutions" />}>
       <PlansPreview />
-      <section className="px-4 py-20 sm:px-6 lg:py-24"><div className="mx-auto max-w-4xl rounded-3xl bg-[#061d40] px-6 py-12 text-center text-white sm:px-12"><Building2 className="mx-auto h-8 w-8 text-teal-300" /><h2 className="mt-5 text-3xl font-black">احتياجك مختلف؟ نبني المسار معك</h2><p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-slate-300">للمنشآت متعددة الفروع أو العمليات الخاصة، تواصل معنا لنحدد الوحدات والصلاحيات والتجهيز الذي يناسبك.</p><a href={route('/')} className="mt-7 inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-white hover:bg-teal-600">ابدأ محادثة حول احتياجك <ArrowLeft className="h-4 w-4" /></a></div></section>
+      <section className="px-4 py-20 sm:px-6 lg:py-24"><div className="mx-auto max-w-4xl rounded-3xl bg-[#0A1328] px-6 py-12 text-center text-white sm:px-12"><Building2 className="mx-auto h-8 w-8 text-teal-300" /><h2 className="mt-5 text-3xl font-black">احتياجك مختلف؟ نبني المسار معك</h2><p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-slate-300">للمنشآت متعددة الفروع أو العمليات الخاصة، تواصل معنا لنحدد الوحدات والصلاحيات والتجهيز الذي يناسبك.</p><a href={route('/')} className="mt-7 inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-sm font-bold text-white hover:bg-teal-600">ابدأ محادثة حول احتياجك <ArrowLeft className="h-4 w-4" /></a></div></section>
     </MarketingShell>
   );
 }
@@ -326,7 +326,7 @@ export function ProductPage({ product }: { product: keyof typeof productConfigs 
   const Icon = config.icon;
   return (
     <MarketingShell eyebrow={config.accent} title={config.title} description={config.description} actions={<ActionButtons secondary="/features" />}>
-      <section className="px-4 py-20 sm:px-6 lg:py-28"><div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-[0.8fr_1.2fr]"><div className="rounded-3xl bg-[#061d40] p-8 text-white"><Icon className="h-9 w-9 text-teal-300" /><h2 className="mt-7 text-3xl font-black">وحدة تعمل مع بقية عملك</h2><p className="mt-4 text-sm leading-7 text-slate-300">القيمة لا تأتي من الوحدة وحدها، بل من اتصالها ببقية الصورة داخل ترصيد.</p></div><div><p className="text-sm font-bold text-primary">ماذا تحصل عليه؟</p><h2 className="mt-3 text-3xl font-black">أدوات عملية بدون تشتت</h2><div className="mt-8 grid gap-4 sm:grid-cols-2">{config.points.map((point) => <div key={point} className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-5"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" /><span className="text-sm font-semibold leading-6 text-slate-700">{point}</span></div>)}</div></div></div></section>
+      <section className="px-4 py-20 sm:px-6 lg:py-28"><div className="mx-auto grid max-w-6xl items-center gap-12 lg:grid-cols-[0.8fr_1.2fr]"><div className="rounded-3xl bg-[#0A1328] p-8 text-white"><Icon className="h-9 w-9 text-teal-300" /><h2 className="mt-7 text-3xl font-black">وحدة تعمل مع بقية عملك</h2><p className="mt-4 text-sm leading-7 text-slate-300">القيمة لا تأتي من الوحدة وحدها، بل من اتصالها ببقية الصورة داخل ترصيد.</p></div><div><p className="text-sm font-bold text-primary">ماذا تحصل عليه؟</p><h2 className="mt-3 text-3xl font-black">أدوات عملية بدون تشتت</h2><div className="mt-8 grid gap-4 sm:grid-cols-2">{config.points.map((point) => <div key={point} className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-5"><CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" /><span className="text-sm font-semibold leading-6 text-slate-700">{point}</span></div>)}</div></div></div></section>
       <section className="bg-white px-4 py-16 text-center sm:px-6"><h2 className="text-3xl font-black">جاهز لترتيب هذه العملية؟</h2><p className="mt-3 text-slate-500">ابدأ بتجربة ترصيد، ثم أضف ما تحتاجه عندما تكون جاهزاً.</p></section>
     </MarketingShell>
   );
@@ -342,7 +342,7 @@ export function ResourcePage({ kind }: { kind: 'help' | 'guide' | 'operations' |
   const Icon = data.icon;
   return (
     <MarketingShell eyebrow="مصادر ترصيد" title={data.title} description={data.description} actions={<ActionButtons secondary="/features" />}>
-      <section className="px-4 py-20 sm:px-6 lg:py-28"><div className="mx-auto max-w-4xl"><div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-primary/10 text-primary"><Icon className="h-8 w-8" /></div><h2 className="mt-8 text-center text-3xl font-black">مساحة أوضح لتبدأ بسرعة</h2><div className="mt-10 grid gap-4 sm:grid-cols-2">{data.items.map((item, index) => <div key={item} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#e9f8f6] text-sm font-black text-primary">{index + 1}</span><span className="text-sm font-bold text-slate-700">{item}</span></div>)}</div></div></section>
+      <section className="px-4 py-20 sm:px-6 lg:py-28"><div className="mx-auto max-w-4xl"><div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-primary/10 text-primary"><Icon className="h-8 w-8" /></div><h2 className="mt-8 text-center text-3xl font-black">مساحة أوضح لتبدأ بسرعة</h2><div className="mt-10 grid gap-4 sm:grid-cols-2">{data.items.map((item, index) => <div key={item} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#F1F3F6] text-sm font-black text-primary">{index + 1}</span><span className="text-sm font-bold text-slate-700">{item}</span></div>)}</div></div></section>
     </MarketingShell>
   );
 }
@@ -356,7 +356,7 @@ function BriefcaseIcon(props: React.ComponentProps<typeof Building2>) {
 }
 
 function BrandMark({ light = false }: { light?: boolean }) {
-  return <div className={`relative h-11 w-11 shrink-0 overflow-hidden ${light ? 'brightness-0 invert' : ''}`}><img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} /></div>;
+  return <div className="relative h-11 w-11 shrink-0 overflow-hidden"><img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '115px', right: '-34px', top: '-22px' }} /></div>;
 }
 
 export default MarketingShell;

@@ -73,18 +73,18 @@ export default function Guide() {
   ];
 
   return (
-    <div dir="rtl" className="min-h-screen bg-[#061d40] font-sans text-slate-900">
-      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#061d40]/95 shadow-lg backdrop-blur-xl">
+    <div dir="rtl" className="min-h-screen bg-[#0A1328] font-sans text-slate-900">
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-[#0A1328]/95 shadow-lg backdrop-blur-xl">
         <div className="mx-auto flex min-h-[72px] max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <Link href="/" className="flex items-center gap-3 text-white" aria-label="العودة إلى الصفحة الرئيسية">
             <span className="relative h-10 w-10 shrink-0 overflow-hidden">
-              <img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none brightness-0 invert" style={{ width: '105px', right: '-31px', top: '-20px' }} />
+              <img src={asset('logo-transparent.png')} alt="شعار ترصيد" className="absolute max-w-none" style={{ width: '105px', right: '-31px', top: '-20px' }} />
             </span>
             <span className="text-lg font-black">ترصيد</span>
           </Link>
           <div className="flex items-center gap-2 text-sm font-bold">
             <Link href="/" className="hidden rounded-xl px-3 py-2 text-slate-300 transition hover:bg-white/10 hover:text-white sm:inline-flex">الصفحة الرئيسية</Link>
-            <Link href="/manager" className="inline-flex min-h-10 items-center rounded-xl bg-teal-400 px-4 text-[#061d40] transition hover:bg-teal-300">تسجيل الدخول</Link>
+            <Link href="/manager" className="inline-flex min-h-10 items-center rounded-xl bg-teal-400 px-4 text-[#0A1328] transition hover:bg-teal-300">تسجيل الدخول</Link>
           </div>
         </div>
       </header>
@@ -95,7 +95,7 @@ export default function Guide() {
         <p className="mt-3 text-base text-slate-300">دليلك الشامل لتعظيم الاستفادة من المنصة، من إعداد الحساب حتى العمليات المتقدمة.</p>
       </div>
 
-      <div className="sticky top-0 z-10 mb-8 overflow-x-auto rounded-2xl border border-white/10 bg-[#0a2a4d]/95 p-2 shadow-lg backdrop-blur lg:hidden">
+      <div className="sticky top-0 z-10 mb-8 overflow-x-auto rounded-2xl border border-white/10 bg-[#0A1328]/95 p-2 shadow-lg backdrop-blur lg:hidden">
         <nav className="flex min-w-max gap-1" aria-label="فهرس الدليل على الجوال">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -106,10 +106,10 @@ export default function Guide() {
                 type="button"
                 onClick={() => scrollToSection(item.id)}
                 className={`inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-xs font-bold transition-colors ${
-                  isActive ? 'bg-teal-400 text-[#061d40]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                  isActive ? 'bg-teal-400 text-[#0A1328]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                 }`}
               >
-                <Icon className={`h-4 w-4 ${isActive ? 'text-[#061d40]' : 'text-teal-200'}`} />
+                <Icon className={`h-4 w-4 ${isActive ? 'text-[#0A1328]' : 'text-teal-200'}`} />
                 {item.label}
               </button>
             );
@@ -131,10 +131,10 @@ export default function Guide() {
                   type="button"
                   onClick={() => scrollToSection(item.id)}
                   className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
-                    isActive ? 'bg-teal-400 text-[#061d40]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                    isActive ? 'bg-teal-400 text-[#0A1328]' : 'text-slate-300 hover:bg-white/10 hover:text-white'
                   }`}
                 >
-                  <Icon className={`h-4 w-4 ${isActive ? 'text-[#061d40]' : 'text-teal-200'}`} />
+                  <Icon className={`h-4 w-4 ${isActive ? 'text-[#0A1328]' : 'text-teal-200'}`} />
                   {item.label}
                 </button>
               );

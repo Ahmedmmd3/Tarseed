@@ -92,9 +92,9 @@ export default function TestWorkspaceInvite() {
   };
 
   return (
-    <main className="flex min-h-[100dvh] items-center justify-center bg-[#061d40] px-4 py-10" dir="rtl" data-testid="page-test-workspace-invite">
+    <main className="flex min-h-[100dvh] items-center justify-center bg-[#0A1328] px-4 py-10" dir="rtl" data-testid="page-test-workspace-invite">
       <section className="w-full max-w-lg overflow-hidden rounded-3xl border border-white/10 bg-white shadow-2xl">
-        <header className="bg-gradient-to-l from-teal-600 to-[#0b315d] px-6 py-8 text-white sm:px-8">
+        <header className="bg-gradient-to-l from-teal-600 to-[#0D47D9] px-6 py-8 text-white sm:px-8">
           <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/20 bg-white/10">
             <FlaskConical className="h-6 w-6" />
           </span>
