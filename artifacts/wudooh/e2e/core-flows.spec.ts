@@ -97,6 +97,53 @@ test.describe('المسارات التشغيلية الأساسية', () => {
     await expect(activityRow).toContainText('مرحل');
   });
 
+  test('يعكس إلغاء المصروف المرحّل مؤشرات اللوحة ويعرض القيد العكسي المرحّل', async ({ authenticatedPage: page }) => {
+    const description = unique('مصروف إلغاء مؤشرات اللوحة');
+    const reason = unique('سبب إلغاء مصروف اللوحة');
+    const amount = 928.4;
+
+    await visitDashboardAndWaitForAccounting(page);
+    const expensesBefore = parseArabicNumber(await page.getByTestId('text-total-expenses').innerText());
+    const netProfitBefore = parseArabicNumber(await page.getByTestId('text-net-profit').innerText());
+
+    await page.goto('/expenses');
+    await expect(page.getByTestId('page-expenses')).toBeVisible();
+    await page.getByTestId('button-add-expenses').click();
+    await page.getByLabel('البيان').fill(description);
+    await page.getByLabel('المبلغ').fill(String(amount));
+    await page.getByLabel('التاريخ').fill(new Date().toISOString().slice(0, 10));
+    await page.getByLabel('التصنيف').selectOption('إيجار');
+    await page.getByLabel('طريقة الدفع').selectOption('cash');
+    await page.getByRole('button', { name: 'حفظ' }).click();
+
+    const expenseRow = page.getByRole('row').filter({ hasText: description });
+    await expect(expenseRow).toBeVisible();
+    await expenseRow.getByRole('button', { name: 'إلغاء من المصدر' }).click();
+    await expect(page.getByTestId('dialog-source-adjustment')).toBeVisible();
+    await page.getByTestId('input-source-adjustment-reason').fill(reason);
+
+    const adjustmentResponse = page.waitForResponse((response: Response) =>
+      response.request().method() === 'POST'
+      && response.url().includes('/api/accounting/sources/expenses/')
+      && response.url().endsWith('/cancel')
+      && response.ok());
+    await page.getByTestId('button-submit-source-adjustment').click();
+    await adjustmentResponse;
+    await expect(page.getByTestId('dialog-source-adjustment')).toBeHidden();
+    await expect(expenseRow.getByRole('button', { name: 'إلغاء من المصدر' })).toHaveCount(0);
+
+    await visitDashboardAndWaitForAccounting(page);
+    const expensesAfter = parseArabicNumber(await page.getByTestId('text-total-expenses').innerText());
+    const netProfitAfter = parseArabicNumber(await page.getByTestId('text-net-profit').innerText());
+    expect(expensesAfter).toBeCloseTo(expensesBefore, 2);
+    expect(netProfitAfter).toBeCloseTo(netProfitBefore, 2);
+
+    const activityPanel = page.getByTestId('panel-recent-activity');
+    const reversalRow = activityPanel.getByText(reason, { exact: false }).locator('..').locator('..');
+    await expect(reversalRow).toContainText('عكس مصروف');
+    await expect(reversalRow).toContainText('مرحل');
+  });
+
   test('يعرض المخزون والحسابات وإجراءات الإنشاء', async ({ authenticatedPage: page }) => {
     await page.goto('/inventory');
     await expect(page.getByTestId('page-inventory')).toBeVisible();
