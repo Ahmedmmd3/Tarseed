@@ -48,8 +48,73 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
     pdfPath,
     firstPageImagePath.replace(/\.png$/, ''),
   ]);
+  await expectPdfPageHasContent(firstPageImagePath, 'الصفحة الأولى');
+});
+
+test('يتحقق من سلامة كل الصفحات اللاحقة في تقرير PDF طويل', async ({ authenticatedPage: page }, testInfo) => {
+  const assets = Array.from({ length: 30 }, (_, index) => ({
+    id: `long-report-asset-${index + 1}`,
+    name: `أصل اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    amount: (index + 1) * 100,
+  }));
+  const totalAssets = assets.reduce((total, asset) => total + asset.amount, 0);
+
+  await page.route('**/api/accounting/summary?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        totals: { revenue: 0, expense: 0, netIncome: 0 },
+        trialBalance: [],
+        incomeStatement: { revenue: [], expense: [], netIncome: 0 },
+        balanceSheet: {
+          assets,
+          liabilities: [],
+          equity: [],
+          baseEquity: 0,
+          unclosedEarnings: 0,
+          totalAssets,
+          totalLiabilitiesAndEquity: totalAssets,
+        },
+      }),
+    });
+  });
+
+  await page.goto('/export');
+  await expect(page.getByTestId('page-export')).toBeVisible();
+  await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
+
+  const pdfDownloadPromise = page.waitForEvent('download');
+  await page.getByTestId('button-export-balance-pdf').click();
+  const pdfDownload = await pdfDownloadPromise;
+  const pdfPath = testInfo.outputPath('long-export-pdf-check.pdf');
+  await pdfDownload.saveAs(pdfPath);
+  expect((await stat(pdfPath)).size).toBeGreaterThan(0);
+
+  const { stdout: pdfInfo } = await execFileAsync('pdfinfo', [pdfPath]);
+  const pageCount = Number(pdfInfo.match(/^Pages:\s+(\d+)$/m)?.[1]);
+  expect(Number.isFinite(pageCount)).toBe(true);
+  expect(pageCount).toBeGreaterThan(1);
+
+  const laterPagePrefix = testInfo.outputPath('long-export-pdf-check-page');
+  await execFileAsync('pdftoppm', [
+    '-f', '2',
+    '-l', String(pageCount),
+    '-png',
+    pdfPath,
+    laterPagePrefix,
+  ]);
+
+  for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
+    const pageImagePath = `${laterPagePrefix}-${pageNumber}.png`;
+    expect((await stat(pageImagePath)).size).toBeGreaterThan(0);
+    await expectPdfPageHasContent(pageImagePath, `الصفحة ${pageNumber}`);
+  }
+});
+
+async function expectPdfPageHasContent(imagePath: string, pageLabel: string) {
   const { stdout } = await execFileAsync('magick', [
-    firstPageImagePath,
+    imagePath,
     '-alpha', 'off',
     '-colorspace', 'gray',
     '-threshold', '98%',
@@ -60,6 +125,6 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
   expect(Number.isFinite(nonWhitePixelRatio)).toBe(true);
   expect(
     nonWhitePixelRatio,
-    `الصفحة الأولى من PDF تحتوي على ${nonWhitePixelRatio * 100}% فقط من البكسلات غير البيضاء.`,
+    `${pageLabel} من PDF تحتوي على ${nonWhitePixelRatio * 100}% فقط من البكسلات غير البيضاء.`,
   ).toBeGreaterThanOrEqual(MIN_NON_WHITE_PIXEL_RATIO);
-});
+}
