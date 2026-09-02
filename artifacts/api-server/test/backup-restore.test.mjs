@@ -269,10 +269,14 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   assert.ok(accountsAfterInvalidRestores.payload.records.some((account) => account.name === "حساب بعد النسخة"));
 
   const staleGeneration = generationByCookie.get(cookie);
+  const reorderedBackup = {
+    ...exported.payload,
+    records: [...exported.payload.records].reverse(),
+  };
   const restored = await request("/backup/restore", {
     method: "POST",
     cookie,
-    body: exported.payload,
+    body: reorderedBackup,
   });
   assert.equal(restored.response.status, 200, JSON.stringify(restored.payload));
   assert.ok(restored.payload.dataGeneration > staleGeneration);

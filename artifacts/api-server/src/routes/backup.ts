@@ -128,8 +128,12 @@ function closureRecordDate(data: Record<string, unknown>): string {
 function calculateClosureSnapshot(records: BackupRecord[], from: string, to: string): ClosureSnapshot {
   const accounts: Array<Record<string, unknown> & { id: number }> = records
     .filter((record) => record.tableName === "accounts")
+    .sort((left, right) => left.id - right.id)
     .map((record) => ({ ...record.data, id: record.id }));
-  const journals = records.filter((record) => record.tableName === "journalEntries").map((record) => record.data);
+  const journals = records
+    .filter((record) => record.tableName === "journalEntries")
+    .sort((left, right) => left.id - right.id)
+    .map((record) => record.data);
   const balances = new Map(accounts.map((account) => [
     String(account.id),
     isFiniteNumber(account.openingBalance) ? account.openingBalance : isFiniteNumber(account.balance) ? account.balance : 0,
@@ -172,7 +176,8 @@ function calculateClosureSnapshot(records: BackupRecord[], from: string, to: str
     const credit = debitNormal ? -balance : balance;
     return { id: account.id as number, code: String(account.code), name: String(account.name), type: String(account.type), debit: Math.max(0, debit), credit: Math.max(0, credit) };
   });
-  const derivePartyBalances = (source: BackupRecord[], type: "receivable" | "payable") => source
+  const derivePartyBalances = (source: BackupRecord[], type: "receivable" | "payable") => [...source]
+    .sort((left, right) => left.id - right.id)
     .filter((record) => {
       const data = record.data;
       const date = closureRecordDate(data);
@@ -214,6 +219,19 @@ function sameJsonValue(left: unknown, right: unknown): boolean {
   return left === right;
 }
 
+function matchesExpectedRecordsById(actual: unknown[], expected: Array<Record<string, unknown>>): boolean {
+  if (actual.length !== expected.length) return false;
+  const expectedById = new Map(expected.map((record) => [record.id, record]));
+  const actualIds = new Set<number>();
+  return actual.every((value) => {
+    if (!isPlainRecord(value) || !isPositiveId(value.id) || actualIds.has(value.id)) return false;
+    actualIds.add(value.id);
+    const target = expectedById.get(value.id);
+    if (!target) return false;
+    return Object.entries(target).every(([key, expectedValue]) => sameJsonValue(value[key], expectedValue));
+  });
+}
+
 function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set<number>, expected: ClosureSnapshot): boolean {
   const totalKeys = ["revenue", "expense", "netIncome", "assets", "liabilities", "equity", "trialDebit", "trialCredit"];
   const totals = data.totals;
@@ -238,26 +256,16 @@ function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set
     && Math.abs(value.remaining - (value.amount - value.paid)) < 0.00001;
   const trialDebit = data.trialBalance.reduce((sum, line) => sum + Number((line as Record<string, unknown>).debit), 0);
   const trialCredit = data.trialBalance.reduce((sum, line) => sum + Number((line as Record<string, unknown>).credit), 0);
-  const expectedTrialBalance = expected.trialBalance;
-  const matchesExpectedTrialBalance = data.trialBalance.length === expectedTrialBalance.length
-    && data.trialBalance.every((line, index) => {
-      const actual = line as Record<string, unknown>;
-      const target = expectedTrialBalance[index];
-      return Object.entries(target).every(([key, value]) => sameJsonValue(actual[key], value));
-    });
-  const matchesExpectedParties = (actual: unknown[], target: Array<Record<string, unknown>>) => actual.length === target.length
-    && actual.every((item, index) => isPlainRecord(item)
-      && Object.entries(target[index]).every(([key, value]) => sameJsonValue(item[key], value)));
   return data.netIncome === numericTotals.netIncome
     && numericTotals.netIncome === numericTotals.revenue - numericTotals.expense
     && Math.abs(numericTotals.trialDebit - trialDebit) < 0.00001
     && Math.abs(numericTotals.trialCredit - trialCredit) < 0.00001
     && Math.abs(numericTotals.trialDebit - numericTotals.trialCredit) < 0.00001
     && totalKeys.every((key) => Math.abs(numericTotals[key as keyof ClosureTotals] - expected.totals[key as keyof ClosureTotals]) < 0.00001)
-    && matchesExpectedTrialBalance
+    && matchesExpectedRecordsById(data.trialBalance, expected.trialBalance)
     && data.receivables.every(hasValidPartyBalance) && data.payables.every(hasValidPartyBalance)
-    && matchesExpectedParties(data.receivables, expected.receivables)
-    && matchesExpectedParties(data.payables, expected.payables);
+    && matchesExpectedRecordsById(data.receivables, expected.receivables)
+    && matchesExpectedRecordsById(data.payables, expected.payables);
 }
 
 function validateBackupRecords(records: BackupRecord[], organizationId: number): string | null {
