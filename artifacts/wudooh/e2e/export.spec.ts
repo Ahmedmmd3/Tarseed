@@ -52,29 +52,116 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
 });
 
 test('يتحقق من سلامة كل الصفحات اللاحقة في تقرير PDF طويل', async ({ authenticatedPage: page }, testInfo) => {
-  const assets = Array.from({ length: 30 }, (_, index) => ({
+  const accounts = Array.from({ length: 30 }, (_, index) => ({
+    id: `long-report-account-${index + 1}`,
+    code: `1${String(index + 1).padStart(3, '0')}`,
+    name: `حساب اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    type: (['asset', 'liability', 'equity', 'revenue', 'expense'] as const)[index % 5],
+    parent: null,
+    openingBalance: 0,
+    balance: 0,
+    status: 'active',
+  }));
+  const journals = Array.from({ length: 30 }, (_, index) => {
+    const date = `2025-${String((index % 12) + 1).padStart(2, '0')}-15`;
+    const debitAccount = accounts[index % accounts.length];
+    const creditAccount = accounts[(index + 1) % accounts.length];
+    return {
+      id: `long-report-journal-${index + 1}`,
+      number: `JE-${String(index + 1).padStart(4, '0')}`,
+      date,
+      description: `وصف قيد اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+      status: 'posted',
+      lines: [
+        { id: `long-report-line-${index + 1}-debit`, accountId: debitAccount.id, debit: (index + 1) * 100, credit: 0 },
+        { id: `long-report-line-${index + 1}-credit`, accountId: creditAccount.id, debit: 0, credit: (index + 1) * 100 },
+      ],
+    };
+  });
+  const invoices = Array.from({ length: 30 }, (_, index) => ({
+    id: `long-report-invoice-${index + 1}`,
+    number: `INV-${String(index + 1).padStart(4, '0')}`,
+    date: `2025-${String((index % 12) + 1).padStart(2, '0')}-16`,
+    customer: `عميل اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    subtotal: (index + 1) * 200,
+    tax: (index + 1) * 30,
+    total: (index + 1) * 230,
+    status: 'paid',
+  }));
+  const expenses = Array.from({ length: 30 }, (_, index) => ({
+    id: `long-report-expense-${index + 1}`,
+    date: `2025-${String((index % 12) + 1).padStart(2, '0')}-17`,
+    description: `مصروف اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    category: `فئة ${((index % 6) + 1).toString()}`,
+    vendor: `مورد اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    amount: (index + 1) * 75,
+    paymentMethod: 'bank',
+  }));
+  const trialBalance = accounts.map((account, index) => ({
+    id: account.id,
+    code: account.code,
+    name: account.name,
+    type: account.type,
+    debit: (index + 1) * 100,
+    credit: (index + 1) * 80,
+  }));
+  const revenue = Array.from({ length: 20 }, (_, index) => ({
+    id: `long-report-revenue-${index + 1}`,
+    name: `إيراد اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    amount: (index + 1) * 250,
+  }));
+  const expense = Array.from({ length: 20 }, (_, index) => ({
+    id: `long-report-income-expense-${index + 1}`,
+    name: `مصروف قائمة دخل طويل ${String(index + 1).padStart(2, '0')}`,
+    amount: (index + 1) * 90,
+  }));
+  const assets = Array.from({ length: 20 }, (_, index) => ({
     id: `long-report-asset-${index + 1}`,
     name: `أصل اختباري طويل ${String(index + 1).padStart(2, '0')}`,
     amount: (index + 1) * 100,
   }));
-  const totalAssets = assets.reduce((total, asset) => total + asset.amount, 0);
+  const liabilities = Array.from({ length: 15 }, (_, index) => ({
+    id: `long-report-liability-${index + 1}`,
+    name: `التزام اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    amount: (index + 1) * 60,
+  }));
+  const equity = Array.from({ length: 15 }, (_, index) => ({
+    id: `long-report-equity-${index + 1}`,
+    name: `حقوق ملكية اختبارية طويلة ${String(index + 1).padStart(2, '0')}`,
+    amount: (index + 1) * 40,
+  }));
 
+  const apiPayloads: Record<string, unknown> = {
+    accounts,
+    journalEntries: journals,
+    invoices,
+    expenses,
+  };
+  for (const [resource, payload] of Object.entries(apiPayloads)) {
+    await page.route(`**/api/data/${resource}**`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(payload),
+      });
+    });
+  }
   await page.route('**/api/accounting/summary?**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        totals: { revenue: 0, expense: 0, netIncome: 0 },
-        trialBalance: [],
-        incomeStatement: { revenue: [], expense: [], netIncome: 0 },
+        totals: { revenue: 52_500, expense: 18_900, netIncome: 33_600 },
+        trialBalance,
+        incomeStatement: { revenue, expense, netIncome: 33_600 },
         balanceSheet: {
           assets,
-          liabilities: [],
-          equity: [],
-          baseEquity: 0,
-          unclosedEarnings: 0,
-          totalAssets,
-          totalLiabilitiesAndEquity: totalAssets,
+          liabilities,
+          equity,
+          baseEquity: 25_000,
+          unclosedEarnings: 8_600,
+          totalAssets: 48_000,
+          totalLiabilitiesAndEquity: 48_000,
         },
       }),
     });
@@ -82,33 +169,39 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
 
   await page.goto('/export');
   await expect(page.getByTestId('page-export')).toBeVisible();
+  await page.getByTestId('input-export-from').fill('2025-01-01');
+  await page.getByTestId('input-export-to').fill('2025-12-31');
   await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
 
-  const pdfDownloadPromise = page.waitForEvent('download');
-  await page.getByTestId('button-export-balance-pdf').click();
-  const pdfDownload = await pdfDownloadPromise;
-  const pdfPath = testInfo.outputPath('long-export-pdf-check.pdf');
-  await pdfDownload.saveAs(pdfPath);
-  expect((await stat(pdfPath)).size).toBeGreaterThan(0);
+  const reportIds = ['journals', 'trial', 'ledger', 'invoices', 'expenses', 'income', 'balance'] as const;
+  for (const reportId of reportIds) {
+    const pdfDownloadPromise = page.waitForEvent('download');
+    await page.getByTestId(`button-export-${reportId}-pdf`).click();
+    const pdfDownload = await pdfDownloadPromise;
+    const pdfPath = testInfo.outputPath(`long-export-${reportId}.pdf`);
+    await pdfDownload.saveAs(pdfPath);
+    expect((await stat(pdfPath)).size).toBeGreaterThan(0);
 
-  const { stdout: pdfInfo } = await execFileAsync('pdfinfo', [pdfPath]);
-  const pageCount = Number(pdfInfo.match(/^Pages:\s+(\d+)$/m)?.[1]);
-  expect(Number.isFinite(pageCount)).toBe(true);
-  expect(pageCount).toBeGreaterThan(1);
+    const { stdout: pdfInfo } = await execFileAsync('pdfinfo', [pdfPath]);
+    const pageCount = Number(pdfInfo.match(/^Pages:\s+(\d+)$/m)?.[1]);
+    expect(Number.isFinite(pageCount), `${reportId} PDF should expose a page count.`).toBe(true);
+    expect(pageCount, `${reportId} PDF should span more than one page.`).toBeGreaterThan(1);
 
-  const laterPagePrefix = testInfo.outputPath('long-export-pdf-check-page');
-  await execFileAsync('pdftoppm', [
-    '-f', '2',
-    '-l', String(pageCount),
-    '-png',
-    pdfPath,
-    laterPagePrefix,
-  ]);
+    const laterPagePrefix = testInfo.outputPath(`long-export-${reportId}-page`);
+    await execFileAsync('pdftoppm', [
+      '-f', '2',
+      '-l', String(pageCount),
+      '-png',
+      pdfPath,
+      laterPagePrefix,
+    ]);
 
-  for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
-    const pageImagePath = `${laterPagePrefix}-${pageNumber}.png`;
-    expect((await stat(pageImagePath)).size).toBeGreaterThan(0);
-    await expectPdfPageHasContent(pageImagePath, `الصفحة ${pageNumber}`);
+    for (let pageNumber = 2; pageNumber <= pageCount; pageNumber += 1) {
+      const pageImagePath = `${laterPagePrefix}-${pageNumber}.png`;
+      expect((await stat(pageImagePath)).size).toBeGreaterThan(0);
+      await expectPdfPageHasContent(pageImagePath, `${reportId} — الصفحة ${pageNumber}`);
+    }
+    await expect(page.getByTestId(`button-export-${reportId}-pdf`)).toBeEnabled();
   }
 });
 
