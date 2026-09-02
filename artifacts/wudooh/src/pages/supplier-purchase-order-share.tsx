@@ -219,14 +219,14 @@ export default function SupplierPurchaseOrderShare() {
                 <span className="text-sm text-slate-500">{document.warehouseName || 'موقع التسليم غير محدد'}</span>
               </div>
               <div className="overflow-x-auto rounded-2xl border border-slate-200">
-                <table className="w-full min-w-[620px] text-right text-sm">
+                <table className="w-full min-w-[620px] table-fixed text-right text-sm" dir="rtl">
                   <thead className="bg-slate-900 text-white">
                     <tr>
-                      <th className="px-4 py-3 font-bold">الصنف</th>
-                      <th className="px-4 py-3 font-bold">الكمية</th>
-                      <th className="px-4 py-3 font-bold">سعر الوحدة</th>
-                      <th className="px-4 py-3 font-bold">الضريبة</th>
-                      <th className="px-4 py-3 font-bold">الإجمالي</th>
+                      <th className="w-[36%] whitespace-nowrap px-4 py-3 font-bold">الصنف</th>
+                      <th className="w-[14%] whitespace-nowrap px-4 py-3 font-bold">الكمية</th>
+                      <th className="w-[18%] whitespace-nowrap px-4 py-3 font-bold">سعر الوحدة</th>
+                      <th className="w-[14%] whitespace-nowrap px-4 py-3 font-bold">الضريبة</th>
+                      <th className="w-[18%] whitespace-nowrap px-4 py-3 font-bold">الإجمالي</th>
                     </tr>
                   </thead>
                   <tbody>

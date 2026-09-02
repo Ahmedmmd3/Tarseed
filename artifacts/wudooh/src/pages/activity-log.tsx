@@ -314,8 +314,8 @@ function AuditJournalSnapshot({ title, journal }: { title: string; journal?: Aud
         {journal?.adjustsJournalId != null && <span className="rounded bg-slate-200 px-2 py-1">يرتبط بالقيد: {journal.adjustsJournalId}</span>}
       </div>
       <div className="mt-2 overflow-x-auto rounded-md border border-slate-200 bg-white">
-        <table className="w-full min-w-[360px] text-right">
-          <thead className="bg-slate-100 text-slate-500"><tr><th className="px-2 py-1.5">الحساب</th><th className="px-2 py-1.5">مدين</th><th className="px-2 py-1.5">دائن</th></tr></thead>
+         <table className="w-full min-w-[360px] table-fixed text-right" dir="rtl">
+           <thead className="bg-slate-100 text-slate-500"><tr><th className="w-[50%] whitespace-nowrap px-2 py-1.5">الحساب</th><th className="w-[25%] whitespace-nowrap px-2 py-1.5">مدين</th><th className="w-[25%] whitespace-nowrap px-2 py-1.5">دائن</th></tr></thead>
           <tbody>
             {(journal?.lines ?? []).map((line, index) => (
               <tr key={`${line.accountId ?? index}-${index}`} className="border-t border-slate-100">

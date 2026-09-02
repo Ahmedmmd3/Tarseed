@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles, RotateCcw, FilePenLine, Paperclip } from 'lucide-react';
 import { SourceDocumentAdjustmentDialog } from '@/components/accounting/source-document-adjustment-dialog';
 import { AttachmentsPanel } from '@/components/attachments-panel';
@@ -321,11 +321,9 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
             )}
             {supportsTransfer && <TransferDialog tableName={table} title={title} importEnabled={table !== 'invoices' && table !== 'purchaseOrders'} onImported={load} />}
             {!readOnly && <Dialog open={open} onOpenChange={setOpen}>
-              <DialogTrigger asChild>
-                <Button onClick={() => handleOpen()} className="h-11 w-full gap-2 bg-teal-600 hover:bg-teal-700 sm:w-auto" data-testid={`button-add-${table}`}>
-                  <Plus className="h-4 w-4" /> إضافة
-                </Button>
-              </DialogTrigger>
+              <Button type="button" onClick={() => handleOpen()} className="h-11 w-full gap-2 bg-teal-600 hover:bg-teal-700 sm:w-auto" data-testid={`button-add-${table}`}>
+                <Plus className="h-4 w-4" /> إضافة
+              </Button>
               <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] rounded-2xl p-5 sm:w-full sm:p-6">
                 <DialogHeader>
                   <DialogTitle>{editingId ? 'تعديل' : 'إضافة'} {title}</DialogTitle>

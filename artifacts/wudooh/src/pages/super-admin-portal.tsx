@@ -570,7 +570,7 @@ export default function SuperAdminPortal() {
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1200px] text-right text-sm">
+             <table className="w-full min-w-[1200px] table-fixed text-right text-sm" dir="rtl">
               <thead className="bg-slate-50 text-xs font-bold text-slate-500">
                 <tr>
                   <th className="px-5 py-3">المنشأة</th>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, FileText, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
 import { Link } from 'wouter';
-import { useStore } from '@/context/store';
+import { useStore, type Journal } from '@/context/store';
 import { Button } from '@/components/ui/button';
 import { useCrud } from '@/hooks/use-crud';
 import './overview.css';
@@ -26,26 +26,55 @@ type StoredWeeklySummary = {
   generatedAt: string;
 };
 
+type DashboardAccountingSummary = {
+  totals: {
+    revenue: number;
+    expense: number;
+    netIncome: number;
+  };
+  incomeStatement: {
+    expense: Array<{
+      id: string | number;
+      name: string;
+      amount: number;
+    }>;
+  };
+};
+
 const weeklySummaryStoragePrefix = 'wudooh-weekly-summary-v1';
 
 export default function Overview() {
-  const { accounts, receivables, journals, currentUser } = useStore();
+  const { accounts, receivables, journals, currentUser, connectionMode } = useStore();
   const [weeklySummary, setWeeklySummary] = useState('');
   const [weeklySummaryGeneratedAt, setWeeklySummaryGeneratedAt] = useState('');
   const [isGeneratingWeeklySummary, setIsGeneratingWeeklySummary] = useState(false);
   const [weeklySummaryError, setWeeklySummaryError] = useState('');
   const [weeklySummaryStorageWarning, setWeeklySummaryStorageWarning] = useState('');
   const [copyConfirmed, setCopyConfirmed] = useState(false);
+  const [accountingSummary, setAccountingSummary] = useState<DashboardAccountingSummary | null>(null);
+  const [dashboardJournals, setDashboardJournals] = useState<Journal[]>(journals);
   const weeklySummaryIdentityRef = useRef('');
-  const totalRevenue = accounts.filter((account) => account.type === 'revenue').reduce((sum, account) => sum + account.balance, 0);
-  const totalExpense = accounts.filter((account) => account.type === 'expense').reduce((sum, account) => sum + account.balance, 0);
-  const netProfit = totalRevenue - totalExpense;
+  const canReadAccounting = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.accounting === true));
+  const localRevenue = accounts.filter((account) => account.type === 'revenue').reduce((sum, account) => sum + account.balance, 0);
+  const localExpense = accounts.filter((account) => account.type === 'expense').reduce((sum, account) => sum + account.balance, 0);
+  const totalRevenue = accountingSummary?.totals.revenue ?? localRevenue;
+  const totalExpense = accountingSummary?.totals.expense ?? localExpense;
+  const netProfit = accountingSummary?.totals.netIncome ?? totalRevenue - totalExpense;
   const totalReceivables = receivables.filter((record) => record.type === 'receivable').reduce((sum, record) => sum + (record.amount - record.paid), 0);
   const totalPayables = receivables.filter((record) => record.type === 'payable').reduce((sum, record) => sum + (record.amount - record.paid), 0);
   const pendingReceivables = receivables.filter((record) => record.status !== 'paid').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 4);
-  const topExpenses = accounts.filter((account) => account.type === 'expense').sort((a, b) => b.balance - a.balance).slice(0, 4);
-  const canReadSales = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.sales === true));
+  const topExpenses = accountingSummary
+    ? accountingSummary.incomeStatement.expense
+      .filter((account) => account.amount > 0)
+      .sort((left, right) => right.amount - left.amount)
+      .slice(0, 4)
+      .map((account) => ({ id: String(account.id), name: account.name, code: '', balance: account.amount }))
+    : accounts
+      .filter((account) => account.type === 'expense')
+      .sort((a, b) => b.balance - a.balance)
+      .slice(0, 4);
   const canReadInventory = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.inventory === true));
+  const canReadSales = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.sales === true));
   const quotationsCrud = useCrud<any>('quotations', canReadSales);
   const purchaseOrdersCrud = useCrud<any>('purchaseOrders', canReadInventory);
   const today = new Date().toISOString().slice(0, 10);
@@ -57,7 +86,11 @@ export default function Overview() {
     order.status === 'draft' || order.status === 'sent' || order.status === 'partial');
   const overduePurchaseOrders = pendingPurchaseOrders.filter((order: any) =>
     String(order.expectedDate ?? '') !== '' && String(order.expectedDate) < today);
-  const journalTrend = journalTrendFor(journals);
+  const journalTrend = journalTrendFor(dashboardJournals);
+  const recentJournals = dashboardJournals
+    .slice()
+    .sort((left, right) => compareJournalRecency(left, right))
+    .slice(0, 6);
   const visibleModules = modules.filter((module) => !currentUser || currentUser.roleId === 'owner' || currentUser.permissions[module.permission] === true);
   const canUseWeeklySummary = Boolean(
     currentUser
@@ -66,6 +99,72 @@ export default function Overview() {
   weeklySummaryIdentityRef.current = currentUser && canUseWeeklySummary
     ? `${currentUser.organizationId}:${currentUser.id}`
     : '';
+
+  useEffect(() => {
+    if (connectionMode !== 'remote' || !canReadAccounting) {
+      setAccountingSummary(null);
+      return;
+    }
+    let active = true;
+    const year = new Date().getFullYear();
+    void (async () => {
+      try {
+        const response = await fetch(`/api/accounting/summary?from=${year}-01-01&to=${today}`, {
+          credentials: 'include',
+        });
+        if (!response.ok) return;
+        const payload = await response.json() as Partial<DashboardAccountingSummary>;
+        if (
+          active
+          && payload.totals
+          && payload.incomeStatement
+          && Array.isArray(payload.incomeStatement.expense)
+          && Number.isFinite(Number(payload.totals.revenue))
+          && Number.isFinite(Number(payload.totals.expense))
+          && Number.isFinite(Number(payload.totals.netIncome))
+        ) {
+          setAccountingSummary({
+            totals: {
+              revenue: Number(payload.totals.revenue),
+              expense: Number(payload.totals.expense),
+              netIncome: Number(payload.totals.netIncome),
+            },
+            incomeStatement: {
+              expense: payload.incomeStatement.expense
+                .map((account) => ({
+                  id: account.id,
+                  name: String(account.name ?? 'مصروف غير محدد'),
+                  amount: Number(account.amount),
+                }))
+                .filter((account) => Number.isFinite(account.amount)),
+            },
+          });
+        }
+      } catch {
+        // The local account snapshot remains available when the summary is unavailable.
+      }
+    })();
+    return () => { active = false; };
+  }, [canReadAccounting, connectionMode, currentUser?.dataGeneration, currentUser?.organizationId, today]);
+
+  useEffect(() => {
+    if (connectionMode !== 'remote' || !canReadAccounting) {
+      setDashboardJournals(journals);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const response = await fetch('/api/data/journalEntries', { credentials: 'include' });
+        if (!response.ok) return;
+        const payload = await response.json() as { records?: Journal[] };
+        if (active && Array.isArray(payload.records)) setDashboardJournals(payload.records);
+      } catch {
+        // Keep the shared store snapshot when the activity refresh is unavailable.
+      }
+    })();
+    return () => { active = false; };
+  }, [canReadAccounting, connectionMode, currentUser?.dataGeneration, currentUser?.organizationId, journals]);
 
   useEffect(() => {
     setWeeklySummary('');
@@ -176,9 +275,10 @@ export default function Overview() {
           <div><p className="text-xs font-bold text-teal-200">صورة سريعة</p><h2 id="financial-summary-heading" className="mt-1 text-xl font-black sm:text-2xl">ملخصك المالي</h2></div>
           <Link href="/reports" className="hidden items-center gap-1 text-xs font-bold text-teal-200 transition hover:text-white sm:inline-flex" data-testid="link-financial-reports">عرض كل التقارير <ArrowLeft className="h-3.5 w-3.5" /></Link>
         </div>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard title="صافي الربح" value={formatCurrency(netProfit)} note="الإيرادات ناقص المصروفات" icon={Wallet} tone="teal" testId="text-net-profit" />
-          <MetricCard title="إجمالي الإيرادات" value={formatCurrency(totalRevenue)} note="إيرادات الحسابات المسجلة" icon={ArrowUpRight} tone="blue" testId="text-total-revenue" />
+           <MetricCard title="إجمالي الإيرادات" value={formatCurrency(totalRevenue)} note="منذ بداية السنة المالية" icon={ArrowUpRight} tone="blue" testId="text-total-revenue" />
+           <MetricCard title="إجمالي المصروفات" value={formatCurrency(totalExpense)} note="المصروفات المرحّلة" icon={ArrowDownRight} tone="rose" testId="text-total-expenses" />
           <MetricCard title="الذمم المدينة (لنا)" value={formatCurrency(totalReceivables)} note="مبالغ مستحقة من العملاء" icon={ArrowUpRight} tone="sky" testId="text-total-receivables" />
           <MetricCard title="الذمم الدائنة (علينا)" value={formatCurrency(totalPayables)} note="مبالغ مستحقة للموردين" icon={ArrowDownRight} tone="rose" testId="text-total-payables" />
         </div>
@@ -260,14 +360,14 @@ export default function Overview() {
         </DataPanel>
         <DataPanel title="آخر النشاطات" subtitle="أحدث القيود المسجلة في السجل" icon={ReceiptText} testId="panel-recent-activity">
           <div className="overview-activity-list">
-            {journals.slice(-4).reverse().map((journal) => (
+             {recentJournals.map((journal) => (
               <div className="overview-activity-row" key={journal.id} data-testid={`row-activity-${journal.id}`}>
                 <span className="overview-activity-icon"><FileText className="h-4 w-4" aria-hidden="true" /></span>
-                <div className="min-w-0 flex-1"><p className="truncate font-bold text-slate-800">{journal.description}</p><p className="text-xs text-slate-400">{journal.number} · {journal.date}</p></div>
+                 <div className="min-w-0 flex-1"><p className="truncate font-bold text-slate-800">{journal.description}</p><p className="text-xs text-slate-400">{journal.number} · {journal.date} · {journalSourceLabel(journal.sourceType)}</p></div>
                 <span className={`overview-status ${journal.status === 'posted' ? 'is-complete' : 'is-pending'}`}>{journal.status === 'posted' ? 'مرحل' : 'مسودة'}</span>
               </div>
             ))}
-            {journals.length === 0 && <EmptyState text="لا توجد نشاطات مسجلة" />}
+             {recentJournals.length === 0 && <EmptyState text="لا توجد نشاطات مسجلة" />}
           </div>
         </DataPanel>
       </section>
@@ -286,7 +386,7 @@ export default function Overview() {
         </DataPanel>
         <DataPanel title="مستحقات قريبة الأجل" subtitle="تابع التحصيل والدفع القادم" icon={Wallet} testId="panel-due-soon">
           {pendingReceivables.length > 0 ? (
-            <div className="overflow-x-auto"><table className="overview-table"><thead><tr><th>الطرف</th><th>الاستحقاق</th><th>المبلغ</th></tr></thead><tbody>{pendingReceivables.map((record) => <tr key={record.id} data-testid={`row-receivable-${record.id}`}><td><strong>{record.party}</strong><small>{record.type === 'receivable' ? 'تحصيل' : 'دفع'}</small></td><td>{record.dueDate}</td><td className="overview-table-amount">{formatCurrency(record.amount - record.paid)}</td></tr>)}</tbody></table></div>
+            <div className="overflow-x-auto"><table className="overview-table" dir="rtl"><thead><tr><th>الطرف</th><th>الاستحقاق</th><th>المبلغ</th></tr></thead><tbody>{pendingReceivables.map((record) => <tr key={record.id} data-testid={`row-receivable-${record.id}`}><td><strong>{record.party}</strong><small>{record.type === 'receivable' ? 'تحصيل' : 'دفع'}</small></td><td>{record.dueDate}</td><td className="overview-table-amount">{formatCurrency(record.amount - record.paid)}</td></tr>)}</tbody></table></div>
           ) : <EmptyState text="لا توجد مستحقات معلقة" />}
         </DataPanel>
       </section>
@@ -327,6 +427,19 @@ function journalTrendFor(journals: Array<{ date: string }>) {
     label: date.slice(5),
     height: Math.max(12, Math.round((byDate[date] / max) * 100)),
   }));
+}
+
+function compareJournalRecency(left: { date: string; id: string }, right: { date: string; id: string }): number {
+  return String(right.date).localeCompare(String(left.date))
+    || String(right.id).localeCompare(String(left.id), undefined, { numeric: true });
+}
+
+function journalSourceLabel(sourceType?: string): string {
+  if (sourceType === 'expense' || sourceType === 'expenses') return 'مصروف';
+  if (sourceType === 'sale') return 'بيع';
+  if (sourceType === 'purchase') return 'شراء';
+  if (sourceType === 'opening_balance' || sourceType === 'opening_balance_correction') return 'رصيد افتتاحي';
+  return 'قيد يدوي';
 }
 
 function formatCurrency(amount: number) {

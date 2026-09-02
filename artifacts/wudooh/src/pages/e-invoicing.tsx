@@ -223,15 +223,15 @@ function DocumentsTab() {
         </Button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-right text-sm">
+         <table className="w-full table-fixed text-right text-sm" dir="rtl">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50/80 text-slate-500">
-              <th className="px-5 py-4 font-bold">رقم المستند</th>
-              <th className="px-5 py-4 font-bold">النوع</th>
-              <th className="px-5 py-4 font-bold">المرجع والضريبة</th>
-              <th className="px-5 py-4 font-bold">التاريخ</th>
-              <th className="px-5 py-4 font-bold">الحالة</th>
-              <th className="px-5 py-4 font-bold text-center">الإجراءات</th>
+               <th className="w-[16%] whitespace-nowrap px-5 py-4 font-bold">رقم المستند</th>
+               <th className="w-[12%] whitespace-nowrap px-5 py-4 font-bold">النوع</th>
+               <th className="w-[27%] whitespace-nowrap px-5 py-4 font-bold">المرجع والضريبة</th>
+               <th className="w-[18%] whitespace-nowrap px-5 py-4 font-bold">التاريخ</th>
+               <th className="w-[15%] whitespace-nowrap px-5 py-4 font-bold">الحالة</th>
+               <th className="w-[12%] whitespace-nowrap px-5 py-4 font-bold text-center">الإجراءات</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">

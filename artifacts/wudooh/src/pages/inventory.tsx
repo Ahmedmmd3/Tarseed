@@ -29,8 +29,8 @@ function InventoryBalances({ data, products, warehouses, loading }: { data: Bala
   if (loading) return <LoadingState />;
   return (
     <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-      <Table className="min-w-[480px]">
-        <TableHeader><TableRow><TableHead>المنتج</TableHead><TableHead>الموقع</TableHead><TableHead>الكمية</TableHead><TableHead>القيمة التقريبية</TableHead></TableRow></TableHeader>
+      <Table className="min-w-[560px]">
+        <TableHeader><TableRow><TableHead className="w-[34%]">المنتج</TableHead><TableHead className="w-[28%]">الموقع</TableHead><TableHead className="w-[16%] text-center">الكمية</TableHead><TableHead className="w-[22%] text-left">القيمة التقريبية</TableHead></TableRow></TableHeader>
         <TableBody>
           {data.map((item) => {
             const product = products.find(p => String(p.id) === String(item.productId));
@@ -40,8 +40,8 @@ function InventoryBalances({ data, products, warehouses, loading }: { data: Bala
               <TableRow key={item.id}>
                 <TableCell>{product?.name ?? `#${item.productId}`}</TableCell>
                 <TableCell>{labelFor(warehouses, item.warehouseId)}</TableCell>
-                <TableCell className="font-bold text-teal-700">{item.quantity}</TableCell>
-                <TableCell className="text-slate-500">{cost > 0 ? formatCurrency(approxValue) : '—'}</TableCell>
+                <TableCell className="text-center font-bold text-teal-700">{item.quantity}</TableCell>
+                <TableCell className="text-left text-slate-500">{cost > 0 ? formatCurrency(approxValue) : '—'}</TableCell>
               </TableRow>
             );
           })}
@@ -128,7 +128,7 @@ function TransferWorkspace({ transfers, products, warehouses, loading, onChanged
           </DialogContent>
         </Dialog>
       </div>
-      {loading ? <LoadingState /> : <div className="rounded-2xl border border-slate-100 bg-white shadow-sm"><Table className="min-w-[760px]"><TableHeader><TableRow><TableHead>المنتج</TableHead><TableHead>من</TableHead><TableHead>إلى</TableHead><TableHead>الكمية</TableHead><TableHead>الحالة</TableHead><TableHead>الإجراء</TableHead></TableRow></TableHeader><TableBody>
+       {loading ? <LoadingState /> : <div className="rounded-2xl border border-slate-100 bg-white shadow-sm"><Table className="min-w-[760px]"><TableHeader><TableRow><TableHead className="w-[24%]">المنتج</TableHead><TableHead className="w-[18%]">من</TableHead><TableHead className="w-[18%]">إلى</TableHead><TableHead className="w-[12%] text-center">الكمية</TableHead><TableHead className="w-[14%]">الحالة</TableHead><TableHead className="w-[14%]">الإجراء</TableHead></TableRow></TableHeader><TableBody>
         {transfers.map((transfer) => <TableRow key={transfer.id}><TableCell>{labelFor(products, transfer.productId)}</TableCell><TableCell>{labelFor(warehouses, transfer.fromWarehouseId)}</TableCell><TableCell>{labelFor(warehouses, transfer.toWarehouseId)}</TableCell><TableCell>{transfer.quantity}</TableCell><TableCell>{transfer.status === 'pending' ? 'بانتظار الاعتماد' : transfer.status === 'approved' ? 'معتمد' : transfer.status === 'received' ? 'مستلم' : 'ملغي'}</TableCell><TableCell>{transfer.status === 'pending' ? <div className="flex gap-2"><Button size="sm" variant="outline" disabled={submitting} onClick={() => void transition(transfer, 'approve')}>اعتماد</Button><Button size="sm" variant="outline" disabled={submitting} className="text-rose-700" onClick={() => void transition(transfer, 'cancel')}>إلغاء</Button></div> : transfer.status === 'approved' ? <Button size="sm" variant="outline" disabled={submitting} onClick={() => void transition(transfer, 'receive')}>استلام</Button> : <span className="text-xs text-slate-400">لا توجد إجراءات</span>}</TableCell></TableRow>)}
         {!transfers.length && <EmptyRow columns={6} text="لا توجد تحويلات ضمن مواقعك." />}
       </TableBody></Table></div>}
@@ -172,7 +172,7 @@ function AdjustmentWorkspace({ adjustments, products, warehouses, loading, onCha
   return (
     <div className="space-y-4">
       <div className="flex justify-end"><Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button className="gap-2 bg-teal-600 hover:bg-teal-700" data-testid="button-create-adjustment"><Plus className="h-4 w-4" />تسوية مخزون</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>تسوية مخزون</DialogTitle></DialogHeader><form onSubmit={submit} className="grid grid-cols-1 gap-4 py-4 sm:grid-cols-2"><FieldSelect id="adjustment-product" label="المنتج" value={form.productId} onChange={(productId) => setForm({ ...form, productId })} options={products} required /><FieldSelect id="adjustment-warehouse" label="الموقع" value={form.warehouseId} onChange={(warehouseId) => setForm({ ...form, warehouseId })} options={activeWarehouses} required /><FieldNumber id="adjustment-quantity" label="الكمية الفعلية" value={form.actualQuantity} onChange={(actualQuantity) => setForm({ ...form, actualQuantity })} min={0} /><FieldDate id="adjustment-date" label="التاريخ" value={form.date} onChange={(date) => setForm({ ...form, date })} /><div className="col-span-full space-y-2"><Label htmlFor="adjustment-reason">سبب التسوية</Label><Input id="adjustment-reason" required value={form.reason} onChange={(event) => setForm({ ...form, reason: event.target.value })} /></div><div className="col-span-full flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setOpen(false)}>إلغاء</Button><Button type="submit" disabled={submitting}>{submitting ? <LoaderCircle className="animate-spin" /> : 'اعتماد التسوية'}</Button></div></form></DialogContent></Dialog></div>
-      {loading ? <LoadingState /> : <div className="rounded-2xl border border-slate-100 bg-white shadow-sm"><Table className="min-w-[760px]"><TableHeader><TableRow><TableHead>المنتج</TableHead><TableHead>الموقع</TableHead><TableHead>الكمية الفعلية</TableHead><TableHead>الفرق</TableHead><TableHead>السبب</TableHead><TableHead>التاريخ</TableHead></TableRow></TableHeader><TableBody>{adjustments.map((adjustment) => <TableRow key={adjustment.id}><TableCell>{labelFor(products, adjustment.productId)}</TableCell><TableCell>{labelFor(warehouses, adjustment.warehouseId)}</TableCell><TableCell>{adjustment.actualQuantity}</TableCell><TableCell>{adjustment.delta ?? '—'}</TableCell><TableCell>{adjustment.reason || '—'}</TableCell><TableCell>{adjustment.date || '—'}</TableCell></TableRow>)}{!adjustments.length && <EmptyRow columns={6} text="لا توجد تسويات ضمن مواقعك." />}</TableBody></Table></div>}
+      {loading ? <LoadingState /> : <div className="rounded-2xl border border-slate-100 bg-white shadow-sm"><Table className="min-w-[760px]"><TableHeader><TableRow><TableHead className="w-[24%]">المنتج</TableHead><TableHead className="w-[18%]">الموقع</TableHead><TableHead className="w-[14%] text-center">الكمية الفعلية</TableHead><TableHead className="w-[14%] text-center">الفرق</TableHead><TableHead className="w-[18%]">السبب</TableHead><TableHead className="w-[12%]">التاريخ</TableHead></TableRow></TableHeader><TableBody>{adjustments.map((adjustment) => <TableRow key={adjustment.id}><TableCell>{labelFor(products, adjustment.productId)}</TableCell><TableCell>{labelFor(warehouses, adjustment.warehouseId)}</TableCell><TableCell className="text-center">{adjustment.actualQuantity}</TableCell><TableCell className="text-center">{adjustment.delta ?? '—'}</TableCell><TableCell>{adjustment.reason || '—'}</TableCell><TableCell>{adjustment.date || '—'}</TableCell></TableRow>)}{!adjustments.length && <EmptyRow columns={6} text="لا توجد تسويات ضمن مواقعك." />}</TableBody></Table></div>}
     </div>
   );
 }
