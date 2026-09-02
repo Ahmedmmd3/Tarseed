@@ -738,8 +738,9 @@ function exportToExcel(rows: Record<string, unknown>[], filename: string, sheetN
 async function createPdf(title: string, rows: Record<string, unknown>[], from: string, to: string, projectName: string): Promise<jsPDF> {
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const container = document.createElement('div');
+  container.id = 'wudooh-pdf-renderer';
   container.dir = 'rtl';
-  container.style.cssText = 'position:fixed;left:-100000px;top:0;width:1000px;padding:32px;background:#ffffff;color:#0a1328;font-family:Arial,Tahoma,sans-serif;direction:rtl;';
+  container.style.cssText = 'position:fixed;left:0;top:0;transform:translateX(-200%);width:1000px;padding:32px;background:#ffffff;color:#0a1328;font-family:Arial,Tahoma,sans-serif;direction:rtl;pointer-events:none;';
   const safeProjectName = escapeHtml(projectName);
   const safeTitle = escapeHtml(title);
   const headers = rows.length ? Object.keys(rows[0]) : ['البيان'];
@@ -768,7 +769,19 @@ async function createPdf(title: string, rows: Record<string, unknown>[], from: s
         width: 277,
         windowWidth: 1000,
         autoPaging: 'text',
-        html2canvas: { scale: 1.2, backgroundColor: '#ffffff', useCORS: true },
+        html2canvas: {
+          scale: 1.2,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          onclone: (clonedDocument) => {
+            const clonedRenderer = clonedDocument.getElementById('wudooh-pdf-renderer');
+            if (clonedRenderer) {
+              clonedRenderer.style.left = '0';
+              clonedRenderer.style.top = '0';
+              clonedRenderer.style.transform = 'none';
+            }
+          },
+        },
         callback: () => resolve(),
       }).catch(reject);
     });

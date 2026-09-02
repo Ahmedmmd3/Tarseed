@@ -28,4 +28,5 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
   await page.getByTestId('button-export-balance-pdf').click();
   const pdfDownload = await pdfDownloadPromise;
   expect(pdfDownload.suggestedFilename()).toContain('الميزانية_العمومية');
+  await pdfDownload.saveAs('../../.cache/export-pdf-check.pdf');
 });
