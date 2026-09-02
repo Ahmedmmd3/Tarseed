@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, test } from './fixtures';
+import { read as readXlsx, utils as xlsxUtils } from 'xlsx';
 
 const execFileAsync = promisify(execFile);
 const MIN_NON_WHITE_PIXEL_RATIO = 0.01;
@@ -218,6 +219,186 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
     await expect(page.getByTestId(`button-export-${reportId}-pdf`)).toBeEnabled();
   }
 });
+
+test('يتحقق من اكتمال كل ملفات Excel الطويلة عند فتحها', async ({ authenticatedPage: page }, testInfo) => {
+  const accounts = Array.from({ length: 120 }, (_, index) => ({
+    id: `long-excel-account-${index + 1}`,
+    code: `ACCT-EXCEL-${String(index + 1).padStart(4, '0')}`,
+    name: `حساب Excel اختباري طويل ACCT-EXCEL-${String(index + 1).padStart(4, '0')}`,
+    type: (['asset', 'liability', 'equity', 'revenue', 'expense'] as const)[index % 5],
+    parent: null,
+    openingBalance: 0,
+    balance: 0,
+    status: 'active',
+  }));
+  const journals = Array.from({ length: 120 }, (_, index) => {
+    const sequence = String(index + 1).padStart(4, '0');
+    const date = `2025-${String((index % 12) + 1).padStart(2, '0')}-18`;
+    const debitAccount = accounts[index % accounts.length];
+    const creditAccount = accounts[(index + 1) % accounts.length];
+    return {
+      id: `long-excel-journal-${index + 1}`,
+      number: `JE-EXCEL-${sequence}`,
+      date,
+      description: `وصف قيد Excel اختباري طويل JE-EXCEL-${sequence}`,
+      status: 'posted',
+      lines: [
+        { id: `long-excel-line-${index + 1}-debit`, accountId: debitAccount.id, debit: (index + 1) * 110, credit: 0 },
+        { id: `long-excel-line-${index + 1}-credit`, accountId: creditAccount.id, debit: 0, credit: (index + 1) * 110 },
+      ],
+    };
+  });
+  const invoices = Array.from({ length: 120 }, (_, index) => {
+    const sequence = String(index + 1).padStart(4, '0');
+    return {
+      id: `long-excel-invoice-${index + 1}`,
+      number: `INV-EXCEL-${sequence}`,
+      date: `2025-${String((index % 12) + 1).padStart(2, '0')}-19`,
+      customer: `عميل Excel اختباري طويل INV-EXCEL-${sequence}`,
+      subtotal: (index + 1) * 210,
+      tax: (index + 1) * 31.5,
+      total: (index + 1) * 241.5,
+      status: 'paid',
+    };
+  });
+  const expenses = Array.from({ length: 120 }, (_, index) => {
+    const sequence = String(index + 1).padStart(4, '0');
+    return {
+      id: `long-excel-expense-${index + 1}`,
+      date: `2025-${String((index % 12) + 1).padStart(2, '0')}-20`,
+      description: `EXP-EXCEL-${sequence} — مصروف Excel اختباري طويل`,
+      category: `فئة Excel ${((index % 8) + 1).toString()}`,
+      vendor: `مورد Excel اختباري طويل EXP-EXCEL-${sequence}`,
+      amount: (index + 1) * 82,
+      paymentMethod: 'bank',
+    };
+  });
+  const trialBalance = accounts.map((account, index) => ({
+    id: account.id,
+    code: account.code,
+    name: account.name,
+    type: account.type,
+    debit: (index + 1) * 110,
+    credit: (index + 1) * 90,
+  }));
+  const revenue = Array.from({ length: 80 }, (_, index) => ({
+    id: `long-excel-revenue-${index + 1}`,
+    name: `REV-EXCEL-${String(index + 1).padStart(4, '0')} — إيراد Excel اختباري طويل`,
+    amount: (index + 1) * 260,
+  }));
+  const expense = Array.from({ length: 80 }, (_, index) => ({
+    id: `long-excel-income-expense-${index + 1}`,
+    name: `INC-EXP-EXCEL-${String(index + 1).padStart(4, '0')} — مصروف قائمة دخل Excel طويل`,
+    amount: (index + 1) * 95,
+  }));
+  const assets = Array.from({ length: 80 }, (_, index) => ({
+    id: `long-excel-asset-${index + 1}`,
+    name: `ASSET-EXCEL-${String(index + 1).padStart(4, '0')} — أصل Excel اختباري طويل`,
+    amount: (index + 1) * 105,
+  }));
+  const liabilities = Array.from({ length: 40 }, (_, index) => ({
+    id: `long-excel-liability-${index + 1}`,
+    name: `LIABILITY-EXCEL-${String(index + 1).padStart(4, '0')} — التزام Excel اختباري طويل`,
+    amount: (index + 1) * 65,
+  }));
+  const equity = Array.from({ length: 40 }, (_, index) => ({
+    id: `long-excel-equity-${index + 1}`,
+    name: `EQUITY-EXCEL-${String(index + 1).padStart(4, '0')} — حقوق ملكية Excel طويلة`,
+    amount: (index + 1) * 45,
+  }));
+
+  const apiPayloads: Record<string, unknown> = {
+    accounts,
+    journalEntries: journals,
+    invoices,
+    expenses,
+  };
+  for (const [resource, payload] of Object.entries(apiPayloads)) {
+    await page.route(`**/api/data/${resource}**`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(payload),
+      });
+    });
+  }
+  await page.route('**/api/accounting/summary?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        totals: { revenue: 1_000_000, expense: 420_000, netIncome: 580_000 },
+        trialBalance,
+        incomeStatement: { revenue, expense, netIncome: 580_000 },
+        balanceSheet: {
+          assets,
+          liabilities,
+          equity,
+          baseEquity: 300_000,
+          unclosedEarnings: 280_000,
+          totalAssets: 1_000_000,
+          totalLiabilitiesAndEquity: 1_000_000,
+        },
+      }),
+    });
+  });
+
+  await page.goto('/export');
+  await expect(page.getByTestId('page-export')).toBeVisible();
+  await page.getByTestId('input-export-from').fill('2025-01-01');
+  await page.getByTestId('input-export-to').fill('2025-12-31');
+  await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
+
+  const excelReports = [
+    { id: 'journals', sheetName: 'القيود اليومية', rowCount: 240, columnCount: 7, lastMarker: 'JE-EXCEL-0120' },
+    { id: 'trial', sheetName: 'ميزان المراجعة', rowCount: 120, columnCount: 6, lastMarker: 'ACCT-EXCEL-0120' },
+    { id: 'ledger', sheetName: 'دفتر الأستاذ', rowCount: 240, columnCount: 6, lastMarker: 'JE-EXCEL-0120' },
+    { id: 'invoices', sheetName: 'الفواتير', rowCount: 120, columnCount: 7, lastMarker: 'INV-EXCEL-0120' },
+    { id: 'expenses', sheetName: 'المصاريف', rowCount: 120, columnCount: 5, lastMarker: 'EXP-EXCEL-0120' },
+    { id: 'income', sheetName: 'قائمة الدخل', rowCount: 161, columnCount: 3, lastMarker: 'صافي الربح' },
+    { id: 'balance', sheetName: 'الميزانية العمومية', rowCount: 164, columnCount: 3, lastMarker: 'إجمالي الالتزامات وحقوق الملكية' },
+  ] as const;
+
+  for (const report of excelReports) {
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByTestId(`button-export-${report.id}-excel`).click();
+    const download = await downloadPromise;
+    const excelPath = testInfo.outputPath(`long-export-${report.id}.xlsx`);
+    await download.saveAs(excelPath);
+    expect((await stat(excelPath)).size).toBeGreaterThan(0);
+    await expectExcelRowsRetained(excelPath, report);
+    await expect(page.getByTestId(`button-export-${report.id}-excel`)).toBeEnabled();
+  }
+});
+
+async function expectExcelRowsRetained(
+  excelPath: string,
+  report: {
+    id: string;
+    sheetName: string;
+    rowCount: number;
+    columnCount: number;
+    lastMarker: string;
+  },
+) {
+  const workbook = readXlsx(await readFile(excelPath), { type: 'buffer' });
+  expect(workbook.SheetNames, `${report.id} Excel يجب أن يحتوي على ورقة العمل المتوقعة.`).toEqual([report.sheetName]);
+  const worksheet = workbook.Sheets[report.sheetName];
+  expect(worksheet, `${report.id} Excel يجب أن يفتح ورقة العمل.`).toBeDefined();
+  const rows = xlsxUtils.sheet_to_json<unknown[]>(worksheet, { header: 1, defval: '' });
+
+  expect(rows, `${report.id} Excel يجب أن يحتفظ بكل الصفوف.`).toHaveLength(report.rowCount + 1);
+  expect(rows[0], `${report.id} Excel يجب أن يحتفظ بكل الأعمدة.`).toHaveLength(report.columnCount);
+  for (const [rowIndex, row] of rows.slice(1).entries()) {
+    expect(row, `${report.id} Excel — الصف ${rowIndex + 1} يجب أن يحتفظ بعدد الأعمدة المتوقع.`).toHaveLength(report.columnCount);
+  }
+
+  const lastRow = rows.at(-1) ?? [];
+  expect(
+    lastRow.map((value) => String(value)).join(' | '),
+    `${report.id} Excel يجب أن يحتوي على علامة آخر صف: ${report.lastMarker}`,
+  ).toContain(report.lastMarker);
+}
 
 async function expectPdfPageHasContent(imagePath: string, pageLabel: string) {
   const { stdout } = await execFileAsync('magick', [
