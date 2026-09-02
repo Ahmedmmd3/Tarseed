@@ -148,6 +148,8 @@ test.describe('المسارات التشغيلية الأساسية', () => {
     await page.goto('/inventory');
     await expect(page.getByTestId('page-inventory')).toBeVisible();
     await expect(page.getByTestId('button-add-products')).toBeVisible();
+     await expect(page.getByRole('columnheader', { name: 'عدد المخزون' })).toBeVisible();
+     await expect(page.getByRole('columnheader', { name: 'مستودع التخزين' })).toBeVisible();
     await page.getByRole('tab', { name: 'التحويلات' }).click();
     await expect(page.getByTestId('button-create-transfer')).toBeVisible();
     await page.getByRole('tab', { name: 'التسويات' }).click();

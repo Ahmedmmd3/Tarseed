@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
 import { Boxes, ChevronRight, LoaderCircle, Plus } from 'lucide-react';
 import { Link } from 'wouter';
 import { CrudTable } from '@/components/crud-table';
@@ -204,14 +204,45 @@ export default function Inventory() {
   const balances = useCrud<Balance>('inventoryBalances');
   const transfers = useCrud<Transfer>('stockTransfers');
   const adjustments = useCrud<Adjustment>('stockAdjustments');
-  const refreshInventory = async () => { await Promise.all([products.load(), balances.load(), transfers.load(), adjustments.load()]); };
+  const productStock = useMemo(() => {
+    const summaries = new Map<string, { quantity: number; warehouses: string[] }>();
+    balances.data.forEach((balance) => {
+      const productId = String(balance.productId);
+      const summary = summaries.get(productId) ?? { quantity: 0, warehouses: [] };
+      const quantity = Number(balance.quantity);
+      summary.quantity += Number.isFinite(quantity) ? quantity : 0;
+      const warehouseName = labelFor(warehouses.data, balance.warehouseId);
+      if (!summary.warehouses.includes(warehouseName)) summary.warehouses.push(warehouseName);
+      summaries.set(productId, summary);
+    });
+    return summaries;
+  }, [balances.data, warehouses.data]);
+  const refreshInventory = async () => { await Promise.all([products.load(), warehouses.load(), balances.load(), transfers.load(), adjustments.load()]); };
 
   return (
     <div className="flex flex-col gap-6" data-testid="page-inventory">
       <div><Link href="/dashboard" className="mb-2 inline-flex items-center gap-1.5 text-sm font-bold text-slate-500 transition hover:text-slate-900"><ChevronRight className="h-4 w-4" />لوحة التحكم</Link><h1 className="flex items-center gap-2 text-2xl font-black text-slate-900 sm:text-3xl"><Boxes className="h-8 w-8 text-violet-600" />المخزون والمنتجات</h1><p className="mt-2 text-sm text-slate-500">الأرصدة تُقرأ من مواقع التشغيل، وتُعدّل فقط عبر التسويات والتحويلات المعتمدة.</p></div>
       <Tabs defaultValue="products" className="w-full">
         <div className="mb-6 overflow-x-auto pb-1"><TabsList className="flex h-auto w-max min-w-full justify-start"><TabsTrigger value="products" className="min-h-11 shrink-0 px-4">المنتجات</TabsTrigger><TabsTrigger value="warehouses" className="min-h-11 shrink-0 px-4">المواقع</TabsTrigger><TabsTrigger value="balances" className="min-h-11 shrink-0 px-4">الأرصدة</TabsTrigger><TabsTrigger value="transfers" className="min-h-11 shrink-0 px-4">التحويلات</TabsTrigger><TabsTrigger value="adjustments" className="min-h-11 shrink-0 px-4">التسويات</TabsTrigger></TabsList></div>
-        <TabsContent value="products"><CrudTable table="products" title="إدارة المنتجات" fields={[{ key: 'name', label: 'الاسم', required: true }, { key: 'barcode', label: 'الباركود' }, { key: 'sku', label: 'رمز المنتج' }, { key: 'price', label: 'سعر البيع', type: 'number' }, { key: 'cost', label: 'سعر التكلفة', type: 'number' }, { key: 'vatRate', label: 'ضريبة المنتج', type: 'select', required: true, options: [{ label: 'لا توجد ضريبة', value: 0 }, { label: 'ضريبة 5٪', value: 5 }, { label: 'ضريبة 15٪', value: 15 }] }]} /></TabsContent>
+         <TabsContent value="products"><CrudTable
+           table="products"
+           title="إدارة المنتجات"
+           fields={[{ key: 'name', label: 'الاسم', required: true }, { key: 'barcode', label: 'الباركود' }, { key: 'sku', label: 'رمز المنتج' }, { key: 'price', label: 'سعر البيع', type: 'number' }, { key: 'cost', label: 'سعر التكلفة', type: 'number' }, { key: 'vatRate', label: 'ضريبة المنتج', type: 'select', required: true, options: [{ label: 'لا توجد ضريبة', value: 0 }, { label: 'ضريبة 5٪', value: 5 }, { label: 'ضريبة 15٪', value: 15 }] }]}
+           extraColumns={[{ key: 'stockQuantity', label: 'عدد المخزون', className: 'text-center' }, { key: 'storageWarehouse', label: 'مستودع التخزين' }]}
+           renderExtraCells={(item) => {
+             const summary = productStock.get(String(item.id));
+             return (
+               <>
+                 <TableCell className="text-center font-bold text-teal-700" data-testid={`text-product-stock-${item.id}`}>
+                   {balances.loading ? 'جارٍ التحميل...' : summary?.quantity ?? 0}
+                 </TableCell>
+                 <TableCell className="max-w-[220px] text-slate-600" data-testid={`text-product-warehouse-${item.id}`}>
+                   {balances.loading ? 'جارٍ التحميل...' : summary?.warehouses.length ? summary.warehouses.join('، ') : 'غير محدد'}
+                 </TableCell>
+               </>
+             );
+           }}
+         /></TabsContent>
         <TabsContent value="warehouses"><CrudTable table="warehouses" title="مواقع التشغيل" readOnly={currentUser?.roleId !== 'owner'} fields={[{ key: 'name', label: 'اسم الموقع', required: true }, { key: 'location', label: 'العنوان أو الوصف' }, { key: 'status', label: 'الحالة', type: 'select', options: [{ label: 'نشط', value: 'active' }, { label: 'غير نشط', value: 'inactive' }] }]} /></TabsContent>
         <TabsContent value="balances"><InventoryBalances data={balances.data} products={products.data} warehouses={warehouses.data} loading={balances.loading} /></TabsContent>
         <TabsContent value="transfers"><TransferWorkspace transfers={transfers.data} products={products.data} warehouses={warehouses.data} loading={transfers.loading} onChanged={refreshInventory} /></TabsContent>

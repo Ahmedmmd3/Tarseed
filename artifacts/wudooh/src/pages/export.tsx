@@ -737,58 +737,89 @@ function exportToExcel(rows: Record<string, unknown>[], filename: string, sheetN
 
 async function createPdf(title: string, rows: Record<string, unknown>[], from: string, to: string, projectName: string): Promise<jsPDF> {
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
-  const container = document.createElement('div');
-  container.id = 'wudooh-pdf-renderer';
-  container.dir = 'rtl';
-  container.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;width:1000px;padding:32px;background:#ffffff;color:#0a1328;font-family:Arial,Tahoma,sans-serif;direction:rtl;pointer-events:none;';
-  const safeProjectName = escapeHtml(projectName);
-  const safeTitle = escapeHtml(title);
   const headers = rows.length ? Object.keys(rows[0]) : ['البيان'];
-  const tableRows = rows.length
-    ? rows.map((row) => `<tr>${headers.map((header) => `<td>${escapeHtml(formatPdfValue(row[header]))}</td>`).join('')}</tr>`).join('')
-    : `<tr><td colspan="${headers.length}">لا توجد بيانات في هذه الفترة</td></tr>`;
-  container.innerHTML = `
-    <div style="border-bottom:3px solid #0d47d9;padding-bottom:16px;margin-bottom:18px;">
-      <div style="font-size:28px;font-weight:800;color:#0d47d9;">ترصيد</div>
-      <div style="font-size:20px;font-weight:700;margin-top:6px;">${safeProjectName}</div>
-      <div style="font-size:18px;font-weight:700;margin-top:8px;">${safeTitle}</div>
-      <div style="font-size:13px;color:#5a677d;margin-top:8px;">الفترة: من ${escapeHtml(from)} إلى ${escapeHtml(to)} · تاريخ الطباعة: ${escapeHtml(dateFormatter.format(new Date()))}</div>
-    </div>
-    <table style="width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px;">
-      <thead><tr>${headers.map((header) => `<th style="background:#0d47d9;color:#fff;padding:9px 7px;border:1px solid #0d47d9;text-align:right;word-break:break-word;">${escapeHtml(header)}</th>`).join('')}</tr></thead>
-      <tbody>${tableRows}</tbody>
-    </table>
-    <style>tbody tr:nth-child(even){background:#f1f3f6}td{padding:8px 7px;border:1px solid #dce2ea;text-align:right;vertical-align:top;word-break:break-word}</style>
-  `;
-  document.body.appendChild(container);
-  try {
-    await new Promise<void>((resolve, reject) => {
-      pdf.html(container, {
-        x: 10,
-        y: 10,
-        width: 277,
-        windowWidth: 1000,
-        autoPaging: 'text',
-        html2canvas: {
-          scale: 1.2,
-          backgroundColor: '#ffffff',
-          useCORS: true,
-        },
-        callback: () => resolve(),
-      }).catch(reject);
+  const displayRows = rows.length ? rows : [{ البيان: 'لا توجد بيانات في هذه الفترة' }];
+  const canvasWidth = 1600;
+  const canvasHeight = 1080;
+  const margin = 64;
+  const tableTop = 252;
+  const rowHeight = 58;
+  const footerHeight = 72;
+  const rowsPerPage = Math.max(1, Math.floor((canvasHeight - tableTop - footerHeight) / rowHeight) - 1);
+  const pageCount = Math.ceil(displayRows.length / rowsPerPage);
+  const columnWidth = (canvasWidth - margin * 2) / headers.length;
+
+  for (let pageIndex = 0; pageIndex < pageCount; pageIndex += 1) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('تعذر تجهيز لوحة رسم التقرير.');
+    context.direction = 'rtl';
+    context.textAlign = 'right';
+    context.textBaseline = 'middle';
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    context.fillStyle = '#0d47d9';
+    context.font = '800 42px Arial, Tahoma, sans-serif';
+    context.fillText('ترصيد', canvasWidth - margin, 62);
+    context.fillStyle = '#0a1328';
+    context.font = '700 28px Arial, Tahoma, sans-serif';
+    context.fillText(projectName, canvasWidth - margin, 112);
+    context.font = '700 25px Arial, Tahoma, sans-serif';
+    context.fillText(title, canvasWidth - margin, 154);
+    context.fillStyle = '#5a677d';
+    context.font = '20px Arial, Tahoma, sans-serif';
+    context.fillText(`الفترة: من ${from} إلى ${to} · تاريخ الطباعة: ${dateFormatter.format(new Date())}`, canvasWidth - margin, 198);
+    context.fillStyle = '#0d47d9';
+    context.fillRect(margin, 224, canvasWidth - margin * 2, 5);
+
+    headers.forEach((header, columnIndex) => {
+      const x = canvasWidth - margin - (columnIndex + 1) * columnWidth;
+      context.fillStyle = '#0d47d9';
+      context.fillRect(x, tableTop, columnWidth, rowHeight);
+      context.strokeStyle = '#ffffff';
+      context.strokeRect(x, tableTop, columnWidth, rowHeight);
+      context.fillStyle = '#ffffff';
+      context.font = '700 19px Arial, Tahoma, sans-serif';
+      context.fillText(fitCanvasText(context, header, columnWidth - 24), x + columnWidth - 12, tableTop + rowHeight / 2);
     });
-  } finally {
-    container.remove();
+
+    const pageRows = displayRows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
+    pageRows.forEach((row, rowIndex) => {
+      const y = tableTop + rowHeight * (rowIndex + 1);
+      headers.forEach((header, columnIndex) => {
+        const x = canvasWidth - margin - (columnIndex + 1) * columnWidth;
+        context.fillStyle = rowIndex % 2 === 0 ? '#ffffff' : '#f1f3f6';
+        context.fillRect(x, y, columnWidth, rowHeight);
+        context.strokeStyle = '#dce2ea';
+        context.strokeRect(x, y, columnWidth, rowHeight);
+        context.fillStyle = '#0a1328';
+        context.font = '18px Arial, Tahoma, sans-serif';
+        context.fillText(fitCanvasText(context, formatPdfValue(row[header]), columnWidth - 24), x + columnWidth - 12, y + rowHeight / 2);
+      });
+    });
+
+    context.fillStyle = '#7a8494';
+    context.font = '17px Arial, Tahoma, sans-serif';
+    context.textAlign = 'center';
+    context.fillText(`صفحة ${pageIndex + 1} من ${pageCount} · تم إنشاؤه بواسطة ترصيد`, canvasWidth / 2, canvasHeight - 30);
+    if (pageIndex > 0) pdf.addPage('a4', 'landscape');
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 10, 10, 277, 187, undefined, 'FAST');
   }
   return pdf;
 }
 
-function formatPdfValue(value: unknown): string {
-  return typeof value === 'number' ? numberFormatter.format(value) : String(value ?? '');
+function fitCanvasText(context: CanvasRenderingContext2D, value: string, maxWidth: number): string {
+  if (context.measureText(value).width <= maxWidth) return value;
+  let fitted = value;
+  while (fitted.length > 1 && context.measureText(`${fitted}…`).width > maxWidth) fitted = fitted.slice(0, -1);
+  return `${fitted}…`;
 }
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character] ?? character));
+function formatPdfValue(value: unknown): string {
+  return typeof value === 'number' ? numberFormatter.format(value) : String(value ?? '');
 }
 
 function downloadBlob(blob: Blob, fileName: string) {

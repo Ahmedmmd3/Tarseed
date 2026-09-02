@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, type ReactNode } from 'react';
 import { useCrud } from '@/hooks/use-crud';
 import { useStore } from '@/context/store';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,8 @@ interface CrudTableProps {
   title: string;
   fields: FieldDef[];
   readOnly?: boolean;
+  extraColumns?: Array<{ key: string; label: string; className?: string }>;
+  renderExtraCells?: (item: any) => ReactNode;
 }
 
 const receiptCategories = ['إيجار', 'رواتب', 'مشتريات', 'مرافق', 'تسويق', 'نقل', 'صيانة', 'أخرى'] as const;
@@ -189,7 +191,7 @@ function ReceiptExtractionDialog({
   );
 }
 
-export function CrudTable({ table, title, fields, readOnly = false }: CrudTableProps) {
+export function CrudTable({ table, title, fields, readOnly = false, extraColumns = [], renderExtraCells }: CrudTableProps) {
   const { data, loading, error, create, update, remove, load } = useCrud<any>(table);
   const { currentUser } = useStore();
   const [open, setOpen] = useState(false);
@@ -392,11 +394,14 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
       )}
 
       <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-        <Table className={fields.length >= 4 ? 'min-w-[720px]' : 'min-w-[520px]'}>
+        <Table className={fields.length + extraColumns.length >= 4 ? 'min-w-[920px]' : 'min-w-[520px]'}>
           <TableHeader>
             <TableRow>
               {fields.map((f) => (
                 <TableHead key={f.key}>{f.label}</TableHead>
+              ))}
+              {extraColumns.map((column) => (
+                <TableHead key={column.key} className={column.className}>{column.label}</TableHead>
               ))}
               {(!readOnly || isAccountingSource) && <TableHead className="w-[180px]">الإجراءات</TableHead>}
             </TableRow>
@@ -411,6 +416,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
                       : item[f.key]}
                   </TableCell>
                 ))}
+                {renderExtraCells?.(item)}
                 {(!readOnly || isAccountingSource) && (
                   <TableCell>
                     <div className="flex flex-wrap items-center gap-1">
@@ -448,7 +454,7 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
             ))}
             {data.length === 0 && !loading && (
               <TableRow>
-                <TableCell colSpan={fields.length + (!readOnly || isAccountingSource ? 1 : 0)} className="h-24 text-center text-slate-500">
+                <TableCell colSpan={fields.length + extraColumns.length + (!readOnly || isAccountingSource ? 1 : 0)} className="h-24 text-center text-slate-500">
                   لا توجد بيانات
                 </TableCell>
               </TableRow>
