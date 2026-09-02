@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, BarChart3, Boxes, Building2, CheckCircle2, ChevronLeft, Gauge, LockKeyhole, Menu, Network, ReceiptText, ShieldCheck, ShoppingCart, Users, X, Zap } from 'lucide-react';
 import { AuthDialog } from '@/components/auth-dialog';
+import { LandingDashboardPreview } from '@/components/landing-dashboard-preview';
 
 const asset = (name: string) => `${import.meta.env.BASE_URL}${name}`;
 const route = (path: string) => `${import.meta.env.BASE_URL.replace(/\/$/, '')}${path}`;
@@ -53,7 +54,7 @@ export default function Landing() {
             </div>
             <div className="relative mx-auto w-full max-w-xl">
               <div className="absolute -inset-5 rounded-[2.5rem] bg-teal-300/10 blur-2xl" />
-              <div className="relative overflow-hidden rounded-[2rem] border border-white/15 bg-white/10 p-3 shadow-2xl"><img src={asset('hero-abstract-ar-minimal.png')} alt="لوحة تحكم ترصيد" className="w-full rounded-2xl" width="1024" height="1024" /></div>
+               <div className="relative overflow-hidden rounded-[2rem] border border-white/15 bg-white/10 p-3 shadow-2xl"><LandingDashboardPreview /></div>
               <div className="absolute -bottom-5 -right-5 rounded-2xl border border-white/15 bg-[#0D47D9]/95 px-5 py-4 shadow-xl"><p className="text-xs text-slate-300">صافي الأرباح</p><p className="mt-1 text-2xl font-black text-teal-300">+ ١٢,٥٠٠ ر.س</p></div>
             </div>
           </div>
