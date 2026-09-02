@@ -10,6 +10,7 @@ import {
   PURCHASE_ORDER_SHARE_TTL_MS,
   purchaseOrderShareUrl,
 } from "../lib/purchase-order-share";
+import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, SourceJournalError } from "../lib/source-journals";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -56,7 +57,7 @@ function referencesDemoRecord(
     if (key === "sourceId") {
       const sourceType = String(rootData.sourceType ?? "");
       if (sourceType === "sale" || sourceType === "invoice") referencedTable = "invoices";
-      if (sourceType === "expense") referencedTable = "expenses";
+      if (sourceType === "expense" || sourceType === "expenses") referencedTable = "expenses";
     }
     if (referencedTable && child !== null && child !== undefined
       && demoIds.get(referencedTable)?.has(String(child))) {
@@ -547,6 +548,126 @@ class MutationRejected extends Error {
   ) {
     super(message);
   }
+}
+
+function normalizedJournalLines(value: unknown): Array<{ accountId: string; debit: number; credit: number }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((line): line is Record<string, unknown> => Boolean(line) && typeof line === "object" && !Array.isArray(line))
+    .map((line) => ({
+      accountId: String(line.accountId ?? line.account ?? ""),
+      debit: Number(line.debit) || 0,
+      credit: Number(line.credit) || 0,
+    }))
+    .filter((line) => line.accountId && (line.debit > 0 || line.credit > 0));
+}
+
+async function activeExpenseJournal(
+  executor: DatabaseTransaction,
+  organizationId: number,
+  sourceId: number,
+): Promise<typeof erpRecordsTable.$inferSelect | undefined> {
+  const journals = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "journalEntries"),
+    inArray(sql`${erpRecordsTable.data}->>'sourceType'`, sourceTypeVariants("expenses")),
+    sql`${erpRecordsTable.data}->>'sourceId' = ${String(sourceId)}`,
+  )).for("update");
+  const reversedIds = new Set(
+    journals
+      .filter((journal) => journal.data.adjustmentType === "reversal")
+      .flatMap((journal) => {
+        const ids = [journal.data.adjustsJournalId, ...(Array.isArray(journal.data.adjustsJournalIds) ? journal.data.adjustsJournalIds : [])];
+        return ids.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+      }),
+  );
+  return journals
+    .filter((journal) => journal.data.status === "posted" && !journal.data.adjustmentType && !reversedIds.has(journal.id))
+    .sort((left, right) => right.id - left.id)[0];
+}
+
+async function createExpenseSourceJournal(
+  executor: DatabaseTransaction,
+  organizationId: number,
+  sourceId: number,
+  data: Record<string, unknown>,
+  operationId: string,
+): Promise<typeof erpRecordsTable.$inferSelect | undefined> {
+  const accountRows = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "accounts"),
+  ));
+  const accounts = accountRows.map((row) => ({ ...row.data, id: row.id })) as Array<Record<string, unknown> & { id: number }>;
+  let lines: Array<{ accountId: string; debit: number; credit: number }>;
+  try {
+    lines = journalLinesForSource("expenses", data, accounts);
+  } catch (error) {
+    if (error instanceof SourceJournalError) throw new MutationRejected(error.status, error.message);
+    throw error;
+  }
+  const sourceType = sourceTypeFor("expenses");
+  const date = String(data.date ?? new Date().toISOString().slice(0, 10));
+  const description = String(data.description ?? "مصروف");
+  const [created] = await executor.insert(erpRecordsTable).values({
+    organizationId,
+    tableName: "journalEntries",
+    clientOperationId: operationId,
+    data: {
+      number: operationId,
+      date,
+      description,
+      status: "posted",
+      sourceType,
+      sourceId,
+      sourceDocumentTable: "expenses",
+      sourceDocumentId: sourceId,
+      lines,
+    },
+  }).onConflictDoNothing({
+    target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+  }).returning();
+  return created;
+}
+
+async function reverseExpenseJournal(
+  executor: DatabaseTransaction,
+  organizationId: number,
+  sourceId: number,
+  journal: typeof erpRecordsTable.$inferSelect,
+  operationId: string,
+  reason: string,
+): Promise<void> {
+  const originalLines = normalizedJournalLines(journal.data.lines);
+  if (originalLines.length < 2) {
+    throw new MutationRejected(409, "القيد المرتبط بالمصروف غير صالح ولا يمكن عكسه.");
+  }
+  const sourceType = sourceTypeFor("expenses");
+  await executor.insert(erpRecordsTable).values({
+    organizationId,
+    tableName: "journalEntries",
+    clientOperationId: `${operationId}:reversal`,
+    data: {
+      number: `REV-${String(journal.data.number ?? journal.id)}`,
+      date: String(journal.data.date ?? new Date().toISOString().slice(0, 10)),
+      description: `${reason}: ${String(journal.data.description ?? "مصروف")}`,
+      status: "posted",
+      sourceType,
+      sourceId,
+      sourceDocumentTable: "expenses",
+      sourceDocumentId: sourceId,
+      adjustmentType: "reversal",
+      adjustsJournalId: journal.id,
+      adjustmentReason: reason,
+      lines: originalLines.map((line, index) => ({
+        ...line,
+        id: `expense-reversal-${sourceId}-${journal.id}-${index + 1}`,
+        debit: line.credit,
+        credit: line.debit,
+      })),
+    },
+  }).onConflictDoNothing({
+    target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+  });
 }
 
 function lockedMutationRejected(response: Response): MutationRejected {
@@ -1250,6 +1371,15 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
           eq(erpRecordsTable.clientOperationId, clientOperationId),
         )).limit(1))[0]
         : undefined);
+      if (inserted && access.tableName === "expenses") {
+        await createExpenseSourceJournal(
+          tx,
+          currentAuth.organizationId,
+          inserted.id,
+          inserted.data,
+          `AUTO-EXPENSES-${inserted.id}`,
+        );
+      }
       return { created: inserted, record: saved };
     }));
   } catch (error) {
@@ -1283,7 +1413,7 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
-  if (isAccountingSource(access.tableName) && access.tableName !== "purchaseOrders") {
+  if (isAccountingSource(access.tableName) && access.tableName !== "purchaseOrders" && access.tableName !== "expenses") {
     response.status(405).json({ error: "يُلغى أو يُصحح المستند المحاسبي من مساره المتخصص حتى تتطابق القيود والمخزون والذمم." });
     return;
   }
@@ -1587,6 +1717,28 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (!isLocationAllowed(currentAuth, access.tableName, currentData, current.id)) {
         throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
       }
+      if (access.tableName === "expenses") {
+        if (await isClosedDate(
+          currentAuth,
+          String(current.data.date ?? ""),
+          tx,
+        )) {
+          throw new MutationRejected(409, "لا يمكن تعديل مصروف يعود إلى فترة مالية مقفلة.");
+        }
+        const activeJournal = await activeExpenseJournal(tx, currentAuth.organizationId, current.id);
+        const operationDigest = operationFingerprint(currentData).slice(0, 160);
+        const operationId = clientOperationId || `AUTO-EXPENSES-${current.id}-UPDATE-${operationDigest}`;
+        if (activeJournal) {
+          await reverseExpenseJournal(tx, currentAuth.organizationId, current.id, activeJournal, operationId, "عكس تعديل المصروف");
+        }
+        await createExpenseSourceJournal(
+          tx,
+          currentAuth.organizationId,
+          current.id,
+          currentData,
+          `${operationId}:journal`,
+        );
+      }
       return tx.update(erpRecordsTable).set({ data: currentData, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
     });
   } catch (error) {
@@ -1735,7 +1887,7 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
     return;
   }
-  if (isAccountingSource(access.tableName) && access.tableName !== "purchaseOrders") {
+  if (isAccountingSource(access.tableName) && access.tableName !== "purchaseOrders" && access.tableName !== "expenses") {
     response.status(405).json({ error: "لا يُحذف المستند المحاسبي مباشرة. ألغِه من مساره المتخصص حتى تُعكس آثاره كاملة." });
     return;
   }
@@ -1842,6 +1994,13 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
         tx,
       )) {
         throw new MutationRejected(409, "لا يمكن حذف مصدر محاسبي من فترة مالية مقفلة.");
+      }
+      if (access.tableName === "expenses") {
+        const activeJournal = await activeExpenseJournal(tx, currentAuth.organizationId, current.id);
+        if (activeJournal) {
+          const operationId = `AUTO-EXPENSES-${current.id}-DELETE-${operationFingerprint(current.data).slice(0, 160)}`;
+          await reverseExpenseJournal(tx, currentAuth.organizationId, current.id, activeJournal, operationId, "عكس حذف المصروف");
+        }
       }
       await tx.delete(erpRecordsTable).where(eq(erpRecordsTable.id, id));
     });

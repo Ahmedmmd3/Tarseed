@@ -13,6 +13,12 @@ const expenseCategories = [
   { label: 'أخرى', value: 'أخرى' },
 ];
 
+const paymentMethods = [
+  { label: 'نقداً', value: 'cash' },
+  { label: 'بطاقة', value: 'card' },
+  { label: 'تحويل بنكي', value: 'transfer' },
+];
+
 export default function Expenses() {
   return (
     <div className="flex flex-col gap-6" data-testid="page-expenses">
@@ -34,6 +40,7 @@ export default function Expenses() {
           { key: 'amount', label: 'المبلغ', type: 'number', required: true },
           { key: 'date', label: 'التاريخ', type: 'date', required: true },
           { key: 'category', label: 'التصنيف', type: 'select', options: expenseCategories, required: true },
+          { key: 'paymentMethod', label: 'طريقة الدفع', type: 'select', options: paymentMethods, required: true },
           { key: 'vendor', label: 'المورد' },
         ]}
       />

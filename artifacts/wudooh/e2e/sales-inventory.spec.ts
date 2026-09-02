@@ -80,6 +80,7 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await page.getByLabel('المبلغ').fill('3500');
     await page.getByLabel('التاريخ').fill(new Date().toISOString().slice(0, 10));
     await page.getByLabel('التصنيف').selectOption('إيجار');
+    await page.getByLabel('طريقة الدفع').selectOption('cash');
     await page.getByRole('button', { name: 'حفظ' }).click();
     await expect(page.getByTestId('page-expenses')).toContainText(description);
 
@@ -87,6 +88,7 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await page.getByLabel('البيان').fill(unique('مصروف ناقص'));
     await page.getByLabel('التاريخ').fill(new Date().toISOString().slice(0, 10));
     await page.getByLabel('التصنيف').selectOption('إيجار');
+    await page.getByLabel('طريقة الدفع').selectOption('cash');
     const emptyAmount = page.getByLabel('المبلغ');
     await page.getByRole('button', { name: 'حفظ' }).click();
     await expect(emptyAmount).toBeFocused();

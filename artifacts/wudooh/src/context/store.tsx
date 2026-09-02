@@ -33,7 +33,7 @@ export type Journal = {
   adjustmentStatus?: 'reversed' | 'corrected';
   adjustedByJournalIds?: string[];
   adjustmentReason?: string;
-  sourceType?: 'sale' | 'purchase' | 'expense' | 'opening_balance' | 'opening_balance_correction';
+  sourceType?: 'sale' | 'purchase' | 'expense' | 'expenses' | 'opening_balance' | 'opening_balance_correction';
   sourceId?: string;
 };
 

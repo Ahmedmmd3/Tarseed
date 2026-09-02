@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useCrud } from '@/hooks/use-crud';
+import { useStore } from '@/context/store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -190,6 +191,7 @@ function ReceiptExtractionDialog({
 
 export function CrudTable({ table, title, fields, readOnly = false }: CrudTableProps) {
   const { data, loading, error, create, update, remove, load } = useCrud<any>(table);
+  const { currentUser } = useStore();
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | number | null>(null);
   const [formData, setFormData] = useState<any>({});
@@ -200,6 +202,38 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
   const supportsTransfer = ['accounts', 'customers', 'suppliers', 'products', 'employees', 'projects', 'expenses', 'journalEntries', 'invoices', 'purchaseOrders'].includes(table);
   const [sourceAdjustment, setSourceAdjustment] = useState<{ item: Record<string, unknown>; action: 'cancel' | 'correct' } | null>(null);
   const [attachmentRecord, setAttachmentRecord] = useState<any>(null);
+  const [isSyncingJournals, setIsSyncingJournals] = useState(false);
+  const [journalSyncMessage, setJournalSyncMessage] = useState('');
+  const [journalSyncError, setJournalSyncError] = useState('');
+
+  const handleSyncJournals = async () => {
+    if (!currentUser || isSyncingJournals) return;
+    setIsSyncingJournals(true);
+    setJournalSyncMessage('');
+    setJournalSyncError('');
+    try {
+      const response = await fetch('/api/accounting/sync-source-journals', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+        },
+      });
+      const payload = await response.json().catch(() => ({})) as { created?: number; skipped?: Array<{ reason?: string }>; error?: string };
+      if (!response.ok) throw new Error(payload.error || 'تعذرت مزامنة القيود.');
+      const created = Number(payload.created ?? 0);
+      const skipped = Array.isArray(payload.skipped) ? payload.skipped.length : 0;
+      setJournalSyncMessage(created > 0
+        ? `تمت مزامنة ${created} قيد${skipped ? `، وتعذر ${skipped} مصدر` : ''}.`
+        : skipped > 0 ? `لا توجد قيود جديدة، وتعذر مزامنة ${skipped} مصدر.` : 'القيود محدثة ولا توجد مصادر قديمة.');
+      await load();
+    } catch (syncError) {
+      setJournalSyncError(syncError instanceof Error ? syncError.message : 'تعذرت مزامنة القيود.');
+    } finally {
+      setIsSyncingJournals(false);
+    }
+  };
 
   const handleOpen = (item?: any) => {
     if (item) {
@@ -267,6 +301,12 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
         <h2 className="text-xl font-bold text-slate-900">{title}</h2>
         {(!readOnly || supportsTransfer) && (
           <div className="grid grid-cols-1 gap-2 min-[420px]:grid-cols-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
+            {isExpenseTable && (
+              <Button type="button" variant="outline" onClick={() => void handleSyncJournals()} disabled={isSyncingJournals} className="h-11 gap-2 border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:text-teal-800" data-testid="button-sync-expense-journals">
+                {isSyncingJournals ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                {isSyncingJournals ? 'جارٍ المزامنة...' : 'مزامنة القيود'}
+              </Button>
+            )}
             {isExpenseTable && (
               <ReceiptExtractionDialog
                 open={receiptDialogOpen}
@@ -345,6 +385,11 @@ export function CrudTable({ table, title, fields, readOnly = false }: CrudTableP
           <AlertCircle className="h-5 w-5" />
           <p className="text-sm font-medium">{error}</p>
           <Button variant="outline" size="sm" className="mr-auto" onClick={load}>إعادة المحاولة</Button>
+        </div>
+      )}
+      {(journalSyncMessage || journalSyncError) && (
+        <div role={journalSyncError ? 'alert' : 'status'} className={`rounded-xl border p-4 text-sm font-medium ${journalSyncError ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
+          {journalSyncError || journalSyncMessage}
         </div>
       )}
 

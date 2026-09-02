@@ -7,6 +7,7 @@ import { isLocationAllowed } from "../lib/location-scope";
 import { buildLedgerReport } from "../lib/accounting-ledger";
 import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type JournalAdjustmentAction, type JournalRecord } from "../lib/journal-adjustments";
 import { EInvoiceAdjustmentError, issueEInvoiceAdjustment } from "../lib/e-invoice-adjustments";
+import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, type SourceTable, SourceJournalError } from "../lib/source-journals";
 
 const router: IRouter = Router();
 
@@ -21,7 +22,6 @@ class AccountingMutationError extends Error {
   }
 }
 
-type SourceTable = "invoices" | "purchaseOrders" | "expenses";
 type SourceAction = "cancel" | "correct";
 
 class SourceCorrectionError extends Error {
@@ -97,6 +97,7 @@ async function recordsFor(
   const sourceTableByType: Record<string, string> = {
     sale: "invoices",
     purchase: "purchaseOrders",
+    expenses: "expenses",
     expense: "expenses",
   };
   const sourceIds = [...new Set(records.flatMap((record) => {
@@ -150,10 +151,6 @@ function normalizeLines(value: unknown): Array<{ accountId: string; debit: numbe
 
 function sourceTable(value: unknown): SourceTable | null {
   return value === "invoices" || value === "purchaseOrders" || value === "expenses" ? value : null;
-}
-
-function sourceTypeFor(tableName: SourceTable): "sale" | "purchase" | "expense" {
-  return tableName === "invoices" ? "sale" : tableName === "purchaseOrders" ? "purchase" : "expense";
 }
 
 function sourceDate(data: Record<string, unknown>, fallback?: string): string {
@@ -272,54 +269,6 @@ async function consumeCorrectionFifo(
   }
   if (needed > 0.000001) throw new SourceCorrectionError(409, "طبقات FIFO لا تكفي لتصحيح الفاتورة.");
   return allocations;
-}
-
-function journalLinesForSource(
-  tableName: SourceTable,
-  data: Record<string, unknown>,
-  accounts: AnyRecord[],
-): Array<{ accountId: string; debit: number; credit: number }> {
-  const type = sourceTypeFor(tableName);
-  const account = (code: string) => accounts.find((item) => String(item.code) === code && item.status !== "inactive");
-  const total = sourceAmount(data);
-  const tax = Array.isArray(data.receipts) ? asNumber(data.receivedVat) : asNumber(data.tax);
-  const net = Array.isArray(data.receipts) ? asNumber(data.receivedSubtotal) : asNumber(data.subtotal ?? total - tax);
-  const cogs = asNumber(data.cogsTotal);
-  const cashOrAr = account(data.paymentMethod === "credit" || data.customerId ? "1200" : data.paymentMethod === "card" ? "1100" : "1000");
-  if (total <= 0 || !cashOrAr) {
-    throw new SourceCorrectionError(409, "يلزم مبلغ موجب وحسابات افتراضية نشطة مطابقة في دليل الحسابات.");
-  }
-  if (type === "sale") {
-    const sales = account("4000"); const outputVat = account("2100"); const inventory = account("1300"); const cogsAccount = account("5500") ?? account("6000");
-    if (!sales || !outputVat || !inventory || !cogsAccount) throw new SourceCorrectionError(409, "الحسابات الافتراضية للبيع غير مكتملة.");
-    return [
-      { accountId: String(cashOrAr.id), debit: total, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: net },
-      { accountId: String(outputVat.id), debit: 0, credit: tax }, { accountId: String(cogsAccount.id), debit: cogs, credit: 0 },
-      { accountId: String(inventory.id), debit: 0, credit: cogs },
-    ];
-  }
-  if (type === "purchase") {
-    const inventory = account("1300"); const inputVat = account("1400"); const settlement = account(data.paymentMethod === "credit" ? "2000" : "1000");
-    if (!inventory || !inputVat || !settlement) throw new SourceCorrectionError(409, "الحسابات الافتراضية للشراء غير مكتملة.");
-    return [{ accountId: String(inventory.id), debit: net, credit: 0 }, { accountId: String(inputVat.id), debit: tax, credit: 0 }, { accountId: String(settlement.id), debit: 0, credit: total }];
-  }
-  const expenseCategoryMap: Record<string, string> = {
-    "إيجار": "5100",
-    "رواتب": "5200",
-    "مرافق": "5300",
-    "كهرباء": "5300",
-    "ماء": "5300",
-    "تسويق": "5400",
-    "إعلان": "5400",
-    "نقل": "5500",
-    "مواصلات": "5500",
-    "صيانة": "5600",
-    "مشتريات": "5000",
-    "أخرى": "5900",
-  };
-  const expense = account(expenseCategoryMap[String(data.category ?? "")] ?? "5900") ?? account("5100"); const cash = account("1000");
-  if (!expense || !cash) throw new SourceCorrectionError(409, "الحسابات الافتراضية للمصروف غير مكتملة.");
-  return [{ accountId: String(expense.id), debit: total, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: total }];
 }
 
 function sourceHasCredit(data: Record<string, unknown>, tableName: SourceTable): boolean {
@@ -2118,7 +2067,7 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
       const baseJournals = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.organizationId, currentAuth.organizationId),
         eq(erpRecordsTable.tableName, "journalEntries"),
-        sql`${erpRecordsTable.data}->>'sourceType' = ${sourceType}`,
+        inArray(sql`${erpRecordsTable.data}->>'sourceType'`, sourceTypeVariants(tableName)),
         sql`${erpRecordsTable.data}->>'sourceId' = ${String(sourceId)}`,
         sql`coalesce(${erpRecordsTable.data}->>'adjustmentType', '') = ''`,
       )).for("update");
@@ -2369,7 +2318,7 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
     });
     response.status(result.replayed ? 200 : 201).json(result);
   } catch (error) {
-    if (error instanceof SourceCorrectionError || error instanceof AccountingMutationError || error instanceof EInvoiceAdjustmentError) {
+    if (error instanceof SourceCorrectionError || error instanceof SourceJournalError || error instanceof AccountingMutationError || error instanceof EInvoiceAdjustmentError) {
       const code = "code" in error ? error.code : undefined;
       response.status(error.status).json({ error: error.message, ...(code ? { code } : {}) });
       return;
@@ -2386,13 +2335,16 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
     recordsFor(auth, "expenses"),
     recordsFor(auth, "journalEntries"),
   ]);
-  const existingSources = new Set(existingJournals.map((journal) => `${journal.sourceType}:${journal.sourceId}`));
+  const existingSources = new Set(existingJournals.map((journal) => {
+    const normalizedType = journal.sourceType === "expense" ? "expenses" : journal.sourceType;
+    return `${normalizedType}:${journal.sourceId}`;
+  }));
   const sources = [
-    ...invoices.map((record) => ({ record, tableName: "invoices", type: "sale", label: "فاتورة بيع" })),
+    ...invoices.map((record) => ({ record, tableName: "invoices" as const, type: sourceTypeFor("invoices"), label: "فاتورة بيع" })),
     ...purchases
       .filter((record) => !Array.isArray(record.receipts) && (record.received === true || record.status === "completed"))
-      .map((record) => ({ record, tableName: "purchaseOrders", type: "purchase", label: "أمر شراء" })),
-    ...expenses.map((record) => ({ record, tableName: "expenses", type: "expense", label: "مصروف" })),
+      .map((record) => ({ record, tableName: "purchaseOrders" as const, type: sourceTypeFor("purchaseOrders"), label: "أمر شراء" })),
+    ...expenses.map((record) => ({ record, tableName: "expenses" as const, type: sourceTypeFor("expenses"), label: "مصروف" })),
   ];
   let created = 0;
   const skipped: Array<{ sourceId: number; reason: string }> = [];
@@ -2421,18 +2373,18 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
         && sourceDate >= String(closure.from ?? "") && sourceDate <= String(closure.to ?? ""));
       if (isClosed) return "closed" as const;
       const currentJournals = await organizationRecordsFor(currentAuth, "journalEntries", tx);
-      if (currentJournals.some((journal) => journal.sourceType === source.type && journal.sourceId === source.record.id)) {
+      if (currentJournals.some((journal) => sourceTypeVariants(source.tableName).includes(String(journal.sourceType))
+        && journal.sourceId === source.record.id)) {
         return "exists" as const;
       }
       const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
-      const debitCode = source.type === "sale"
-        ? (currentSource.data.paymentMethod === "credit" || currentSource.data.customerId ? "1200" : "1000")
-        : source.type === "purchase" ? "5000" : "5100";
-      const creditCode = source.type === "sale" ? "4000" : source.type === "purchase" ? "2000" : "1000";
-      const debitAccount = accounts.find((account) => String(account.code) === debitCode);
-      const creditAccount = accounts.find((account) => String(account.code) === creditCode);
-      const amount = asNumber(currentSource.data.total ?? currentSource.data.amount ?? currentSource.data.totalAmount);
-      if (amount <= 0 || !debitAccount || !creditAccount) return "invalid" as const;
+      let lines;
+      try {
+        lines = journalLinesForSource(source.tableName, currentSource.data, accounts);
+      } catch (error) {
+        if (error instanceof SourceJournalError) return "invalid" as const;
+        throw error;
+      }
       const [createdJournal] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
         tableName: "journalEntries",
@@ -2440,15 +2392,14 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
         data: {
           number: `AUTO-${source.type.toUpperCase()}-${source.record.id}`,
           date: sourceDate,
-          description: `${source.label} ${String(currentSource.data.number ?? currentSource.data.invoiceNumber ?? `#${currentSource.id}`)}`,
+           description: source.tableName === "expenses"
+             ? String(currentSource.data.description ?? source.label)
+             : `${source.label} ${String(currentSource.data.number ?? currentSource.data.invoiceNumber ?? `#${currentSource.id}`)}`,
           status: "posted",
           sourceType: source.type,
           sourceId: source.record.id,
           ...(currentSource.data.warehouseId != null ? { warehouseId: currentSource.data.warehouseId } : {}),
-          lines: [
-            { accountId: String(debitAccount.id), debit: amount, credit: 0 },
-            { accountId: String(creditAccount.id), debit: 0, credit: amount },
-          ],
+           lines,
         },
       }).onConflictDoNothing({
         target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
