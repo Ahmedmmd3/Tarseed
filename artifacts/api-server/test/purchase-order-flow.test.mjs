@@ -230,9 +230,11 @@ test("ينشئ رابط مورد مؤقتاً ويعرض مستنداً منقّ
     "hoursRemaining",
     "orderNumber",
     "purchaseOrderId",
+    "shareId",
     "supplierName",
   ].sort());
   assert.equal(expiringAlerts.payload.alerts[0].purchaseOrderId, orderId);
+  assert.equal(expiringAlerts.payload.alerts[0].shareId, createdShare.payload.share.id);
   assert.equal(JSON.stringify(expiringAlerts.payload).includes("token"), false);
   assert.equal(JSON.stringify(expiringAlerts.payload).includes("url"), false);
   assert.equal((await request("/data/purchaseOrderShares/expiring")).response.status, 401);
