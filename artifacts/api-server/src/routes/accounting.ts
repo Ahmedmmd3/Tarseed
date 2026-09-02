@@ -2379,11 +2379,26 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       }
       const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);
       let lines;
-      try {
-        lines = journalLinesForSource(source.tableName, currentSource.data, accounts);
-      } catch (error) {
-        if (error instanceof SourceJournalError) return "invalid" as const;
-        throw error;
+      if (source.tableName === "expenses") {
+        try {
+          lines = journalLinesForSource("expenses", currentSource.data, accounts);
+        } catch (error) {
+          if (error instanceof SourceJournalError) return "invalid" as const;
+          throw error;
+        }
+      } else {
+        const debitCode = source.type === "sale"
+          ? (currentSource.data.paymentMethod === "credit" || currentSource.data.customerId ? "1200" : "1000")
+          : "5000";
+        const creditCode = source.type === "sale" ? "4000" : "2000";
+        const debitAccount = accounts.find((account) => String(account.code) === debitCode);
+        const creditAccount = accounts.find((account) => String(account.code) === creditCode);
+        const amount = asNumber(currentSource.data.total ?? currentSource.data.amount ?? currentSource.data.totalAmount);
+        if (amount <= 0 || !debitAccount || !creditAccount) return "invalid" as const;
+        lines = [
+          { accountId: String(debitAccount.id), debit: amount, credit: 0 },
+          { accountId: String(creditAccount.id), debit: 0, credit: amount },
+        ];
       }
       const [createdJournal] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
