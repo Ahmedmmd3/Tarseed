@@ -1,9 +1,16 @@
+import { execFile } from 'node:child_process';
+import { stat } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { expect, test } from './fixtures';
 
-test('يعرض صفحة التصدير ويتيح اختيار الفترة والحساب وتنزيل تقرير', async ({ authenticatedPage: page }) => {
+const execFileAsync = promisify(execFile);
+const MIN_NON_WHITE_PIXEL_RATIO = 0.01;
+
+test('يعرض صفحة التصدير ويتيح اختيار الفترة والحساب وتنزيل تقرير', async ({ authenticatedPage: page }, testInfo) => {
   await page.goto('/export');
 
   await expect(page.getByTestId('page-export')).toBeVisible();
+  await expect(page.locator('.production-shell[dir="rtl"]').filter({ has: page.getByTestId('page-export') })).toHaveCount(1);
   await expect(page.getByTestId('section-export-reports')).toBeVisible();
   await expect(page.getByTestId('card-export-journals')).toBeVisible();
   await expect(page.getByTestId('button-export-journals-excel')).toBeVisible();
@@ -28,5 +35,31 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
   await page.getByTestId('button-export-balance-pdf').click();
   const pdfDownload = await pdfDownloadPromise;
   expect(pdfDownload.suggestedFilename()).toContain('الميزانية_العمومية');
-  await pdfDownload.saveAs('../../.cache/export-pdf-check.pdf');
+  const pdfPath = testInfo.outputPath('export-pdf-check.pdf');
+  const firstPageImagePath = testInfo.outputPath('export-pdf-check-page-1.png');
+  await pdfDownload.saveAs(pdfPath);
+  expect((await stat(pdfPath)).size).toBeGreaterThan(0);
+
+  await execFileAsync('pdftoppm', [
+    '-f', '1',
+    '-l', '1',
+    '-png',
+    '-singlefile',
+    pdfPath,
+    firstPageImagePath.replace(/\.png$/, ''),
+  ]);
+  const { stdout } = await execFileAsync('magick', [
+    firstPageImagePath,
+    '-alpha', 'off',
+    '-colorspace', 'gray',
+    '-threshold', '98%',
+    '-format', '%[fx:1-mean]',
+    'info:',
+  ]);
+  const nonWhitePixelRatio = Number(stdout.trim());
+  expect(Number.isFinite(nonWhitePixelRatio)).toBe(true);
+  expect(
+    nonWhitePixelRatio,
+    `الصفحة الأولى من PDF تحتوي على ${nonWhitePixelRatio * 100}% فقط من البكسلات غير البيضاء.`,
+  ).toBeGreaterThanOrEqual(MIN_NON_WHITE_PIXEL_RATIO);
 });
