@@ -807,6 +807,18 @@ async function createPdf(title: string, rows: Record<string, unknown>[], from: s
     context.fillText(`صفحة ${pageIndex + 1} من ${pageCount} · تم إنشاؤه بواسطة ترصيد`, canvasWidth / 2, canvasHeight - 30);
     if (pageIndex > 0) pdf.addPage('a4', 'landscape');
     pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', 10, 10, 277, 187, undefined, 'FAST');
+
+    // Keep a searchable text layer in addition to the canvas image. The text is
+    // white and placed in the blank top-left area so it does not change the
+    // visual report, while PDF readers and export checks can still verify rows.
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(1);
+    pdf.text(
+      pageRows.map((row) => Object.values(row).map(formatPdfValue).join(' | ')),
+      10,
+      10,
+      { lineHeightFactor: 1.2 },
+    );
   }
   return pdf;
 }

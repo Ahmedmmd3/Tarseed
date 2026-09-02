@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, test } from './fixtures';
 
 const execFileAsync = promisify(execFile);
 const MIN_NON_WHITE_PIXEL_RATIO = 0.01;
+const PDF_ROWS_PER_PAGE = 12;
 
 test('يعرض صفحة التصدير ويتيح اختيار الفترة والحساب وتنزيل تقرير', async ({ authenticatedPage: page }, testInfo) => {
   await page.goto('/export');
@@ -54,8 +55,8 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
 test('يتحقق من سلامة كل الصفحات اللاحقة في تقرير PDF طويل', async ({ authenticatedPage: page }, testInfo) => {
   const accounts = Array.from({ length: 30 }, (_, index) => ({
     id: `long-report-account-${index + 1}`,
-    code: `1${String(index + 1).padStart(3, '0')}`,
-    name: `حساب اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    code: `ACCT-LONG-${String(index + 1).padStart(4, '0')}`,
+    name: `حساب اختباري طويل ACCT-LONG-${String(index + 1).padStart(4, '0')}`,
     type: (['asset', 'liability', 'equity', 'revenue', 'expense'] as const)[index % 5],
     parent: null,
     openingBalance: 0,
@@ -68,9 +69,9 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
     const creditAccount = accounts[(index + 1) % accounts.length];
     return {
       id: `long-report-journal-${index + 1}`,
-      number: `JE-${String(index + 1).padStart(4, '0')}`,
+      number: `JE-LONG-${String(index + 1).padStart(4, '0')}`,
       date,
-      description: `وصف قيد اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+      description: `وصف قيد اختباري طويل JE-LONG-${String(index + 1).padStart(4, '0')}`,
       status: 'posted',
       lines: [
         { id: `long-report-line-${index + 1}-debit`, accountId: debitAccount.id, debit: (index + 1) * 100, credit: 0 },
@@ -80,9 +81,9 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
   });
   const invoices = Array.from({ length: 30 }, (_, index) => ({
     id: `long-report-invoice-${index + 1}`,
-    number: `INV-${String(index + 1).padStart(4, '0')}`,
+    number: `INV-LONG-${String(index + 1).padStart(4, '0')}`,
     date: `2025-${String((index % 12) + 1).padStart(2, '0')}-16`,
-    customer: `عميل اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    customer: `عميل اختباري طويل INV-LONG-${String(index + 1).padStart(4, '0')}`,
     subtotal: (index + 1) * 200,
     tax: (index + 1) * 30,
     total: (index + 1) * 230,
@@ -91,9 +92,9 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
   const expenses = Array.from({ length: 30 }, (_, index) => ({
     id: `long-report-expense-${index + 1}`,
     date: `2025-${String((index % 12) + 1).padStart(2, '0')}-17`,
-    description: `مصروف اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    description: `EXP-LONG-${String(index + 1).padStart(4, '0')} — مصروف اختباري طويل`,
     category: `فئة ${((index % 6) + 1).toString()}`,
-    vendor: `مورد اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    vendor: `مورد اختباري طويل EXP-LONG-${String(index + 1).padStart(4, '0')}`,
     amount: (index + 1) * 75,
     paymentMethod: 'bank',
   }));
@@ -107,27 +108,27 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
   }));
   const revenue = Array.from({ length: 20 }, (_, index) => ({
     id: `long-report-revenue-${index + 1}`,
-    name: `إيراد اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    name: `REV-LONG-${String(index + 1).padStart(4, '0')} — إيراد اختباري طويل`,
     amount: (index + 1) * 250,
   }));
   const expense = Array.from({ length: 20 }, (_, index) => ({
     id: `long-report-income-expense-${index + 1}`,
-    name: `مصروف قائمة دخل طويل ${String(index + 1).padStart(2, '0')}`,
+    name: `INC-EXP-LONG-${String(index + 1).padStart(4, '0')} — مصروف قائمة دخل طويل`,
     amount: (index + 1) * 90,
   }));
   const assets = Array.from({ length: 20 }, (_, index) => ({
     id: `long-report-asset-${index + 1}`,
-    name: `أصل اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    name: `ASSET-LONG-${String(index + 1).padStart(4, '0')} — أصل اختباري طويل`,
     amount: (index + 1) * 100,
   }));
   const liabilities = Array.from({ length: 15 }, (_, index) => ({
     id: `long-report-liability-${index + 1}`,
-    name: `التزام اختباري طويل ${String(index + 1).padStart(2, '0')}`,
+    name: `LIABILITY-LONG-${String(index + 1).padStart(4, '0')} — التزام اختباري طويل`,
     amount: (index + 1) * 60,
   }));
   const equity = Array.from({ length: 15 }, (_, index) => ({
     id: `long-report-equity-${index + 1}`,
-    name: `حقوق ملكية اختبارية طويلة ${String(index + 1).padStart(2, '0')}`,
+    name: `EQUITY-LONG-${String(index + 1).padStart(4, '0')} — حقوق ملكية اختبارية طويلة`,
     amount: (index + 1) * 40,
   }));
 
@@ -174,6 +175,18 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
   await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
 
   const reportIds = ['journals', 'trial', 'ledger', 'invoices', 'expenses', 'income', 'balance'] as const;
+  const ledgerMarkers = [...journals]
+    .sort((left, right) => String(left.date).localeCompare(String(right.date)) || String(left.id).localeCompare(String(right.id), undefined, { numeric: true }))
+    .flatMap((journal) => [journal.number, journal.number]);
+  const reportMarkers = {
+    journals: journals.flatMap((journal) => [journal.number, journal.number]),
+    trial: accounts.map((account) => account.code),
+    ledger: ledgerMarkers,
+    invoices: invoices.map((invoice) => invoice.number),
+    expenses: expenses.map((expense) => expense.description.split(' — ')[0]),
+    income: [...revenue, ...expense].map((row) => row.name.split(' — ')[0]),
+    balance: [...assets, ...liabilities, ...equity].map((row) => row.name.split(' — ')[0]),
+  };
   for (const reportId of reportIds) {
     const pdfDownloadPromise = page.waitForEvent('download');
     await page.getByTestId(`button-export-${reportId}-pdf`).click();
@@ -201,6 +214,7 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
       expect((await stat(pageImagePath)).size).toBeGreaterThan(0);
       await expectPdfPageHasContent(pageImagePath, `${reportId} — الصفحة ${pageNumber}`);
     }
+    await expectPdfRowsRetained(pdfPath, reportId, reportMarkers[reportId], pageCount, testInfo);
     await expect(page.getByTestId(`button-export-${reportId}-pdf`)).toBeEnabled();
   }
 });
@@ -220,4 +234,27 @@ async function expectPdfPageHasContent(imagePath: string, pageLabel: string) {
     nonWhitePixelRatio,
     `${pageLabel} من PDF تحتوي على ${nonWhitePixelRatio * 100}% فقط من البكسلات غير البيضاء.`,
   ).toBeGreaterThanOrEqual(MIN_NON_WHITE_PIXEL_RATIO);
+}
+
+async function expectPdfRowsRetained(
+  pdfPath: string,
+  reportId: string,
+  rowMarkers: string[],
+  pageCount: number,
+  testInfo: { outputPath: (path: string) => string },
+) {
+  const textPath = testInfo.outputPath(`long-export-${reportId}-text.txt`);
+  await execFileAsync('pdftotext', ['-layout', pdfPath, textPath]);
+  const pdfText = await readFile(textPath, 'utf8');
+  const pageTexts = pdfText.split('\f').slice(0, pageCount);
+
+  expect(pageTexts, `${reportId} PDF يجب أن يحتوي على نص قابل للفحص لكل صفحة.`).toHaveLength(pageCount);
+  for (const [rowIndex, marker] of rowMarkers.entries()) {
+    const pageNumber = Math.floor(rowIndex / PDF_ROWS_PER_PAGE) + 1;
+    const pageText = pageTexts[pageNumber - 1] ?? '';
+    expect(
+      pageText,
+      `${reportId} — الصفحة ${pageNumber} يجب أن تحتوي على علامة الصف المفقودة: ${marker}`,
+    ).toContain(marker);
+  }
 }
