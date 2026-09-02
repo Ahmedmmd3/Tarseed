@@ -22,6 +22,7 @@ import Accounts from '@/pages/accounts';
 import Journals from '@/pages/journals';
 import Receivables from '@/pages/receivables';
 import Reports from '@/pages/reports';
+import Export from '@/pages/export';
 import Team from '@/pages/team';
 import ActivityLog from '@/pages/activity-log';
 import EInvoicing from '@/pages/e-invoicing';
@@ -101,6 +102,7 @@ function Router() {
         <Route path="/journals" component={() => <DashboardLayout><Journals /></DashboardLayout>} />
         <Route path="/receivables" component={() => <DashboardLayout><Receivables /></DashboardLayout>} />
         <Route path="/reports" component={() => <DashboardLayout><Reports /></DashboardLayout>} />
+         <Route path="/export" component={() => <DashboardLayout><Export /></DashboardLayout>} />
         <Route path="/team" component={() => <DashboardLayout><Team /></DashboardLayout>} />
         <Route path="/operations-log" component={() => <DashboardLayout><ActivityLog /></DashboardLayout>} />
         <Route path="/e-invoicing" component={() => <DashboardLayout><EInvoicing /></DashboardLayout>} />

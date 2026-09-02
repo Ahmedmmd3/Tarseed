@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Activity, AlertTriangle, BarChart3, Book, BookOpen, Boxes, BriefcaseBusiness, ChevronLeft, ClipboardList, Cloud, CloudOff, CreditCard, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Sparkles, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Book, BookOpen, Boxes, BriefcaseBusiness, ChevronLeft, ClipboardList, Cloud, CloudOff, CreditCard, FileDown, FileText, FileBadge, LayoutDashboard, LoaderCircle, LogOut, Menu, PackageOpen, ReceiptText, RefreshCw, ShieldCheck, ShoppingCart, Smartphone, Sparkles, Store, Truck, UsersRound, Wallet, X, type LucideIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -35,6 +35,7 @@ const navigationGroups: Array<{ label: string; items: NavigationItem[] }> = [
       { name: 'الذمم والمستحقات', href: '/receivables', icon: Wallet, permission: 'accounting' },
       { name: 'المصاريف', href: '/expenses', icon: ReceiptText, permission: 'accounting' },
       { name: 'التقارير المالية', href: '/reports', icon: BarChart3, permission: 'reports' },
+      { name: 'تصدير البيانات', href: '/export', icon: FileDown, permission: 'reports' },
       { name: 'الفوترة الإلكترونية', href: '/e-invoicing', icon: FileBadge, permission: 'accounting' },
     ],
   },
@@ -587,14 +588,14 @@ function AuthenticationRequiredRoute() {
 }
 
 function isSubscriptionProtectedRoute(href: string): boolean {
-  return new Set(['/dashboard', '/pos', '/sales', '/quotations', '/inventory', '/purchase-orders', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
+  return new Set(['/dashboard', '/pos', '/sales', '/quotations', '/inventory', '/purchase-orders', '/purchases', '/accounts', '/journals', '/receivables', '/expenses', '/reports', '/export', '/hr', '/operations', '/team', '/operations-log', '/e-invoicing']).has(href);
 }
 
 function canAccessNavigationItem(href: string, user: { roleId: string; permissions: Record<string, boolean> }): boolean {
   if (user.roleId === 'owner') return true;
   if (href === '/e-invoicing') return user.permissions['accounting'] === true || user.permissions['sales'] === true;
   if (href === '/guide') return true;
-  const permissionByRoute: Record<string, string> = { '/dashboard': 'dashboard', '/pos': 'sales', '/sales': 'sales', '/quotations': 'sales', '/inventory': 'inventory', '/purchase-orders': 'inventory', '/purchases': 'inventory', '/accounts': 'accounting', '/journals': 'accounting', '/receivables': 'accounting', '/expenses': 'accounting', '/reports': 'reports', '/hr': 'hr', '/operations': 'operations', '/team': '__owner__', '/operations-log': '__owner__' };
+  const permissionByRoute: Record<string, string> = { '/dashboard': 'dashboard', '/pos': 'sales', '/sales': 'sales', '/quotations': 'sales', '/inventory': 'inventory', '/purchase-orders': 'inventory', '/purchases': 'inventory', '/accounts': 'accounting', '/journals': 'accounting', '/receivables': 'accounting', '/expenses': 'accounting', '/reports': 'reports', '/export': 'reports', '/hr': 'hr', '/operations': 'operations', '/team': '__owner__', '/operations-log': '__owner__' };
   const permission = permissionByRoute[href];
   return permission ? user.permissions[permission] === true : false;
 }

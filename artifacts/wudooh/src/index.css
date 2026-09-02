@@ -51,6 +51,13 @@
 }
 
 :root {
+  /* Wudooh export surfaces use the same navy/blue identity, with a paper-like
+     neutral that keeps financial documents legible before they are shared. */
+  --export-paper: 214 32% 97%;
+  --export-ink: 220 60% 10%;
+  --export-rule: 214 23% 87%;
+  --export-positive: 163 58% 32%;
+
   --background: 216 20% 95.5%;
   --foreground: 220 60% 9.8%;
 
@@ -239,6 +246,11 @@
 }
 
 .dark {
+  --export-paper: 220 42% 14%;
+  --export-ink: 216 20% 95.5%;
+  --export-rule: 221 20.8% 30%;
+  --export-positive: 163 62% 54%;
+
   --background: 220 60% 9.8%;
   --foreground: 216 20% 95.5%;
 
