@@ -5,20 +5,119 @@ import { Button } from '@/components/ui/button';
 import {
   ArrowRight, CheckCircle2, CreditCard, Banknote, Search,
   ShoppingCart, Store, Package, AlertCircle, ReceiptText,
-  Plus, Minus, X
+  Plus, Minus, X, Printer
 } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 
-type Product = { id: number | string; name: string; sku?: string; salePrice?: number | string; price?: number | string; sellPrice?: number | string; stock?: number | string; vatRate?: number | string };
+type Product = { id: number | string; name: string; barcode?: string | number; sku?: string; salePrice?: number | string; price?: number | string; sellPrice?: number | string; stock?: number | string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
 type InventoryBalance = { productId: number | string; warehouseId: number | string; quantity: number | string };
 type CartItem = { product: Product; quantity: number };
 type RecordsPayload<T> = { records?: T[]; error?: string };
 type CheckoutPayload = { invoice?: { id: string | number; number: string; total: number | string; subtotal?: number | string; tax?: number | string; dueDate?: string }; error?: string };
+type InvoicePrintFormat = 'a4' | 'receipt';
+type CompletedInvoice = {
+  id: string | number;
+  number: string;
+  total: number;
+  subtotal?: number;
+  tax?: number;
+  issueDate: string;
+  customerName: string;
+  paymentMethod: 'cash' | 'card' | 'credit';
+  warehouseName: string;
+  items: Array<{ name: string; quantity: number; unitPrice: number; subtotal: number; tax: number; total: number }>;
+};
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
+}
+
+function normalizeBarcode(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/\s+/g, '');
+}
+
+function roundMoney(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function paymentMethodLabel(method: CompletedInvoice['paymentMethod']): string {
+  return { cash: 'نقدي', card: 'شبكة', credit: 'آجل' }[method];
+}
+
+function escapePrintHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character] ?? character));
+}
+
+function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat) {
+  const printWindow = window.open('', '_blank', 'width=900,height=700');
+  if (!printWindow) {
+    window.alert('تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.');
+    return;
+  }
+  const isA4 = format === 'a4';
+  const itemsHtml = invoice.items.map((item, index) => `
+    <tr>
+      <td>${index + 1}</td>
+      <td class="item-name">${escapePrintHtml(item.name)}</td>
+      <td>${item.quantity}</td>
+      <td>${escapePrintHtml(formatCurrency(item.unitPrice))}</td>
+      <td>${escapePrintHtml(formatCurrency(item.total))}</td>
+    </tr>
+  `).join('');
+  printWindow.document.write(`<!doctype html>
+    <html lang="ar" dir="rtl">
+      <head>
+        <meta charset="utf-8" />
+        <title>فاتورة ${escapePrintHtml(invoice.number)}</title>
+        <style>
+          @page { size: ${isA4 ? 'A4 portrait' : '80mm auto'}; margin: ${isA4 ? '12mm' : '3mm'}; }
+          * { box-sizing: border-box; }
+          body { margin: 0 auto; width: ${isA4 ? '180mm' : '74mm'}; color: #101828; font-family: Arial, Tahoma, sans-serif; font-size: ${isA4 ? '13px' : '10px'}; line-height: 1.5; }
+          .brand { border-bottom: 2px solid #0d9488; padding-bottom: 12px; text-align: center; }
+          .brand-name { color: #0d9488; font-size: ${isA4 ? '25px' : '18px'}; font-weight: 800; }
+          h1 { font-size: ${isA4 ? '21px' : '15px'}; margin: 8px 0 0; }
+          .meta { color: #667085; display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; }
+          .customer { border-bottom: 1px solid #d0d5dd; padding: 10px 0; }
+          table { border-collapse: collapse; margin-top: 16px; width: 100%; }
+          th, td { border-bottom: 1px solid #d0d5dd; padding: ${isA4 ? '8px 5px' : '5px 2px'}; text-align: right; vertical-align: top; }
+          th { background: #f2f4f7; font-weight: 700; }
+          .item-name { width: ${isA4 ? '38%' : '34%'}; }
+          .totals { margin-top: 16px; margin-right: auto; width: ${isA4 ? '52%' : '100%'}; }
+          .total-line { display: flex; justify-content: space-between; border-bottom: 1px solid #eaecf0; padding: 5px 0; }
+          .grand-total { border: 2px solid #0d9488; border-radius: 6px; color: #087f73; font-size: ${isA4 ? '17px' : '13px'}; font-weight: 800; margin-top: 8px; padding: 8px; }
+          .footer { color: #667085; margin-top: 26px; text-align: center; }
+          @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+        </style>
+      </head>
+      <body>
+        <header class="brand">
+          <div class="brand-name">ترصيد</div>
+          <h1>فاتورة بيع</h1>
+          <div class="meta"><span>رقم الفاتورة: ${escapePrintHtml(invoice.number)}</span><span>التاريخ: ${escapePrintHtml(invoice.issueDate)}</span></div>
+        </header>
+        ${invoice.customerName ? `<div class="customer">العميل: <strong>${escapePrintHtml(invoice.customerName)}</strong></div>` : ''}
+        <div class="meta"><span>المستودع: ${escapePrintHtml(invoice.warehouseName || 'غير محدد')}</span><span>الدفع: ${paymentMethodLabel(invoice.paymentMethod)}</span></div>
+        <table>
+          <thead><tr><th>#</th><th>الصنف</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr></thead>
+          <tbody>${itemsHtml}</tbody>
+        </table>
+        <section class="totals">
+          <div class="total-line"><span>المجموع قبل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.subtotal ?? 0))}</strong></div>
+          <div class="total-line"><span>ضريبة القيمة المضافة</span><strong>${escapePrintHtml(formatCurrency(invoice.tax ?? 0))}</strong></div>
+          <div class="grand-total"><div class="total-line"><span>الإجمالي شامل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
+        </section>
+        <div class="footer">شكراً لتعاملكم معنا</div>
+      </body>
+    </html>`);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.addEventListener('afterprint', () => printWindow.close(), { once: true });
+  printWindow.setTimeout(() => printWindow.print(), 250);
 }
 
 export default function POS() {
@@ -43,8 +142,12 @@ export default function POS() {
   const [vatRate, setVatRate] = useState(0.15);
   const [pricesIncludeVat, setPricesIncludeVat] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [invoice, setInvoice] = useState<{ id: string | number; number: string; total: number; subtotal?: number; tax?: number } | null>(null);
+  const [invoice, setInvoice] = useState<CompletedInvoice | null>(null);
   const [pendingOperationId, setPendingOperationId] = useState<string | null>(null);
+  const [invoicePrintFormat, setInvoicePrintFormat] = useState<InvoicePrintFormat>(() => {
+    if (typeof window === 'undefined') return 'receipt';
+    return window.localStorage.getItem('wudooh:pos-invoice-print-format') === 'a4' ? 'a4' : 'receipt';
+  });
 
   const loadData = useCallback(async () => {
     if (!currentUser) {
@@ -112,10 +215,12 @@ export default function POS() {
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery) return products;
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
+    const barcodeQuery = normalizeBarcode(searchQuery);
     return products.filter(p =>
       p.name.toLowerCase().includes(q) ||
-      (p.sku && p.sku.toLowerCase().includes(q))
+      (p.sku && p.sku.toLowerCase().includes(q)) ||
+      (p.barcode !== undefined && normalizeBarcode(p.barcode).includes(barcodeQuery))
     );
   }, [products, searchQuery]);
 
@@ -161,6 +266,22 @@ export default function POS() {
   };
 
   const clearCart = () => setCart([]);
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== 'Enter') return;
+    const barcode = normalizeBarcode(searchQuery);
+    if (!barcode) return;
+    const exactMatch = products.find((product) => normalizeBarcode(product.barcode) === barcode);
+    if (!exactMatch) return;
+    event.preventDefault();
+    addToCart(exactMatch);
+    setSearchQuery('');
+  };
+
+  const changeInvoicePrintFormat = (format: InvoicePrintFormat) => {
+    setInvoicePrintFormat(format);
+    window.localStorage.setItem('wudooh:pos-invoice-print-format', format);
+  };
 
   const cartTotals = cart.reduce((totals, item) => {
     const listed = getPrice(item.product) * item.quantity;
@@ -224,7 +345,25 @@ export default function POS() {
         ...data.invoice,
         total: data.invoice.total === undefined ? finalTotal : Number(data.invoice.total),
         subtotal: data.invoice.subtotal === undefined ? subtotal : Number(data.invoice.subtotal),
-        tax: data.invoice.tax === undefined ? tax : Number(data.invoice.tax)
+        tax: data.invoice.tax === undefined ? tax : Number(data.invoice.tax),
+        issueDate: new Date().toISOString().slice(0, 10),
+        customerName: customerName.trim(),
+        paymentMethod,
+        warehouseName: warehouses.find((warehouse) => String(warehouse.id) === String(selectedWarehouse))?.name ?? '',
+        items: cart.map((item) => {
+          const listed = getPrice(item.product) * item.quantity;
+          const rate = getVatRate(item.product);
+          const lineSubtotal = pricesIncludeVat ? listed / (1 + rate) : listed;
+          const lineTax = pricesIncludeVat ? listed - lineSubtotal : lineSubtotal * rate;
+          return {
+            name: item.product.name,
+            quantity: item.quantity,
+            unitPrice: roundMoney(getPrice(item.product)),
+            subtotal: roundMoney(lineSubtotal),
+            tax: roundMoney(lineTax),
+            total: roundMoney(lineSubtotal + lineTax),
+          };
+        }),
       });
       setCart([]);
       setCustomerName('');
@@ -262,6 +401,15 @@ export default function POS() {
             <p className="text-sm font-semibold text-slate-500">الإجمالي الشامل للضريبة</p>
             <p className="mt-1 text-3xl font-black text-teal-600">{formatCurrency(invoice.total)}</p>
           </div>
+        </div>
+        <div className="flex w-full max-w-sm flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50 p-4">
+          <div>
+            <p className="text-sm font-black text-slate-900">طباعة الفاتورة</p>
+            <p className="mt-1 text-xs text-slate-600">استخدم نفس الإعداد المحفوظ قبل إتمام البيع.</p>
+          </div>
+          <Button onClick={() => printInvoice(invoice, invoicePrintFormat)} size="lg" className="h-12 w-full gap-2 bg-blue-700 hover:bg-blue-800" data-testid="btn-print-invoice">
+            <Printer className="h-5 w-5" /> طباعة الفاتورة
+          </Button>
         </div>
         <div className="mt-8 flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
           <Button onClick={() => setInvoice(null)} size="lg" className="h-12 w-full sm:w-auto gap-2 bg-teal-600 hover:bg-teal-700 touch-manipulation" data-testid="btn-new-order">
@@ -310,6 +458,19 @@ export default function POS() {
             {warehouses.length === 0 && <option value="">لا يوجد مستودعات</option>}
           </select>
         </div>
+         <div className="mt-4">
+           <label htmlFor="invoice-print-format" className="mb-1.5 block text-xs font-bold text-slate-500">إعداد الفاتورة المطبوعة</label>
+           <select
+             id="invoice-print-format"
+             value={invoicePrintFormat}
+             onChange={(event) => changeInvoicePrintFormat(event.target.value as InvoicePrintFormat)}
+             className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium shadow-sm focus:border-teal-500 focus:outline-none"
+             data-testid="select-invoice-print-format"
+           >
+             <option value="receipt">إيصال صغير لأجهزة الكاشير</option>
+             <option value="a4">ورقة A4 كبيرة</option>
+           </select>
+         </div>
       </div>
 
       <div className={`flex-1 overflow-y-auto ${isMobileView ? 'p-4' : 'p-5'}`} style={{ maxHeight: isMobileView ? 'none' : 'calc(100vh - 440px)', minHeight: isMobileView ? '200px' : '200px' }}>
@@ -454,10 +615,11 @@ export default function POS() {
             <Search className="absolute right-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="ابحث عن منتج بالاسم أو الرمز..."
+               placeholder="ابحث عن منتج بالاسم أو الرمز أو الباركود..."
               className="h-12 w-full rounded-2xl border border-slate-200 bg-white pr-12 pl-4 text-sm font-medium shadow-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
+               onKeyDown={handleSearchKeyDown}
               data-testid="input-search-products"
             />
                <input
@@ -510,7 +672,7 @@ export default function POS() {
                       <Package className="h-8 w-8" />
                     </div>
                     <h3 className="font-bold text-sm sm:text-base text-slate-900 line-clamp-1" title={p.name}>{p.name}</h3>
-                    <p className="mt-1 text-[10px] sm:text-xs text-slate-500">{p.sku || 'بدون رمز'}</p>
+                     <p className="mt-1 text-[10px] sm:text-xs text-slate-500">{p.barcode || p.sku || 'بدون رمز'}</p>
                     <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-0">
                       <span className="font-black text-teal-600">{formatCurrency(price)}</span>
                       <span className={`self-start sm:self-auto rounded-md px-1.5 py-0.5 text-[10px] font-bold ${stock > 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>

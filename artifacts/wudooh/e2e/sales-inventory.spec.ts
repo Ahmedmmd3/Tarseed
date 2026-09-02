@@ -10,7 +10,7 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await page.route('**/api/data/products', (route) => route.fulfill({
       json: {
         records: [
-          { id: 101, name: 'استشارة', price: 500, vatRate: 15 },
+          { id: 101, name: 'استشارة', barcode: '628100000001', price: 500, vatRate: 15 },
           { id: 102, name: 'تقرير', price: 250, vatRate: 15 },
         ],
       },
@@ -45,7 +45,12 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     });
 
     await page.goto('/pos');
-    await page.getByTestId('card-product-101').click();
+    await page.getByTestId('select-invoice-print-format').selectOption('a4');
+    await expect(page.getByTestId('select-invoice-print-format')).toHaveValue('a4');
+    await page.getByTestId('input-search-products').fill('628100000001');
+    await expect(page.getByTestId('card-product-101')).toBeVisible();
+    await page.getByTestId('input-search-products').press('Enter');
+    await expect(page.getByTestId('cart-item-101')).toBeVisible();
     await page.getByTestId('card-product-102').click();
     await page.getByTestId('btn-plus-102').click();
     await page.getByTestId('btn-pay-cash').click();
@@ -56,6 +61,15 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await page.getByTestId('btn-checkout').click();
 
     await expect(page.getByTestId('page-pos-success')).toBeVisible();
+    await expect(page.getByTestId('btn-print-invoice')).toBeVisible();
+    const printWindowPromise = page.waitForEvent('popup');
+    await page.getByTestId('btn-print-invoice').click();
+    const printWindow = await printWindowPromise;
+    await printWindow.waitForLoadState('domcontentloaded');
+    await expect(printWindow).toHaveTitle(/فاتورة/);
+    await expect(printWindow.locator('body')).toContainText('استشارة');
+    expect(await printWindow.locator('style').textContent()).toContain('A4 portrait');
+    await printWindow.close();
     expect(checkoutPayload?.paymentMethod).toBe('cash');
     expect(checkoutPayload?.items).toEqual([
       { productId: 101, quantity: 1 },
