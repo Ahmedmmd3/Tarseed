@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { and, asc, desc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
 import { db, erpRecordsTable, organizationsTable, purchaseOrderSharesTable, teamAuditLogsTable } from "@workspace/db";
 import { isLocationAllowed } from "../lib/location-scope";
-import { DEFAULT_ACCOUNT_DEFINITIONS, DEMO_SEED_KEY } from "../lib/seed-demo-data";
+import { DEMO_SEED_KEY, ensureDefaultAccounts, seedDemoData } from "../lib/seed-demo-data";
 import {
   createPurchaseOrderShareToken,
   hashPurchaseOrderShareToken,
@@ -726,18 +726,12 @@ router.post("/accounting/initialize", requireAuth, requireSubscriptionAccess, re
       return null;
     }
 
-    const inserted = await tx.insert(erpRecordsTable).values(
-      DEFAULT_ACCOUNT_DEFINITIONS.map((data) => ({
-        organizationId: currentAuth.organizationId,
-        tableName: "accounts",
-        data,
-      })),
-    ).onConflictDoNothing().returning();
+    const initialized = await ensureDefaultAccounts(currentAuth.organizationId, tx);
     const records = await tx.select().from(erpRecordsTable).where(and(
       eq(erpRecordsTable.organizationId, currentAuth.organizationId),
       eq(erpRecordsTable.tableName, "accounts"),
     ));
-    return { auth: currentAuth, created: inserted.length, records };
+    return { auth: currentAuth, created: initialized.created, records };
   });
 
   if (!result) {
@@ -751,6 +745,86 @@ router.post("/accounting/initialize", requireAuth, requireSubscriptionAccess, re
   response.json({
     created: result.created,
     accounts: result.records.map((record) => ({ ...record.data, id: record.id, userId: result.auth.organizationId })),
+  });
+});
+
+router.get("/demo-data", requireAuth, requireSubscriptionAccess, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner") {
+    response.status(403).json({ error: "إدارة البيانات التجريبية متاحة لمالك المنشأة فقط." });
+    return;
+  }
+  const records = await db.select({
+    tableName: erpRecordsTable.tableName,
+  }).from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    sql`${erpRecordsTable.data}->>'demoSeedKey' = ${DEMO_SEED_KEY}`,
+  ));
+  const recordCounts = records.reduce<Record<string, number>>((counts, record) => {
+    counts[record.tableName] = (counts[record.tableName] ?? 0) + 1;
+    return counts;
+  }, {});
+  response.json({
+    hasDemoData: records.length > 0,
+    recordCount: records.length,
+    recordCounts,
+  });
+});
+
+router.post("/demo-data", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner") {
+    response.status(403).json({ error: "إضافة البيانات التجريبية متاحة لمالك المنشأة فقط." });
+    return;
+  }
+
+  const result = await db.transaction(async (tx) => {
+    if (!await lockAndValidateDataGeneration(tx, response)) return null;
+    const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+    if (!currentAuth || currentAuth.roleId !== "owner") {
+      response.locals.writeAccessFailure = "authorization_changed";
+      return null;
+    }
+    const seeded = await seedDemoData(
+      currentAuth.organizationId,
+      currentAuth.dataGeneration,
+      tx,
+    );
+    if (seeded.created === 0) {
+      return {
+        created: 0,
+        dataGeneration: currentAuth.dataGeneration,
+      };
+    }
+    const [organization] = await tx.update(organizationsTable).set({
+      dataGeneration: sql`${organizationsTable.dataGeneration} + 1`,
+    }).where(eq(organizationsTable.id, currentAuth.organizationId)).returning({
+      dataGeneration: organizationsTable.dataGeneration,
+    });
+    if (!organization) throw new Error("تعذر تحديث جيل بيانات المنشأة.");
+    await tx.insert(teamAuditLogsTable).values({
+      organizationId: currentAuth.organizationId,
+      actorId: currentAuth.id,
+      actorName: currentAuth.name || currentAuth.email,
+      action: "demo_data_added",
+      entity: "organization",
+      details: JSON.stringify({ createdRecords: seeded.created, demoSeedKey: DEMO_SEED_KEY }),
+    });
+    return {
+      created: seeded.created,
+      dataGeneration: organization.dataGeneration,
+    };
+  });
+
+  if (!result) {
+    const rejection = lockedWriteRejection(response);
+    response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+    return;
+  }
+  response.status(result.created > 0 ? 201 : 200).json({
+    created: result.created,
+    hasDemoData: true,
+    dataGeneration: result.dataGeneration,
   });
 });
 
@@ -768,6 +842,7 @@ router.delete("/demo-data", requireAuth, requireSubscriptionAccess, requireCurre
       response.locals.writeAccessFailure = "authorization_changed";
       return null;
     }
+    await ensureDefaultAccounts(currentAuth.organizationId, tx);
     const organizationRecords = await tx.select().from(erpRecordsTable)
       .where(eq(erpRecordsTable.organizationId, currentAuth.organizationId));
     const demoIds: DemoIdSets = new Map();
@@ -784,6 +859,13 @@ router.delete("/demo-data", requireAuth, requireSubscriptionAccess, requireCurre
       return {
         kind: "blocked" as const,
         tableName: unsafeUserRecord.tableName,
+      };
+    }
+    if ([...demoIds.values()].every((ids) => ids.size === 0)) {
+      return {
+        kind: "deleted" as const,
+        deleted: 0,
+        dataGeneration: currentAuth.dataGeneration,
       };
     }
     const deleted = await tx.delete(erpRecordsTable).where(and(

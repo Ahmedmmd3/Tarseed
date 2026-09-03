@@ -77,24 +77,17 @@ export const DEFAULT_WAREHOUSE_DEFINITIONS = [
 export const DEFAULT_ACCOUNT_DEFINITIONS = [
   { code: "1000", name: "الصندوق", type: "asset", parent: null, openingBalance: 0, status: "active" },
   { code: "1100", name: "البنك", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "1200", name: "العملاء", type: "asset", parent: null, openingBalance: 0, status: "active" },
+  { code: "1200", name: "ذمم مدينة (عملاء)", type: "asset", parent: null, openingBalance: 0, status: "active" },
   { code: "1300", name: "المخزون", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "1400", name: "ضريبة مدخلات", type: "asset", parent: null, openingBalance: 0, status: "active" },
-  { code: "2000", name: "الموردون", type: "liability", parent: null, openingBalance: 0, status: "active" },
-  { code: "2100", name: "ضريبة مخرجات", type: "liability", parent: null, openingBalance: 0, status: "active" },
-  { code: "2200", name: "مصروفات مستحقة", type: "liability", parent: null, openingBalance: 0, status: "active" },
+  { code: "2000", name: "ذمم دائنة (موردون)", type: "liability", parent: null, openingBalance: 0, status: "active" },
+  { code: "2100", name: "ضريبة القيمة المضافة", type: "liability", parent: null, openingBalance: 0, status: "active" },
   { code: "3000", name: "رأس المال", type: "equity", parent: null, openingBalance: 0, status: "active" },
-  { code: "3100", name: "الأرباح المبقاة", type: "equity", parent: null, openingBalance: 0, status: "active" },
-  { code: "4000", name: "المبيعات", type: "revenue", parent: null, openingBalance: 0, status: "active" },
-  { code: "4100", name: "إيرادات أخرى", type: "revenue", parent: null, openingBalance: 0, status: "active" },
+  { code: "3100", name: "الأرباح المحتجزة", type: "equity", parent: null, openingBalance: 0, status: "active" },
+  { code: "4000", name: "إيرادات المبيعات", type: "revenue", parent: null, openingBalance: 0, status: "active" },
   { code: "5000", name: "تكلفة البضاعة المباعة", type: "expense", parent: null, openingBalance: 0, status: "active" },
   { code: "5100", name: "مصاريف إيجار", type: "expense", parent: null, openingBalance: 0, status: "active" },
   { code: "5200", name: "مصاريف رواتب", type: "expense", parent: null, openingBalance: 0, status: "active" },
   { code: "5300", name: "مصاريف مرافق", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5400", name: "مصاريف تسويق وإعلان", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5500", name: "مصاريف نقل ومواصلات", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5600", name: "مصاريف صيانة", type: "expense", parent: null, openingBalance: 0, status: "active" },
-  { code: "5900", name: "مصاريف أخرى", type: "expense", parent: null, openingBalance: 0, status: "active" },
 ] as const;
 
 const CUSTOMERS = [
@@ -122,8 +115,8 @@ const EXPENSES = [
   { description: "إيجار", amount: 3_500, category: "إيجار", accountCode: "5100", day: 3 },
   { description: "رواتب", amount: 12_000, category: "رواتب", accountCode: "5200", day: 8 },
   { description: "كهرباء", amount: 850, category: "مرافق", accountCode: "5300", day: 13 },
-  { description: "تسويق", amount: 1_200, category: "تسويق", accountCode: "5400", day: 18 },
-  { description: "صيانة", amount: 450, category: "صيانة", accountCode: "5600", day: 22 },
+  { description: "تسويق", amount: 1_200, category: "تسويق", accountCode: "5300", day: 18 },
+  { description: "صيانة", amount: 450, category: "صيانة", accountCode: "5300", day: 22 },
 ] as const;
 
 const money = (value: number): number => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -153,7 +146,7 @@ function balanced(lines: Array<{ accountId: string; debit: number; credit: numbe
 async function ensureDefaultWarehouses(
   organizationId: number,
   executor: DatabaseExecutor,
-): Promise<void> {
+): Promise<number> {
   const existing = await executor.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
     eq(erpRecordsTable.tableName, "warehouses"),
@@ -162,13 +155,59 @@ async function ensureDefaultWarehouses(
   const missing = DEFAULT_WAREHOUSE_DEFINITIONS.filter(
     (definition) => !existingKeys.has(`${definition.name}:${definition.type}`),
   );
-  if (!missing.length) return;
+  if (!missing.length) return 0;
 
-  await executor.insert(erpRecordsTable).values(missing.map((definition) => ({
+  const inserted = await executor.insert(erpRecordsTable).values(missing.map((definition) => ({
     organizationId,
     tableName: "warehouses",
     data: { ...definition },
-  })));
+  }))).returning({ id: erpRecordsTable.id });
+  return inserted.length;
+}
+
+export async function ensureDefaultAccounts(
+  organizationId: number,
+  executor: DatabaseExecutor = db,
+): Promise<{ created: number; migrated: number }> {
+  await executor.execute(sql`SELECT pg_advisory_xact_lock(${DEMO_SEED_LOCK_NAMESPACE}, ${organizationId})`);
+  const existing = await executor.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId),
+    eq(erpRecordsTable.tableName, "accounts"),
+  ));
+  const defaultCodes = new Set(DEFAULT_ACCOUNT_DEFINITIONS.map((definition) => definition.code));
+  const legacyDemoAccounts = existing.filter((record) =>
+    defaultCodes.has(String(record.data.code) as typeof DEFAULT_ACCOUNT_DEFINITIONS[number]["code"])
+    && record.data.demoSeedKey === DEMO_SEED_KEY);
+  for (const record of legacyDemoAccounts) {
+    const normalized = { ...record.data };
+    delete normalized.isDemoData;
+    delete normalized.demoSeedKey;
+    delete normalized.demoDataGeneration;
+    await executor.update(erpRecordsTable).set({ data: normalized }).where(eq(erpRecordsTable.id, record.id));
+  }
+
+  const existingCodes = new Set(existing.map((record) => String(record.data.code)));
+  const missing = DEFAULT_ACCOUNT_DEFINITIONS.filter((definition) => !existingCodes.has(definition.code));
+  if (!missing.length) {
+    return { created: 0, migrated: legacyDemoAccounts.length };
+  }
+  const inserted = await executor.insert(erpRecordsTable).values(missing.map((definition) => ({
+    organizationId,
+    tableName: "accounts",
+    data: { ...definition },
+  }))).onConflictDoNothing().returning({ id: erpRecordsTable.id });
+  return { created: inserted.length, migrated: legacyDemoAccounts.length };
+}
+
+async function ensureOrganizationDefaults(
+  organizationId: number,
+  executor: DatabaseExecutor,
+): Promise<{ created: number }> {
+  await executor.execute(sql`SELECT pg_advisory_xact_lock(${DEMO_SEED_LOCK_NAMESPACE}, ${organizationId})`);
+  const warehousesCreated = await ensureDefaultWarehouses(organizationId, executor);
+  const accounts = await ensureDefaultAccounts(organizationId, executor);
+  await markOrganizationInitializationReady(executor, organizationId);
+  return { created: warehousesCreated + accounts.created };
 }
 
 export async function seedDemoData(
@@ -192,13 +231,13 @@ async function seedDemoDataInTransaction(
   await executor.execute(sql`SELECT pg_advisory_xact_lock(${DEMO_SEED_LOCK_NAMESPACE}, ${organizationId})`);
 
   await ensureDefaultWarehouses(organizationId, executor);
+  await ensureDefaultAccounts(organizationId, executor);
 
   const existing = await executor.select({ id: erpRecordsTable.id }).from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
     sql`${erpRecordsTable.data}->>'demoSeedKey' = ${DEMO_SEED_KEY}`,
   )).limit(1);
   if (existing.length) {
-    await markOrganizationInitializationReady(executor, organizationId);
     return { created: 0 };
   }
 
@@ -208,13 +247,6 @@ async function seedDemoDataInTransaction(
   )).orderBy(erpRecordsTable.id).limit(1);
   if (!warehouse) throw new Error("تعذر العثور على المستودع الافتراضي لإنشاء البيانات التجريبية.");
 
-  const insertedAccounts = await executor.insert(erpRecordsTable).values(
-    DEFAULT_ACCOUNT_DEFINITIONS.map((definition) => ({
-      organizationId,
-      tableName: "accounts",
-      data: tagged({ ...definition }, dataGeneration),
-    })),
-  ).onConflictDoNothing().returning();
   const accountRows = await executor.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
     eq(erpRecordsTable.tableName, "accounts"),
@@ -300,7 +332,7 @@ async function seedDemoDataInTransaction(
     }, dataGeneration),
   });
 
-  let createdCount = insertedAccounts.length + customerRows.length + productRows.length + inventoryRecords.length;
+  let createdCount = customerRows.length + productRows.length + inventoryRecords.length;
   for (const [index, invoiceDefinition] of INVOICES.entries()) {
     const customer = customerRows[invoiceDefinition.customerIndex];
     const customerDefinition = CUSTOMERS[invoiceDefinition.customerIndex];
@@ -425,7 +457,6 @@ async function seedDemoDataInTransaction(
 
   await executor.insert(erpRecordsTable).values(journals);
   createdCount += journals.length;
-  await markOrganizationInitializationReady(executor, organizationId);
   return { created: createdCount };
 }
 
@@ -531,7 +562,7 @@ export async function initializeOrganization(
 
   try {
     if (!options.automatic) {
-      return await seedDemoData(organizationId, dataGeneration, undefined, now);
+      return await db.transaction((tx) => ensureOrganizationDefaults(organizationId, tx));
     }
     return await db.transaction(async (tx) => {
       const [leased] = await tx.select({
@@ -547,7 +578,7 @@ export async function initializeOrganization(
       ) {
         throw new InitializationLeaseLostError();
       }
-      const result = await seedDemoData(organizationId, dataGeneration, tx, now);
+      const result = await ensureOrganizationDefaults(organizationId, tx);
       await tx.insert(platformAuditLogsTable).values(automaticAuditValues(organizationId, {
         outcome: "ready",
         attempts: organization.initializationAttempts,

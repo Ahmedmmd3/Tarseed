@@ -29,13 +29,15 @@ import {
 import { hashPassword, hashSessionToken } from "../src/lib/team-auth.ts";
 
 const execFileAsync = promisify(execFile);
-const EXPECTED_COUNTS = {
-  accounts: 15,
+const EXPECTED_DEFAULT_COUNTS = {
+  accounts: 13,
+  warehouses: 2,
+};
+const EXPECTED_DEMO_COUNTS = {
   customers: 3,
   products: 5,
   invoices: 4,
   expenses: 5,
-  warehouses: 2,
 };
 
 let server;
@@ -65,21 +67,37 @@ function cookieFrom(response, name) {
   return match ? `${name}=${match[1]}` : null;
 }
 
-async function assertInitializedOrganization(organizationId, label) {
+async function organizationRecordsAndCounts(organizationId) {
   const records = await db.select().from(erpRecordsTable)
     .where(eq(erpRecordsTable.organizationId, organizationId));
   const counts = records.reduce((result, record) => {
     result[record.tableName] = (result[record.tableName] ?? 0) + 1;
     return result;
   }, {});
+  return { records, counts };
+}
 
-  for (const [tableName, expected] of Object.entries(EXPECTED_COUNTS)) {
+async function assertInitializedOrganization(organizationId, label) {
+  const { records, counts } = await organizationRecordsAndCounts(organizationId);
+  for (const [tableName, expected] of Object.entries(EXPECTED_DEFAULT_COUNTS)) {
     assert.equal(counts[tableName] ?? 0, expected, `${label}: عدد ${tableName} غير مطابق`);
   }
-  for (const tableName of ["accounts", "customers", "products", "invoices", "expenses"]) {
-    const seeded = records.filter((record) => record.tableName === tableName);
+  const accounts = records.filter((record) => record.tableName === "accounts");
+  assert.ok(accounts.every((record) => record.data.demoSeedKey === undefined), `${label}: الحسابات الأساسية ليست تجريبية`);
+  for (const tableName of Object.keys(EXPECTED_DEMO_COUNTS)) {
+    assert.equal(counts[tableName] ?? 0, 0, `${label}: لا يجب إنشاء ${tableName} تلقائياً`);
+  }
+}
+
+async function assertDemoDataSeeded(organizationId, label) {
+  const { records, counts } = await organizationRecordsAndCounts(organizationId);
+  for (const [tableName, expected] of Object.entries({ ...EXPECTED_DEFAULT_COUNTS, ...EXPECTED_DEMO_COUNTS })) {
+    assert.equal(counts[tableName] ?? 0, expected, `${label}: عدد ${tableName} غير مطابق`);
+  }
+  for (const tableName of Object.keys(EXPECTED_DEMO_COUNTS)) {
+    const demoRecords = records.filter((record) => record.tableName === tableName);
     assert.ok(
-      seeded.every((record) => record.data.demoSeedKey === DEMO_SEED_KEY),
+      demoRecords.every((record) => record.data.demoSeedKey === DEMO_SEED_KEY),
       `${label}: يجب أن تنتمي كل سجلات ${tableName} إلى البذور الموحدة`,
     );
   }
@@ -104,7 +122,7 @@ after(async () => {
   await pool.end();
 });
 
-test("توحد التسجيل والدعوة وسكربت المتصفح بيانات المنشأة التجريبية بلا تكرار", async () => {
+test("ينشئ التسجيل والدعوة البيانات الأساسية فقط ويبقي سكربت المتصفح تجريبياً بلا تكرار", async () => {
   const registrationEmail = `registration-${suffix}@example.test`;
   const registration = await request("/auth/register", {
     method: "POST",
@@ -214,9 +232,9 @@ test("توحد التسجيل والدعوة وسكربت المتصفح بيا�
     },
   });
   await runBrowserSetup();
-  await assertInitializedOrganization(browserOrganization.id, "إصلاح حساب المتصفح القديم");
+  await assertDemoDataSeeded(browserOrganization.id, "إصلاح حساب المتصفح القديم");
   await runBrowserSetup();
-  await assertInitializedOrganization(browserOrganization.id, "إعادة تشغيل تجهيز حساب المتصفح");
+  await assertDemoDataSeeded(browserOrganization.id, "إعادة تشغيل تجهيز حساب المتصفح");
 });
 
 test("تمنع تهيئة البيانات التجريبية المتزامنة التكرار", async () => {
@@ -241,7 +259,7 @@ test("تمنع تهيئة البيانات التجريبية المتزامنة
 
   assert.deepEqual(results.filter(({ created }) => created === 0).length, 1);
   assert.equal(results.filter(({ created }) => created > 0).length, 1);
-  await assertInitializedOrganization(organization.id, "التهيئة المتزامنة");
+  await assertDemoDataSeeded(organization.id, "التهيئة المتزامنة");
 });
 
 test("تتراجع تهيئة البذور بالكامل بعد فشل إدراج جزئي وتنجح إعادة المحاولة مرة واحدة", async () => {
@@ -267,7 +285,7 @@ test("تتراجع تهيئة البذور بالكامل بعد فشل إدرا
       CREATE FUNCTION ${triggerFunction}() RETURNS trigger
       LANGUAGE plpgsql AS $$
       BEGIN
-        IF NEW.table_name = 'products' AND NEW.data->>'demoSeedKey' = '${DEMO_SEED_KEY}' THEN
+        IF NEW.table_name = 'accounts' AND NEW.data->>'code' = '1200' THEN
           RAISE EXCEPTION 'فشل مقصود لاختبار التراجع الذري للبذور';
         END IF;
         RETURN NEW;
@@ -491,8 +509,8 @@ test("تعالج المصالحة الحالات المعلقة القديمة �
       LANGUAGE plpgsql AS $$
       BEGIN
         IF NEW.organization_id = ${retrying.id}
-          AND NEW.table_name = 'products'
-          AND NEW.data->>'demoSeedKey' = '${DEMO_SEED_KEY}' THEN
+          AND NEW.table_name = 'accounts'
+          AND NEW.data->>'code' = '1200' THEN
           RAISE EXCEPTION 'تفصيل داخلي سري لا يجب تسجيله';
         END IF;
         RETURN NEW;

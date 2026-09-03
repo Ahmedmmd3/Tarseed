@@ -24,6 +24,9 @@ import {
   LoaderCircle,
   CalendarDays,
   Briefcase,
+  CircleCheckBig,
+  Database,
+  DatabaseZap,
   Trash2
 } from 'lucide-react';
 
@@ -50,7 +53,11 @@ export default function ManagerPortal() {
   const [billingMessage, setBillingMessage] = useState('');
   const [billingAction, setBillingAction] = useState<'checkout' | 'portal' | null>(null);
   const [demoDeleteOpen, setDemoDeleteOpen] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoAdding, setDemoAdding] = useState(false);
   const [demoDeleting, setDemoDeleting] = useState(false);
+  const [hasDemoData, setHasDemoData] = useState<boolean | null>(null);
+  const [demoRecordCount, setDemoRecordCount] = useState(0);
   const [demoMessage, setDemoMessage] = useState('');
   const [demoError, setDemoError] = useState('');
   const [, setLocation] = useLocation();
@@ -96,6 +103,43 @@ export default function ManagerPortal() {
       window.clearInterval(timer);
     };
   }, [currentUser?.subscription.status, refreshSession]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.roleId !== 'owner') {
+      setHasDemoData(null);
+      setDemoRecordCount(0);
+      return;
+    }
+    let active = true;
+    const loadDemoStatus = async () => {
+      setDemoLoading(true);
+      setDemoError('');
+      try {
+        const response = await fetch('/api/demo-data', {
+          credentials: 'include',
+          cache: 'no-store',
+        });
+        const payload = await response.json().catch(() => ({})) as {
+          hasDemoData?: boolean;
+          recordCount?: number;
+          error?: string;
+        };
+        if (!response.ok || typeof payload.hasDemoData !== 'boolean') {
+          throw new Error(payload.error ?? 'تعذر معرفة حالة البيانات التجريبية.');
+        }
+        if (active) {
+          setHasDemoData(payload.hasDemoData);
+          setDemoRecordCount(Number(payload.recordCount) || 0);
+        }
+      } catch (error) {
+        if (active) setDemoError(error instanceof Error ? error.message : 'تعذر معرفة حالة البيانات التجريبية.');
+      } finally {
+        if (active) setDemoLoading(false);
+      }
+    };
+    void loadDemoStatus();
+    return () => { active = false; };
+  }, [currentUser?.organizationId, currentUser?.roleId, currentUser?.dataGeneration]);
 
   if (!currentUser) {
     return (
@@ -204,6 +248,8 @@ export default function ManagerPortal() {
       }
       await refreshSession();
       setDemoDeleteOpen(false);
+      setHasDemoData(false);
+      setDemoRecordCount(0);
       setDemoMessage(
         payload.deleted
           ? `تم حذف ${payload.deleted} سجلاً تجريبياً. أصبحت مساحة العمل جاهزة لبياناتك.`
@@ -213,6 +259,45 @@ export default function ManagerPortal() {
       setDemoError(error instanceof Error ? error.message : 'تعذر حذف البيانات التجريبية.');
     } finally {
       setDemoDeleting(false);
+    }
+  };
+
+  const addDemoData = async () => {
+    if (!currentUser || currentUser.roleId !== 'owner') return;
+    setDemoAdding(true);
+    setDemoError('');
+    setDemoMessage('');
+    try {
+      const response = await fetch('/api/demo-data', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+        },
+      });
+      const payload = await response.json().catch(() => ({})) as {
+        created?: number;
+        hasDemoData?: boolean;
+        error?: string;
+      };
+      if (!response.ok) {
+        if (response.status === 409) {
+          window.dispatchEvent(new Event('wudooh:stale-data-generation'));
+        }
+        throw new Error(payload.error ?? 'تعذر إضافة البيانات التجريبية.');
+      }
+      await refreshSession();
+      setHasDemoData(true);
+      setDemoRecordCount(Number(payload.created) || demoRecordCount);
+      setDemoMessage(
+        payload.created
+          ? `تمت إضافة ${payload.created} سجلاً تجريبياً. يمكنك الآن استكشاف مساحة العمل.`
+          : 'البيانات التجريبية موجودة بالفعل.',
+      );
+    } catch (error) {
+      setDemoError(error instanceof Error ? error.message : 'تعذر إضافة البيانات التجريبية.');
+    } finally {
+      setDemoAdding(false);
     }
   };
 
@@ -451,33 +536,54 @@ export default function ManagerPortal() {
 
                {isOwner && (
                  <section className="mt-6 border-t border-white/10 pt-6" aria-labelledby="demo-data-heading">
-                   <div className="rounded-2xl border border-rose-400/20 bg-rose-400/5 p-4 sm:p-5">
+                    <div className="rounded-2xl border border-teal-400/20 bg-teal-400/5 p-4 sm:p-5">
                      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                        <div className="flex items-start gap-3">
-                         <div className="rounded-xl bg-rose-400/10 p-2.5 text-rose-300">
-                           <Trash2 className="h-5 w-5" aria-hidden="true" />
+                          <div className="rounded-xl bg-teal-400/10 p-2.5 text-teal-300">
+                            <Database className="h-5 w-5" aria-hidden="true" />
                          </div>
                          <div>
                            <h4 id="demo-data-heading" className="font-bold text-white">البيانات التجريبية</h4>
                            <p className="mt-1 max-w-xl text-sm leading-6 text-slate-400">
-                             يمكنك حذف الحسابات والعملاء والمنتجات والفواتير والمصاريف التجريبية والبدء ببيانات منشأتك. لن تُحذف البيانات التي أضفتها بنفسك.
+                              أضف عملاء ومنتجات وفواتير ومصاريف تدريبية قبل دخول مساحة العمل، أو احذفها متى شئت. الحسابات الأساسية تُنشأ تلقائياً وتبقى محفوظة في الحالتين.
                            </p>
+                            <div className="mt-3 flex items-center gap-2 text-sm font-medium">
+                              {demoLoading ? (
+                                <><LoaderCircle className="h-4 w-4 animate-spin text-slate-300" /> <span className="text-slate-300">جارٍ التحقق...</span></>
+                              ) : hasDemoData ? (
+                                <><CircleCheckBig className="h-4 w-4 text-emerald-300" /> <span className="text-emerald-200">البيانات التجريبية مضافة{demoRecordCount > 0 ? ` (${demoRecordCount} سجل)` : ''}</span></>
+                              ) : (
+                                <><DatabaseZap className="h-4 w-4 text-slate-300" /> <span className="text-slate-300">مساحة العمل خالية من البيانات التجريبية</span></>
+                              )}
+                            </div>
                          </div>
                        </div>
-                       <Button
-                         type="button"
-                         variant="destructive"
-                         onClick={() => {
-                           setDemoError('');
-                           setDemoDeleteOpen(true);
-                         }}
-                         disabled={demoDeleting}
-                         className="shrink-0 bg-rose-600 text-white hover:bg-rose-500"
-                         data-testid="button-delete-demo-data"
-                       >
-                         {demoDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                         حذف البيانات التجريبية
-                       </Button>
+                        <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                          <Button
+                            type="button"
+                            onClick={() => void addDemoData()}
+                            disabled={demoLoading || demoAdding || demoDeleting || hasDemoData === true}
+                            className="bg-teal-400 text-[#0A1328] hover:bg-teal-300"
+                            data-testid="button-add-demo-data"
+                          >
+                            {demoAdding ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <DatabaseZap className="h-4 w-4" />}
+                            إضافة البيانات التجريبية
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            onClick={() => {
+                              setDemoError('');
+                              setDemoDeleteOpen(true);
+                            }}
+                            disabled={demoLoading || demoAdding || demoDeleting || hasDemoData !== true}
+                            className="bg-rose-600 text-white hover:bg-rose-500"
+                            data-testid="button-delete-demo-data"
+                          >
+                            {demoDeleting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            حذف البيانات التجريبية
+                          </Button>
+                        </div>
                      </div>
                      {demoMessage && <p className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-3 text-sm font-medium text-emerald-200" role="status">{demoMessage}</p>}
                      {demoError && <p className="mt-4 rounded-xl border border-rose-400/20 bg-rose-400/10 p-3 text-sm font-medium text-rose-200" role="alert">{demoError}</p>}
@@ -534,7 +640,7 @@ export default function ManagerPortal() {
           <AlertDialogHeader className="text-right sm:text-right">
             <AlertDialogTitle>حذف البيانات التجريبية؟</AlertDialogTitle>
             <AlertDialogDescription className="leading-7">
-              سيُحذف دليل الحسابات والعملاء والمنتجات وأرصدة المخزون والفواتير والمصاريف والقيود التي أنشأها ترصيد للتجربة فقط. لا يمكن التراجع عن هذه العملية، ولن تتأثر بياناتك الخاصة.
+              سيُحذف العملاء والمنتجات وأرصدة المخزون والفواتير والمصاريف والقيود التي أنشأها ترصيد للتجربة فقط. لن تُحذف الحسابات الأساسية أو البيانات التي أضفتها بنفسك، ولا يمكن التراجع عن حذف السجلات التجريبية.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="gap-2 sm:space-x-0">
