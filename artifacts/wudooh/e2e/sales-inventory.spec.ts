@@ -1,7 +1,12 @@
+import { execFile } from 'node:child_process';
+import { readFile, stat } from 'node:fs/promises';
+import { promisify } from 'node:util';
 import { expect, test, unique } from './fixtures';
 
+const execFileAsync = promisify(execFile);
+
 test.describe('المبيعات والمخزون والمصروفات والعملاء', () => {
-  test('ينشئ فاتورة ببندين وضريبة 15% من نقطة البيع', async ({ authenticatedPage: page }) => {
+  test('ينشئ فاتورة ببندين وضريبة 15% من نقطة البيع', async ({ authenticatedPage: page }, testInfo) => {
     let checkoutPayload: {
       paymentMethod?: string;
       items?: Array<{ productId: number; quantity: number }>;
@@ -62,6 +67,21 @@ test.describe('المبيعات والمخزون والمصروفات والعم
 
     await expect(page.getByTestId('page-pos-success')).toBeVisible();
     await expect(page.getByTestId('btn-print-invoice')).toBeVisible();
+    await page.evaluate(() => {
+      const originalOpen = window.open.bind(window);
+      (window as any).open = (...args: any[]) => {
+        const popup = originalOpen(...args);
+        if (popup) {
+          const originalAddEventListener = popup.addEventListener.bind(popup);
+          (popup as any).addEventListener = (type: string, ...listenerArgs: any[]) => {
+            if (type === 'afterprint') return;
+            return originalAddEventListener(type, ...listenerArgs);
+          };
+          popup.print = () => {};
+        }
+        return popup;
+      };
+    });
     const printWindowPromise = page.waitForEvent('popup');
     await page.getByTestId('btn-print-invoice').click();
     const printWindow = await printWindowPromise;
@@ -69,6 +89,15 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expect(printWindow).toHaveTitle(/فاتورة/);
     await expect(printWindow.locator('body')).toContainText('استشارة');
     expect(await printWindow.locator('style').textContent()).toContain('A4 portrait');
+    const pdfPath = testInfo.outputPath('invoice-print-arabic.pdf');
+    await printWindow.pdf({ path: pdfPath, format: 'A4', printBackground: true });
+    expect((await stat(pdfPath)).size, 'فاتورة البيع المطبوعة يجب ألا تكون فارغة.').toBeGreaterThan(0);
+    await expectArabicPdfValues(
+      pdfPath,
+      'فاتورة البيع',
+      ['فاتورة بيع', 'استشارة', 'المجموع قبل الضريبة', 'ضريبة القيمة المضافة', 'تعاملكم معنا'],
+      testInfo,
+    );
     await printWindow.close();
     expect(checkoutPayload?.paymentMethod).toBe('cash');
     expect(checkoutPayload?.items).toEqual([
@@ -148,3 +177,31 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expect(page.getByTestId('text-cart-total')).not.toHaveText(totalBefore);
   });
 });
+
+async function expectArabicPdfValues(
+  pdfPath: string,
+  documentLabel: string,
+  values: string[],
+  testInfo: { outputPath: (path: string) => string },
+) {
+  const { stdout: pdfInfo } = await execFileAsync('pdfinfo', [pdfPath]);
+  const pageCount = Number(pdfInfo.match(/^Pages:\s+(\d+)$/m)?.[1]);
+  expect(Number.isFinite(pageCount), `${documentLabel} PDF يجب أن يعرض عدد الصفحات.`).toBe(true);
+  expect(pageCount, `${documentLabel} PDF يجب أن يحتوي على صفحة واحدة على الأقل.`).toBeGreaterThan(0);
+
+  const textPath = testInfo.outputPath(`${documentLabel}-text.txt`);
+  await execFileAsync('pdftotext', ['-layout', pdfPath, textPath]);
+  const pageTexts = (await readFile(textPath, 'utf8'))
+    .normalize('NFC')
+    .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+    .split('\f')
+    .slice(0, pageCount);
+
+  expect(pageTexts, `${documentLabel} PDF يجب أن يحتوي على نص قابل للفحص لكل صفحة.`).toHaveLength(pageCount);
+  for (const value of values) {
+    expect(
+      pageTexts[0] ?? '',
+      `${documentLabel} — الصفحة 1 يجب أن تحتوي على القيمة العربية: ${value}`,
+    ).toContain(value);
+  }
+}
