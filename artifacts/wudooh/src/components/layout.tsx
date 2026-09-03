@@ -230,26 +230,26 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {sidebarOpen && <button type="button" className="fixed inset-0 z-20 bg-slate-950/40 md:hidden" onClick={closeSidebar} aria-label="إغلاق القائمة" data-testid="button-close-menu-overlay" />}
 
-        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex w-[286px] flex-col border-l border-white/10 bg-[#0A1328] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
-          <div className="border-b border-white/10 px-6 py-6">
+        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex h-screen min-h-0 w-[286px] flex-col border-l border-white/10 bg-[#0A1328] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
+          <div className="shrink-0 border-b border-white/10 px-5 py-4">
             <BrandLockup dark />
-            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
               <p className="text-xs font-semibold text-teal-200">مساحة العمل</p>
               <p className="mt-1 truncate text-sm font-bold text-white">{currentUser?.projectName ?? 'منشأتك'}</p>
               <p className="mt-1 truncate text-xs text-slate-400">{currentUser?.name ?? 'نظرة عامة على أعمالك'}</p>
             </div>
           </div>
 
-          <nav className="flex-1 space-y-6 overflow-y-auto px-4 py-6" aria-label="القائمة الرئيسية">
+          <nav className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-4" aria-label="القائمة الرئيسية">
             {visibleGroups.map((group) => (
               <div key={group.label}>
-                <p className="mb-2 px-3 text-[11px] font-bold tracking-wide text-slate-400">{group.label}</p>
-                <div className="space-y-1">
+                <p className="mb-1.5 px-3 text-[11px] font-bold tracking-wide text-slate-400">{group.label}</p>
+                <div className="space-y-0.5">
                   {group.items.map((item) => {
                     const isActive = location === item.href;
                     return (
                       <Link key={item.href} href={item.href} onClick={closeSidebar} data-testid={`link-${item.href.replace('/', '') || 'home'}`}>
-                        <div className={`group flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition ${isActive ? 'bg-teal-400 text-[#0A1328] shadow-lg shadow-teal-950/20' : 'text-slate-200 hover:bg-white/10 hover:text-white'}`}>
+                        <div className={`group flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${isActive ? 'bg-teal-400 text-[#0A1328] shadow-lg shadow-teal-950/20' : 'text-slate-200 hover:bg-white/10 hover:text-white'}`}>
                           <item.icon className={`h-[18px] w-[18px] shrink-0 ${isActive ? 'text-[#0A1328]' : 'text-teal-200'}`} />
                           <span className="flex-1">{item.name}</span>
                           {isActive && <ChevronLeft className="h-4 w-4" />}
@@ -262,7 +262,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
             ))}
           </nav>
 
-          <div className="border-t border-white/10 p-4">
+          <div className="shrink-0 border-t border-white/10 p-3">
             <div className="rounded-2xl bg-white/5 p-3 text-xs leading-6 text-slate-300">
               <div className="flex items-center gap-2 font-bold text-white"><PackageOpen className="h-4 w-4 text-teal-300" />ترصيد لإدارة أوضح</div>
               <p className="mt-1">كل عمليات منشأتك في مكان واحد.</p>
