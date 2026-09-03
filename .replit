@@ -26,8 +26,8 @@ packages = ["glib", "nss", "nspr", "atk", "at-spi2-atk", "cups", "dbus", "expat"
 [userenv]
 
 [userenv.production]
-RESEND_FROM_EMAIL = "no-reply@amd-network.com"
-PUBLIC_APP_URL = "https://amd-network.com"
+RESEND_FROM_EMAIL = "no-reply@tarsed.app"
+PUBLIC_APP_URL = "https://tarsed.app"
 STRIPE_WEBHOOK_ALERT_EMAIL = "ahmeddawood2221@gmail.com"
 
 [[ports]]
