@@ -166,11 +166,26 @@ function passwordResetUrl(request: Request, token: string): string {
   return `${origin}/reset-password?token=${encodeURIComponent(token)}`;
 }
 
-async function sendResendEmail({ to, subject, html }: { to: string; subject: string; html: string }): Promise<void> {
+async function sendResendEmail({
+  to,
+  subject,
+  html,
+  text,
+}: {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+}): Promise<void> {
   const configuredSender = process.env.RESEND_FROM_EMAIL?.trim();
   if (!configuredSender && process.env.NODE_ENV === "production") {
     throw new Error("Email delivery is not configured.");
   }
+  const sender = configuredSender
+    ? configuredSender.includes("<")
+      ? configuredSender
+      : `ترصيد <${configuredSender}>`
+    : "ترصيد <onboarding@resend.dev>";
   if (process.env.NODE_ENV === "test") {
     const testDelayMs = Number.parseInt(process.env.EMAIL_DELIVERY_TEST_DELAY_MS ?? "0", 10);
     const shouldFailForTest = process.env.EMAIL_DELIVERY_TEST_FAIL === "1";
@@ -186,10 +201,11 @@ async function sendResendEmail({ to, subject, html }: { to: string; subject: str
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      from: configuredSender || "Tarseed <onboarding@resend.dev>",
+      from: sender,
       to: [to],
       subject,
       html,
+      text,
     }),
   });
   if (!response.ok) {
@@ -218,6 +234,12 @@ async function sendEmailVerificationCode({
   await sendResendEmail({
     to: email,
     subject: "رمز تفعيل حساب ترصيد",
+    text: `مرحباً ${name}،
+
+رمز تفعيل حسابك في ترصيد هو: ${code}
+
+ينتهي الرمز خلال ${EMAIL_VERIFICATION_MINUTES} دقائق، ويمكن استخدامه مرة واحدة فقط.
+إذا لم تطلب إنشاء الحساب، فتجاهل هذه الرسالة.`,
     html: `
       <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.8;color:#0f172a">
         <h1 style="font-size:22px">تفعيل حسابك في ترصيد</h1>
@@ -291,6 +313,14 @@ async function sendPasswordResetEmail({ email, name, resetUrl }: { email: string
   await sendResendEmail({
     to: email,
     subject: "استعادة كلمة مرور ترصيد",
+    text: `مرحباً ${name}،
+
+وصلنا طلب لإعادة تعيين كلمة مرور حسابك في ترصيد.
+استخدم الرابط التالي خلال ${PASSWORD_RESET_MINUTES} دقيقة:
+
+${resetUrl}
+
+إذا لم تطلب تغيير كلمة المرور، فتجاهل هذه الرسالة.`,
     html: `
         <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.7;color:#0f172a">
           <h1 style="font-size:22px">استعادة كلمة المرور</h1>
@@ -394,6 +424,12 @@ async function notifyOwnersAboutResetDeliveryFailure({
       await sendResendEmail({
         to: owner.email,
         subject: "تنبيه: تعذر إرسال رابط استعادة كلمة المرور",
+        text: `مرحباً ${owner.name}،
+
+تعذر على ترصيد تسليم رابط استعادة كلمة المرور لأحد أعضاء الفريق.
+السبب التشخيصي: ${reason}
+
+راجع إعدادات البريد وسجل التدقيق في إدارة الفريق.`,
         html: `
           <div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.7;color:#0f172a">
             <h1 style="font-size:22px">تعذر إرسال رابط استعادة كلمة المرور</h1>
@@ -1252,6 +1288,7 @@ router.post("/auth/email-delivery/check", requireAuth, async (_request: Request,
     await sendResendEmail({
       to: auth.email,
       subject: "فحص جاهزية بريد ترصيد",
+      text: "بريد ترصيد جاهز. نجح فحص إرسال رسائل التفعيل واستعادة كلمة المرور.",
       html: '<div dir="rtl"><h1>بريد ترصيد جاهز</h1><p>نجح فحص إرسال رسائل التفعيل واستعادة كلمة المرور.</p></div>',
     });
     response.json({ ready: true, checkedAt: new Date().toISOString() });

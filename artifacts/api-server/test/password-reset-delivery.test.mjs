@@ -84,6 +84,8 @@ test("يُبقي الرد عاماً ويسجل سبب فشل البريد وي�
   assert.equal(registered.response.status, 202, JSON.stringify(registered.payload));
   const verificationCode = verificationEmailBody?.html.match(/>(\d{6})<\/p>/)?.[1];
   assert.ok(verificationCode, "يجب أن تحتوي رسالة التسجيل على رمز التفعيل");
+  assert.match(verificationEmailBody.text, new RegExp(verificationCode));
+  assert.match(verificationEmailBody.from, /^ترصيد </);
   const verified = await request("/api/auth/email-verification/verify", {
     method: "POST",
     body: { email: ownerEmail, code: verificationCode },
@@ -125,6 +127,8 @@ test("يُبقي الرد عاماً ويسجل سبب فشل البريد وي�
   assert.equal(reset.payload.message, "إذا كان البريد الإلكتروني مسجلاً، فستصلك رسالة تحتوي على رابط استعادة كلمة المرور.");
   assert.equal(JSON.stringify(reset.payload).includes(memberEmail), false);
   assert.ok(resetEmailBody, "يجب أن يحاول الخادم إرسال رسالة الاستعادة");
+  assert.match(resetEmailBody.text, /إعادة تعيين كلمة مرور/);
+  assert.match(resetEmailBody.text, /reset-password\?token=/);
 
   const unknownStartedAt = performance.now();
   const unknownReset = await request("/api/auth/password-reset/request", {
