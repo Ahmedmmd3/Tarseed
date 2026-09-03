@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'wudooh-shell-__WUDOOH_BUILD_ID__';
+const CACHE_VERSION = 'wudooh-shell-v2-__WUDOOH_BUILD_ID__';
 const SHELL_CACHE = `${CACHE_VERSION}-static`;
 const SCOPE_URL = self.registration.scope;
 const INDEX_URL = new URL('index.html', SCOPE_URL).href;
