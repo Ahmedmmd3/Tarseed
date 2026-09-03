@@ -113,6 +113,7 @@ export default function Export() {
   const [dataset, setDataset] = useState<Dataset>({ accounts: [], journals: [], invoices: [], expenses: [], summary: null });
   const [status, setStatus] = useState<ExportStatus>('idle');
   const [error, setError] = useState('');
+  const [exportError, setExportError] = useState('');
   const [exporting, setExporting] = useState<string | null>(null);
   const [zipProgress, setZipProgress] = useState(0);
   const [lastExport, setLastExport] = useState('');
@@ -159,6 +160,7 @@ export default function Export() {
     setExporting(jobId);
     setZipProgress(format === 'zip' ? 5 : 0);
     setLastExport('');
+    setExportError('');
     setError('');
     try {
       if (format === 'zip') {
@@ -170,6 +172,7 @@ export default function Export() {
       toast({ title: 'تم تصدير الملف بنجاح ✅', description: 'تم تنزيل الملف على جهازك.' });
     } catch (exportError: unknown) {
       const message = exportError instanceof Error ? exportError.message : 'تعذر إنشاء ملف التصدير.';
+      setExportError(message);
       setError(message);
       toast({ title: 'تعذر التصدير', description: message, variant: 'destructive' });
     } finally {
@@ -254,6 +257,11 @@ export default function Export() {
         <div className="flex flex-col gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 sm:flex-row sm:items-center sm:justify-between" role="alert" data-testid="status-export-error">
           <p>{error}</p>
           <Button type="button" variant="outline" onClick={() => void reloadDataset()} className="border-rose-200 bg-white text-rose-800 hover:bg-rose-100" data-testid="button-retry-export">إعادة المحاولة</Button>
+        </div>
+      )}
+      {exportError && (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800" role="alert" data-testid="status-export-zip-error">
+          <p>{exportError}</p>
         </div>
       )}
       {lastExport && <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800" role="status" data-testid="status-export-success"><CheckCircle2 className="h-4 w-4" />تم تنزيل التقرير بنجاح.</div>}
@@ -683,14 +691,22 @@ async function exportZip(rows: ReportRows, from: string, to: string, projectName
   const reportRows = exportableReports.map((definition) => ({ definition, rows: rowsForReport(definition.id, rows) }));
   if (!reportRows.some((report) => report.rows.length)) throw new Error('لا توجد بيانات في هذه الفترة.');
 
+  const generatedFiles: Array<{ definition: ReportDefinition; excel: ArrayBuffer; pdf: ArrayBuffer }> = [];
   for (const [index, { definition, rows: currentRows }] of reportRows.entries()) {
-    const workbook = buildWorkbook(currentRows.length ? currentRows : [{ البيان: 'لا توجد بيانات في هذه الفترة' }], definition.title);
-    const content = write(workbook, { bookType: 'xlsx', type: 'array', compression: true }) as ArrayBuffer;
-    excelFolder.file(`${definition.fileName}.xlsx`, content);
-    const pdf = await createPdf(definition.title, currentRows, from, to, projectName);
-    pdfFolder.file(`${definition.fileName}.pdf`, pdf.output('arraybuffer'));
+    try {
+      const workbook = buildWorkbook(currentRows.length ? currentRows : [{ البيان: 'لا توجد بيانات في هذه الفترة' }], definition.title);
+      const excel = write(workbook, { bookType: 'xlsx', type: 'array', compression: true }) as ArrayBuffer;
+      const pdf = await createPdf(definition.title, currentRows, from, to, projectName);
+      generatedFiles.push({ definition, excel, pdf: pdf.output('arraybuffer') });
+    } catch {
+      throw new Error(`تعذر إنشاء تقرير "${definition.title}" ضمن حزمة ZIP. لم يتم تنزيل الحزمة؛ أصلح المشكلة ثم أعد المحاولة.`);
+    }
     onProgress(Math.round(((index + 1) / reportRows.length) * 85));
   }
+  generatedFiles.forEach(({ definition, excel, pdf }) => {
+    excelFolder.file(`${definition.fileName}.xlsx`, excel);
+    pdfFolder.file(`${definition.fileName}.pdf`, pdf);
+  });
   zip.file('README.txt', [
     `ترصيد — ${projectName}`,
     `الفترة: من ${from} إلى ${to}`,

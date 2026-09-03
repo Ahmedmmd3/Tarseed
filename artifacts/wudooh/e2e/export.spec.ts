@@ -54,6 +54,101 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
   await expectPdfPageHasContent(firstPageImagePath, 'الصفحة الأولى');
 });
 
+test('لا يبدأ تنزيل ZIP إذا فشل إنشاء تقرير واحد', async ({ authenticatedPage: page }) => {
+  const account = {
+    id: 'zip-failure-account',
+    code: '1000',
+    name: 'حساب اختبار الحزمة',
+    type: 'asset',
+    parent: null,
+    openingBalance: 0,
+    balance: 100,
+    status: 'active',
+  };
+  const journal = {
+    id: 'zip-failure-journal',
+    number: 'JE-ZIP-FAILURE',
+    date: '2025-06-15',
+    description: 'قيد اختبار فشل الحزمة',
+    status: 'posted',
+    lines: [
+      { id: 'zip-failure-debit', accountId: account.id, debit: 100, credit: 0 },
+      { id: 'zip-failure-credit', accountId: account.id, debit: 0, credit: 100 },
+    ],
+  };
+  const invoice = {
+    id: 'zip-failure-invoice',
+    number: 'INV-ZIP-FAILURE',
+    date: '2025-06-16',
+    customer: 'عميل اختبار الحزمة',
+    subtotal: 100,
+    tax: 15,
+    total: 115,
+    status: 'paid',
+  };
+  const expense = {
+    id: 'zip-failure-expense',
+    date: '2025-06-17',
+    description: 'مصروف اختبار الحزمة',
+    category: 'اختبار',
+    vendor: 'مورد اختبار الحزمة',
+    amount: 25,
+    paymentMethod: 'cash',
+  };
+  const apiPayloads: Record<string, unknown> = {
+    accounts: [account],
+    journalEntries: [journal],
+    invoices: [invoice],
+    expenses: [expense],
+  };
+  for (const [resource, payload] of Object.entries(apiPayloads)) {
+    await page.route(`**/api/data/${resource}**`, async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(payload) });
+    });
+  }
+  await page.route('**/api/accounting/summary?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        totals: { revenue: 100, expense: 25, netIncome: 75 },
+        trialBalance: [{ id: account.id, code: account.code, name: account.name, type: account.type, debit: 100, credit: 100 }],
+        incomeStatement: {
+          revenue: [{ id: 'zip-failure-revenue', name: 'إيراد اختبار الحزمة', amount: 100 }],
+          expense: [{ id: 'zip-failure-income-expense', name: 'مصروف اختبار الحزمة', amount: 25 }],
+          netIncome: 75,
+        },
+        balanceSheet: {
+          assets: [{ id: 'zip-failure-asset', name: 'أصل اختبار الحزمة', amount: 100 }],
+          liabilities: [],
+          equity: [{ id: 'zip-failure-equity', name: 'حقوق ملكية اختبار الحزمة', amount: 100 }],
+          baseEquity: 100,
+          unclosedEarnings: 0,
+          totalAssets: 100,
+          totalLiabilitiesAndEquity: 100,
+        },
+      }),
+    });
+  });
+  await page.goto('/export');
+  await expect(page.getByTestId('page-export')).toBeVisible();
+  await page.getByTestId('input-export-from').fill('2025-01-01');
+  await page.getByTestId('input-export-to').fill('2025-12-31');
+  await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
+  await page.evaluate(() => {
+    HTMLCanvasElement.prototype.toDataURL = function () {
+      throw new Error('فشل رسم تقرير الاختبار.');
+    };
+  });
+
+  const downloadPromise = page.waitForEvent('download', { timeout: 5_000 }).catch(() => null);
+  await page.getByTestId('button-export-zip').click();
+  expect(await downloadPromise, 'يجب ألا يبدأ تنزيل ZIP ناقص عند فشل تقرير.').toBeNull();
+  await expect(page.getByTestId('status-export-zip-error')).toContainText('تعذر إنشاء تقرير "القيود اليومية" ضمن حزمة ZIP.');
+  await expect(page.getByTestId('status-export-zip-error')).toContainText('لم يتم تنزيل الحزمة');
+  await expect(page.getByTestId('status-export-success')).toHaveCount(0);
+});
+
 test('يتحقق من سلامة تقارير PDF الطويلة منفردة وداخل ZIP', async ({ authenticatedPage: page }, testInfo) => {
   const accounts = Array.from({ length: 30 }, (_, index) => ({
     id: `long-report-account-${index + 1}`,
