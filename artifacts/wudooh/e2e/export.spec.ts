@@ -391,13 +391,13 @@ test('يتحقق من اكتمال كل ملفات Excel الطويلة عند �
   await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
 
   const excelReports = [
-    { id: 'journals', sheetName: 'القيود اليومية', rowCount: 240, columnCount: 7, lastMarker: 'JE-EXCEL-0120' },
-    { id: 'trial', sheetName: 'ميزان المراجعة', rowCount: 120, columnCount: 6, lastMarker: 'ACCT-EXCEL-0120' },
-    { id: 'ledger', sheetName: 'دفتر الأستاذ', rowCount: 240, columnCount: 6, lastMarker: 'JE-EXCEL-0120' },
-    { id: 'invoices', sheetName: 'الفواتير', rowCount: 120, columnCount: 7, lastMarker: 'INV-EXCEL-0120' },
-    { id: 'expenses', sheetName: 'المصاريف', rowCount: 120, columnCount: 5, lastMarker: 'EXP-EXCEL-0120' },
-    { id: 'income', sheetName: 'قائمة الدخل', rowCount: 161, columnCount: 3, lastMarker: 'صافي الربح' },
-    { id: 'balance', sheetName: 'الميزانية العمومية', rowCount: 164, columnCount: 3, lastMarker: 'إجمالي الالتزامات وحقوق الملكية' },
+    { id: 'journals', fileName: 'القيود_اليومية', sheetName: 'القيود اليومية', rowCount: 240, columnCount: 7, lastMarker: 'JE-EXCEL-0120' },
+    { id: 'trial', fileName: 'ميزان_المراجعة', sheetName: 'ميزان المراجعة', rowCount: 120, columnCount: 6, lastMarker: 'ACCT-EXCEL-0120' },
+    { id: 'ledger', fileName: 'دفتر_الأستاذ', sheetName: 'دفتر الأستاذ', rowCount: 240, columnCount: 6, lastMarker: 'JE-EXCEL-0120' },
+    { id: 'invoices', fileName: 'الفواتير', sheetName: 'الفواتير', rowCount: 120, columnCount: 7, lastMarker: 'INV-EXCEL-0120' },
+    { id: 'expenses', fileName: 'المصاريف', sheetName: 'المصاريف', rowCount: 120, columnCount: 5, lastMarker: 'EXP-EXCEL-0120' },
+    { id: 'income', fileName: 'قائمة_الدخل', sheetName: 'قائمة الدخل', rowCount: 161, columnCount: 3, lastMarker: 'صافي الربح' },
+    { id: 'balance', fileName: 'الميزانية_العمومية', sheetName: 'الميزانية العمومية', rowCount: 164, columnCount: 3, lastMarker: 'إجمالي الالتزامات وحقوق الملكية' },
   ] as const;
 
   for (const report of excelReports) {
@@ -410,6 +410,15 @@ test('يتحقق من اكتمال كل ملفات Excel الطويلة عند �
     await expectExcelRowsRetained(excelPath, report);
     await expect(page.getByTestId(`button-export-${report.id}-excel`)).toBeEnabled();
   }
+
+  const zipDownloadPromise = page.waitForEvent('download');
+  await page.getByTestId('button-export-zip').click();
+  const zipDownload = await zipDownloadPromise;
+  expect(zipDownload.suggestedFilename()).toContain('ترصيد_تصدير');
+  const zipPath = testInfo.outputPath('long-export-excel-reports.zip');
+  await zipDownload.saveAs(zipPath);
+  expect((await stat(zipPath)).size).toBeGreaterThan(0);
+  await expectZipExcelReportsComplete(zipPath, excelReports, testInfo);
 });
 
 async function expectExcelRowsRetained(
@@ -439,6 +448,35 @@ async function expectExcelRowsRetained(
     lastRow.map((value) => String(value)).join(' | '),
     `${report.id} Excel يجب أن يحتوي على علامة آخر صف: ${report.lastMarker}`,
   ).toContain(report.lastMarker);
+}
+
+async function expectZipExcelReportsComplete(
+  zipPath: string,
+  reports: Array<{
+    id: string;
+    fileName: string;
+    sheetName: string;
+    rowCount: number;
+    columnCount: number;
+    lastMarker: string;
+  }>,
+  testInfo: { outputPath: (path: string) => string },
+) {
+  const archive = await JSZip.loadAsync(await readFile(zipPath));
+  const excelEntries = Object.values(archive.files).filter((entry) => entry.name.startsWith('Excel/') && entry.name.endsWith('.xlsx') && !entry.dir);
+  const expectedNames = reports.map((report) => `Excel/${report.fileName}.xlsx`).sort();
+
+  expect(excelEntries, 'ملف ZIP يجب أن يحتوي على ملفات Excel السبعة المتوقعة فقط.').toHaveLength(reports.length);
+  expect(excelEntries.map((entry) => entry.name).sort(), 'ملف ZIP يجب أن يحتوي على أسماء تقارير Excel المتوقعة.').toEqual(expectedNames);
+
+  for (const report of reports) {
+    const entry = archive.files[`Excel/${report.fileName}.xlsx`];
+    expect(entry, `${report.id} يجب أن يكون موجوداً داخل مجلد Excel في ZIP.`).toBeDefined();
+    const excelPath = testInfo.outputPath(`long-export-zip-${report.id}.xlsx`);
+    await writeFile(excelPath, await entry.async('nodebuffer'));
+    expect((await stat(excelPath)).size, `${report.id} داخل ZIP يجب ألا يكون فارغاً.`).toBeGreaterThan(0);
+    await expectExcelRowsRetained(excelPath, report);
+  }
 }
 
 async function expectPdfPageHasContent(imagePath: string, pageLabel: string) {
