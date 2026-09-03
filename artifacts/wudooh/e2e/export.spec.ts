@@ -149,6 +149,129 @@ test('لا يبدأ تنزيل ZIP إذا فشل إنشاء تقرير واحد'
   await expect(page.getByTestId('status-export-success')).toHaveCount(0);
 });
 
+test('ينشئ ZIP صالحاً عندما يكون أحد تقارير Excel فارغاً', async ({ authenticatedPage: page }, testInfo) => {
+  const accounts = [
+    {
+      id: 'partial-export-account-1',
+      code: 'ACCT-PARTIAL-001',
+      name: 'حساب اختبار جزئي 1',
+      type: 'asset',
+      parent: null,
+      openingBalance: 0,
+      balance: 100,
+      status: 'active',
+    },
+    {
+      id: 'partial-export-account-2',
+      code: 'ACCT-PARTIAL-002',
+      name: 'حساب اختبار جزئي 2',
+      type: 'revenue',
+      parent: null,
+      openingBalance: 0,
+      balance: 200,
+      status: 'active',
+    },
+  ];
+  const journals = Array.from({ length: 3 }, (_, index) => {
+    const sequence = String(index + 1).padStart(3, '0');
+    return {
+      id: `partial-export-journal-${index + 1}`,
+      number: `JE-PARTIAL-${sequence}`,
+      date: `2025-0${index + 1}-15`,
+      description: `وصف قيد اختبار جزئي ${sequence}`,
+      status: 'posted',
+      lines: [
+        { id: `partial-export-line-${index + 1}-debit`, accountId: accounts[0].id, debit: (index + 1) * 100, credit: 0 },
+        { id: `partial-export-line-${index + 1}-credit`, accountId: accounts[1].id, debit: 0, credit: (index + 1) * 100 },
+      ],
+    };
+  });
+  const expenses = Array.from({ length: 3 }, (_, index) => {
+    const sequence = String(index + 1).padStart(3, '0');
+    return {
+      id: `partial-export-expense-${index + 1}`,
+      date: `2025-0${index + 1}-16`,
+      description: `مصروف اختبار جزئي ${sequence}`,
+      category: 'اختبار',
+      vendor: `مورد اختبار جزئي ${sequence}`,
+      amount: (index + 1) * 25,
+      paymentMethod: 'cash',
+    };
+  });
+  const trialBalance = accounts.map((account, index) => ({
+    id: account.id,
+    code: account.code,
+    name: account.name,
+    type: account.type,
+    debit: (index + 1) * 100,
+    credit: (index + 1) * 80,
+  }));
+  const apiPayloads: Record<string, unknown> = {
+    accounts,
+    journalEntries: journals,
+    invoices: [],
+    expenses,
+  };
+  for (const [resource, payload] of Object.entries(apiPayloads)) {
+    await page.route(`**/api/data/${resource}**`, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(payload),
+      });
+    });
+  }
+  await page.route('**/api/accounting/summary?**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        totals: { revenue: 600, expense: 150, netIncome: 450 },
+        trialBalance,
+        incomeStatement: {
+          revenue: [{ id: 'partial-export-revenue', name: 'إيراد اختبار جزئي', amount: 600 }],
+          expense: [{ id: 'partial-export-income-expense', name: 'مصروف قائمة دخل جزئي', amount: 150 }],
+          netIncome: 450,
+        },
+        balanceSheet: {
+          assets: [{ id: 'partial-export-asset', name: 'أصل اختبار جزئي', amount: 600 }],
+          liabilities: [{ id: 'partial-export-liability', name: 'التزام اختبار جزئي', amount: 150 }],
+          equity: [{ id: 'partial-export-equity', name: 'حقوق ملكية اختبار جزئية', amount: 450 }],
+          baseEquity: 450,
+          unclosedEarnings: 0,
+          totalAssets: 600,
+          totalLiabilitiesAndEquity: 600,
+        },
+      }),
+    });
+  });
+
+  await page.goto('/export');
+  await expect(page.getByTestId('page-export')).toBeVisible();
+  await page.getByTestId('input-export-from').fill('2025-01-01');
+  await page.getByTestId('input-export-to').fill('2025-12-31');
+  await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
+
+  const excelReports = [
+    { id: 'journals', fileName: 'القيود_اليومية', sheetName: 'القيود اليومية', rowCount: 6, columnCount: 7, lastMarker: 'JE-PARTIAL-003' },
+    { id: 'trial', fileName: 'ميزان_المراجعة', sheetName: 'ميزان المراجعة', rowCount: 2, columnCount: 6, lastMarker: 'ACCT-PARTIAL-002' },
+    { id: 'ledger', fileName: 'دفتر_الأستاذ', sheetName: 'دفتر الأستاذ', rowCount: 6, columnCount: 6, lastMarker: 'JE-PARTIAL-003' },
+    { id: 'invoices', fileName: 'الفواتير', sheetName: 'الفواتير', rowCount: 0, columnCount: 1, lastMarker: '', emptyMarker: 'لا توجد بيانات في هذه الفترة' },
+    { id: 'expenses', fileName: 'المصاريف', sheetName: 'المصاريف', rowCount: 3, columnCount: 5, lastMarker: 'مصروف اختبار جزئي 003' },
+    { id: 'income', fileName: 'قائمة_الدخل', sheetName: 'قائمة الدخل', rowCount: 3, columnCount: 3, lastMarker: 'صافي الربح' },
+    { id: 'balance', fileName: 'الميزانية_العمومية', sheetName: 'الميزانية العمومية', rowCount: 7, columnCount: 3, lastMarker: 'إجمالي الالتزامات وحقوق الملكية' },
+  ] as const;
+
+  const zipDownloadPromise = page.waitForEvent('download');
+  await page.getByTestId('button-export-zip').click();
+  const zipDownload = await zipDownloadPromise;
+  expect(zipDownload.suggestedFilename()).toContain('ترصيد_تصدير');
+  const zipPath = testInfo.outputPath('partial-export-reports.zip');
+  await zipDownload.saveAs(zipPath);
+  expect((await stat(zipPath)).size).toBeGreaterThan(0);
+  await expectZipExcelReportsComplete(zipPath, excelReports, testInfo);
+});
+
 test('يتحقق من سلامة تقارير PDF الطويلة منفردة وداخل ZIP', async ({ authenticatedPage: page }, testInfo) => {
   const accounts = Array.from({ length: 30 }, (_, index) => ({
     id: `long-report-account-${index + 1}`,
@@ -524,6 +647,7 @@ async function expectExcelRowsRetained(
     rowCount: number;
     columnCount: number;
     lastMarker: string;
+    emptyMarker?: string;
   },
 ) {
   const workbook = readXlsx(await readFile(excelPath), { type: 'buffer' });
@@ -532,8 +656,19 @@ async function expectExcelRowsRetained(
   expect(worksheet, `${report.id} Excel يجب أن يفتح ورقة العمل.`).toBeDefined();
   const rows = xlsxUtils.sheet_to_json<unknown[]>(worksheet, { header: 1, defval: '' });
 
-  expect(rows, `${report.id} Excel يجب أن يحتفظ بكل الصفوف.`).toHaveLength(report.rowCount + 1);
+  expect(
+    rows,
+    `${report.id} Excel يجب أن يحتفظ بكل الصفوف.`,
+  ).toHaveLength(report.emptyMarker ? 2 : report.rowCount + 1);
   expect(rows[0], `${report.id} Excel يجب أن يحتفظ بكل الأعمدة.`).toHaveLength(report.columnCount);
+  if (report.emptyMarker) {
+    expect(rows[1], `${report.id} Excel الفارغ يجب أن يحتفظ بعدد الأعمدة المتوقع.`).toHaveLength(report.columnCount);
+    expect(
+      rows[1].map((value) => String(value)).join(' | '),
+      `${report.id} Excel الفارغ يجب أن يحتوي على الصف التوضيحي.`,
+    ).toContain(report.emptyMarker);
+    return;
+  }
   for (const [rowIndex, row] of rows.slice(1).entries()) {
     expect(row, `${report.id} Excel — الصف ${rowIndex + 1} يجب أن يحتفظ بعدد الأعمدة المتوقع.`).toHaveLength(report.columnCount);
   }
@@ -554,6 +689,7 @@ async function expectZipExcelReportsComplete(
     rowCount: number;
     columnCount: number;
     lastMarker: string;
+    emptyMarker?: string;
   }>,
   testInfo: { outputPath: (path: string) => string },
 ) {
