@@ -106,6 +106,81 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     ]);
   });
 
+  test('ينشئ إيصالاً صغيراً قابلاً لنسخ العربية من نقطة البيع', async ({ authenticatedPage: page }, testInfo) => {
+    await page.route('**/api/data/products', (route) => route.fulfill({
+      json: {
+        records: [
+          { id: 201, name: 'قهوة عربية فاخرة', barcode: '628100000201', price: 100, vatRate: 15 },
+        ],
+      },
+    }));
+    await page.route('**/api/data/warehouses', (route) => route.fulfill({
+      json: { records: [{ id: 1, name: 'المستودع الرئيسي', status: 'active' }] },
+    }));
+    await page.route('**/api/data/inventoryBalances', (route) => route.fulfill({
+      json: { records: [{ productId: 201, warehouseId: 1, quantity: 10 }] },
+    }));
+    await page.route('**/api/inventory/settings', (route) => route.fulfill({
+      json: { vatRate: 15, pricesIncludeVat: false },
+    }));
+    await page.route('**/api/inventory/checkout', (route) => route.fulfill({
+      json: {
+        invoice: {
+          id: 9201,
+          number: 'INV-AR-80MM-0001',
+          subtotal: 200,
+          tax: 30,
+          total: 230,
+        },
+      },
+    }));
+
+    await page.goto('/pos');
+    await page.getByTestId('select-invoice-print-format').selectOption('receipt');
+    await expect(page.getByTestId('select-invoice-print-format')).toHaveValue('receipt');
+    await page.getByTestId('card-product-201').click();
+    await page.getByTestId('btn-plus-201').click();
+    await page.getByTestId('input-customer-name').fill('شركة الضيافة العربية');
+    await page.getByTestId('btn-pay-cash').click();
+    await page.getByTestId('btn-checkout').click();
+
+    await expect(page.getByTestId('page-pos-success')).toBeVisible();
+    await page.evaluate(() => {
+      const originalOpen = window.open.bind(window);
+      (window as any).open = (...args: any[]) => {
+        const popup = originalOpen(...args);
+        if (popup) {
+          const originalAddEventListener = popup.addEventListener.bind(popup);
+          (popup as any).addEventListener = (type: string, ...listenerArgs: any[]) => {
+            if (type === 'afterprint') return;
+            return originalAddEventListener(type, ...listenerArgs);
+          };
+          popup.print = () => {};
+        }
+        return popup;
+      };
+    });
+    const printWindowPromise = page.waitForEvent('popup');
+    await page.getByTestId('btn-print-invoice').click();
+    const printWindow = await printWindowPromise;
+    await printWindow.waitForLoadState('domcontentloaded');
+    await expect(printWindow).toHaveTitle(/فاتورة/);
+    await expect(printWindow.locator('body')).toContainText('شركة الضيافة العربية');
+    await expect(printWindow.locator('body')).toContainText('قهوة عربية فاخرة');
+    expect(await printWindow.locator('style').textContent()).toContain('@page { size: 80mm auto;');
+
+    const pdfPath = testInfo.outputPath('invoice-receipt-print-arabic.pdf');
+    await printWindow.pdf({ path: pdfPath, width: '80mm', printBackground: true });
+    expect((await stat(pdfPath)).size, 'إيصال البيع المطبوع يجب ألا يكون فارغاً.').toBeGreaterThan(0);
+    await expectArabicPdfValues(
+      pdfPath,
+      'إيصال البيع 80mm',
+      ['فاتورة بيع', 'شركة الضيافة العربية', 'قهوة عربية فاخرة', 'المجموع قبل الضريبة', 'ضريبة القيمة المضافة', 'شامل الضريبة', 'تعاملكم معنا'],
+      testInfo,
+    );
+    await printWindow.close();
+  });
+
   test('يوضح أن الفواتير تُنشأ من نقطة البيع وتظهر حالتها في القائمة', async ({ authenticatedPage: page }) => {
     await page.goto('/sales');
     await page.getByRole('tab', { name: 'فواتير المبيعات' }).click();
