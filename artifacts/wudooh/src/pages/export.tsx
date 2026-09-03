@@ -3,6 +3,7 @@ import { Archive, BookOpen, CalendarDays, CheckCircle2, ChevronLeft, CircleDolla
 import { utils, write, writeFile } from 'xlsx';
 import jsPDF from 'jspdf';
 import JSZip from 'jszip';
+import arabicFontUrl from '@/assets/DejaVuSans.ttf?url';
 import { useStore, type Account, type Journal } from '@/context/store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -736,7 +737,12 @@ function exportToExcel(rows: Record<string, unknown>[], filename: string, sheetN
 }
 
 async function createPdf(title: string, rows: Record<string, unknown>[], from: string, to: string, projectName: string): Promise<jsPDF> {
+  const arabicFontData = await loadArabicFontData();
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  pdf.addFileToVFS('DejaVuSans.ttf', arabicFontData);
+  pdf.addFont('DejaVuSans.ttf', 'DejaVuSans', 'normal');
+  pdf.setFont('DejaVuSans', 'normal');
+  disableArabicPreprocessing(pdf);
   const headers = rows.length ? Object.keys(rows[0]) : ['البيان'];
   const displayRows = rows.length ? rows : [{ البيان: 'لا توجد بيانات في هذه الفترة' }];
   const canvasWidth = 1600;
@@ -821,6 +827,40 @@ async function createPdf(title: string, rows: Record<string, unknown>[], from: s
     );
   }
   return pdf;
+}
+
+let arabicFontDataPromise: Promise<string> | null = null;
+
+async function loadArabicFontData(): Promise<string> {
+  if (!arabicFontDataPromise) {
+    arabicFontDataPromise = fetch(arabicFontUrl)
+      .then((response) => {
+        if (!response.ok) throw new Error('تعذر تحميل خط التقرير العربي.');
+        return response.arrayBuffer();
+      })
+      .then(arrayBufferToBase64);
+  }
+  return arabicFontDataPromise;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function disableArabicPreprocessing(pdf: jsPDF) {
+  const eventBus = pdf.internal.events as unknown as {
+    getTopics?: () => Record<string, Record<string, unknown>>;
+    unsubscribe: (token: string) => boolean;
+  };
+  const preProcessTextTopics = eventBus.getTopics?.().preProcessText;
+  if (!preProcessTextTopics) return;
+  Object.keys(preProcessTextTopics).forEach((token) => eventBus.unsubscribe(token));
 }
 
 function fitCanvasText(context: CanvasRenderingContext2D, value: string, maxWidth: number): string {

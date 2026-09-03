@@ -188,6 +188,22 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
     income: [...revenue, ...expense].map((row) => row.name.split(' — ')[0]),
     balance: [...assets, ...liabilities, ...equity].map((row) => row.name.split(' — ')[0]),
   };
+  const arabicMarkers = {
+    journals: journals.flatMap(() => ['وصف قيد اختباري طويل', 'وصف قيد اختباري طويل']),
+    trial: accounts.map(() => 'حساب اختباري طويل'),
+    ledger: journals.flatMap(() => ['وصف قيد اختباري طويل', 'وصف قيد اختباري طويل']),
+    invoices: invoices.map(() => 'عميل اختباري طويل'),
+    expenses: expenses.map(() => 'مصروف اختباري طويل'),
+    income: [
+      ...revenue.map(() => 'إيراد اختباري طويل'),
+      ...expense.map(() => 'مصروف قائمة دخل طويل'),
+    ],
+    balance: [
+      ...assets.map(() => 'أصل اختباري طويل'),
+      ...liabilities.map(() => 'التزام اختباري طويل'),
+      ...equity.map(() => 'حقوق ملكية اختبارية طويلة'),
+    ],
+  };
   for (const reportId of reportIds) {
     const pdfDownloadPromise = page.waitForEvent('download');
     await page.getByTestId(`button-export-${reportId}-pdf`).click();
@@ -215,7 +231,7 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
       expect((await stat(pageImagePath)).size).toBeGreaterThan(0);
       await expectPdfPageHasContent(pageImagePath, `${reportId} — الصفحة ${pageNumber}`);
     }
-    await expectPdfRowsRetained(pdfPath, reportId, reportMarkers[reportId], pageCount, testInfo);
+    await expectPdfRowsRetained(pdfPath, reportId, reportMarkers[reportId], arabicMarkers[reportId], pageCount, testInfo);
     await expect(page.getByTestId(`button-export-${reportId}-pdf`)).toBeEnabled();
   }
 });
@@ -421,12 +437,13 @@ async function expectPdfRowsRetained(
   pdfPath: string,
   reportId: string,
   rowMarkers: string[],
+  arabicMarkers: string[],
   pageCount: number,
   testInfo: { outputPath: (path: string) => string },
 ) {
   const textPath = testInfo.outputPath(`long-export-${reportId}-text.txt`);
   await execFileAsync('pdftotext', ['-layout', pdfPath, textPath]);
-  const pdfText = await readFile(textPath, 'utf8');
+  const pdfText = normalizePdfTextForAssertion(await readFile(textPath, 'utf8'));
   const pageTexts = pdfText.split('\f').slice(0, pageCount);
 
   expect(pageTexts, `${reportId} PDF يجب أن يحتوي على نص قابل للفحص لكل صفحة.`).toHaveLength(pageCount);
@@ -438,4 +455,16 @@ async function expectPdfRowsRetained(
       `${reportId} — الصفحة ${pageNumber} يجب أن تحتوي على علامة الصف المفقودة: ${marker}`,
     ).toContain(marker);
   }
+  for (const [rowIndex, marker] of arabicMarkers.entries()) {
+    const pageNumber = Math.floor(rowIndex / PDF_ROWS_PER_PAGE) + 1;
+    const pageText = pageTexts[pageNumber - 1] ?? '';
+    expect(
+      pageText,
+      `${reportId} — الصفحة ${pageNumber} يجب أن تحتوي على العبارة العربية المفقودة: ${marker}`,
+    ).toContain(marker);
+  }
+}
+
+function normalizePdfTextForAssertion(text: string): string {
+  return text.normalize('NFC').replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
 }
