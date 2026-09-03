@@ -253,12 +253,12 @@ test('ينشئ ZIP صالحاً عندما يكون أحد تقارير Excel ف
   await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
 
   const excelReports = [
-    { id: 'journals', fileName: 'القيود_اليومية', sheetName: 'القيود اليومية', rowCount: 6, columnCount: 7, lastMarker: 'JE-PARTIAL-003' },
-    { id: 'trial', fileName: 'ميزان_المراجعة', sheetName: 'ميزان المراجعة', rowCount: 2, columnCount: 6, lastMarker: 'ACCT-PARTIAL-002' },
-    { id: 'ledger', fileName: 'دفتر_الأستاذ', sheetName: 'دفتر الأستاذ', rowCount: 6, columnCount: 6, lastMarker: 'JE-PARTIAL-003' },
+    { id: 'journals', fileName: 'القيود_اليومية', sheetName: 'القيود اليومية', rowCount: 7, columnCount: 7, lastMarker: 'الإجمالي', expectedLastNumbers: [600, 600] },
+    { id: 'trial', fileName: 'ميزان_المراجعة', sheetName: 'ميزان المراجعة', rowCount: 3, columnCount: 6, lastMarker: 'الإجمالي', expectedLastNumbers: [300, 240, -20] },
+    { id: 'ledger', fileName: 'دفتر_الأستاذ', sheetName: 'دفتر الأستاذ', rowCount: 7, columnCount: 6, lastMarker: 'الإجمالي', expectedLastNumbers: [600, 600, 1200] },
     { id: 'invoices', fileName: 'الفواتير', sheetName: 'الفواتير', rowCount: 0, columnCount: 1, lastMarker: '', emptyMarker: 'لا توجد بيانات في هذه الفترة' },
-    { id: 'expenses', fileName: 'المصاريف', sheetName: 'المصاريف', rowCount: 3, columnCount: 5, lastMarker: 'مصروف اختبار جزئي 003' },
-    { id: 'income', fileName: 'قائمة_الدخل', sheetName: 'قائمة الدخل', rowCount: 3, columnCount: 3, lastMarker: 'صافي الربح' },
+    { id: 'expenses', fileName: 'المصاريف', sheetName: 'المصاريف', rowCount: 4, columnCount: 5, lastMarker: 'الإجمالي', expectedLastNumbers: [150] },
+    { id: 'income', fileName: 'قائمة_الدخل', sheetName: 'قائمة الدخل', rowCount: 3, columnCount: 3, lastMarker: 'الإجمالي · صافي الربح', expectedLastNumbers: [450, 75] },
     { id: 'balance', fileName: 'الميزانية_العمومية', sheetName: 'الميزانية العمومية', rowCount: 7, columnCount: 3, lastMarker: 'إجمالي الالتزامات وحقوق الملكية' },
   ] as const;
 
@@ -399,13 +399,13 @@ test('يتحقق من سلامة تقارير PDF الطويلة منفردة و
     .sort((left, right) => String(left.date).localeCompare(String(right.date)) || String(left.id).localeCompare(String(right.id), undefined, { numeric: true }))
     .flatMap((journal) => [journal.number, journal.number]);
   const reportMarkers = {
-    journals: journals.flatMap((journal) => [journal.number, journal.number]),
-    trial: accounts.map((account) => account.code),
-    ledger: ledgerMarkers,
-    invoices: invoices.map((invoice) => invoice.number),
-    expenses: expenses.map((expense) => expense.description.split(' — ')[0]),
-    income: [...revenue, ...expense].map((row) => row.name.split(' — ')[0]),
-    balance: [...assets, ...liabilities, ...equity].map((row) => row.name.split(' — ')[0]),
+    journals: [...journals.flatMap((journal) => [journal.number, journal.number]), 'الإجمالي'],
+    trial: [...accounts.map((account) => account.code), 'الإجمالي'],
+    ledger: [...ledgerMarkers, 'الإجمالي'],
+    invoices: [...invoices.map((invoice) => invoice.number), 'الإجمالي'],
+    expenses: [...expenses.map((expense) => expense.description.split(' — ')[0]), 'الإجمالي'],
+    income: [...[...revenue, ...expense].map((row) => row.name.split(' — ')[0]), 'الإجمالي · صافي الربح'],
+    balance: [...[...assets, ...liabilities, ...equity].map((row) => row.name.split(' — ')[0]), 'إجمالي الالتزامات وحقوق الملكية'],
   };
   const arabicMarkers = {
     journals: journals.flatMap(() => ['وصف قيد اختباري طويل', 'وصف قيد اختباري طويل']),
@@ -609,12 +609,12 @@ test('يتحقق من اكتمال كل ملفات Excel الطويلة عند �
   await expect(page.getByTestId('status-export-loading')).toHaveCount(0);
 
   const excelReports = [
-    { id: 'journals', fileName: 'القيود_اليومية', sheetName: 'القيود اليومية', rowCount: 240, columnCount: 7, lastMarker: 'JE-EXCEL-0120' },
-    { id: 'trial', fileName: 'ميزان_المراجعة', sheetName: 'ميزان المراجعة', rowCount: 120, columnCount: 6, lastMarker: 'ACCT-EXCEL-0120' },
-    { id: 'ledger', fileName: 'دفتر_الأستاذ', sheetName: 'دفتر الأستاذ', rowCount: 240, columnCount: 6, lastMarker: 'JE-EXCEL-0120' },
-    { id: 'invoices', fileName: 'الفواتير', sheetName: 'الفواتير', rowCount: 120, columnCount: 7, lastMarker: 'INV-EXCEL-0120' },
-    { id: 'expenses', fileName: 'المصاريف', sheetName: 'المصاريف', rowCount: 120, columnCount: 5, lastMarker: 'EXP-EXCEL-0120' },
-    { id: 'income', fileName: 'قائمة_الدخل', sheetName: 'قائمة الدخل', rowCount: 161, columnCount: 3, lastMarker: 'صافي الربح' },
+    { id: 'journals', fileName: 'القيود_اليومية', sheetName: 'القيود اليومية', rowCount: 241, columnCount: 7, lastMarker: 'الإجمالي' },
+    { id: 'trial', fileName: 'ميزان_المراجعة', sheetName: 'ميزان المراجعة', rowCount: 121, columnCount: 6, lastMarker: 'الإجمالي' },
+    { id: 'ledger', fileName: 'دفتر_الأستاذ', sheetName: 'دفتر الأستاذ', rowCount: 241, columnCount: 6, lastMarker: 'الإجمالي' },
+    { id: 'invoices', fileName: 'الفواتير', sheetName: 'الفواتير', rowCount: 121, columnCount: 7, lastMarker: 'الإجمالي' },
+    { id: 'expenses', fileName: 'المصاريف', sheetName: 'المصاريف', rowCount: 121, columnCount: 5, lastMarker: 'الإجمالي' },
+    { id: 'income', fileName: 'قائمة_الدخل', sheetName: 'قائمة الدخل', rowCount: 161, columnCount: 3, lastMarker: 'الإجمالي · صافي الربح' },
     { id: 'balance', fileName: 'الميزانية_العمومية', sheetName: 'الميزانية العمومية', rowCount: 164, columnCount: 3, lastMarker: 'إجمالي الالتزامات وحقوق الملكية' },
   ] as const;
 
@@ -648,6 +648,7 @@ async function expectExcelRowsRetained(
     columnCount: number;
     lastMarker: string;
     emptyMarker?: string;
+    expectedLastNumbers?: readonly number[];
   },
 ) {
   const workbook = readXlsx(await readFile(excelPath), { type: 'buffer' });
@@ -678,6 +679,12 @@ async function expectExcelRowsRetained(
     lastRow.map((value) => String(value)).join(' | '),
     `${report.id} Excel يجب أن يحتوي على علامة آخر صف: ${report.lastMarker}`,
   ).toContain(report.lastMarker);
+  for (const expectedNumber of report.expectedLastNumbers ?? []) {
+    expect(
+      lastRow,
+      `${report.id} Excel يجب أن يحتوي صف الإجمالي على القيمة ${expectedNumber}.`,
+    ).toContain(expectedNumber);
+  }
 }
 
 async function expectZipExcelReportsComplete(
@@ -690,6 +697,7 @@ async function expectZipExcelReportsComplete(
     columnCount: number;
     lastMarker: string;
     emptyMarker?: string;
+    expectedLastNumbers?: readonly number[];
   }>,
   testInfo: { outputPath: (path: string) => string },
 ) {

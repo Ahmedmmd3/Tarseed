@@ -562,10 +562,18 @@ function paymentMethodLabel(method: string): string {
   return ({ cash: 'نقداً', card: 'بطاقة', transfer: 'تحويل بنكي', bank: 'تحويل بنكي', credit: 'آجل' }[method] ?? method) || 'غير محدد';
 }
 
+function sumReportColumn(rows: Record<string, unknown>[], column: string): number {
+  return rows.reduce((total, row) => total + (typeof row[column] === 'number' ? row[column] : 0), 0);
+}
+
+function appendReportTotal<T extends Record<string, unknown>>(rows: T[], totalRow: T): T[] {
+  return rows.length ? [...rows, totalRow] : rows;
+}
+
 function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: Account[], selectedAccountId?: string) {
   const accountMap = new Map(accounts.map((account) => [String(account.id), account]));
   const summary = dataset.summary;
-  const journalRows = journals.flatMap((journal) => journal.lines.map((line) => {
+  const journalDetailRows = journals.flatMap((journal) => journal.lines.map((line) => {
     const account = accountMap.get(String(line.accountId));
     return {
       'رقم القيد': journal.number,
@@ -577,7 +585,16 @@ function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: 
       الحالة: journal.status === 'posted' ? 'مرحل' : 'مسودة',
     };
   }));
-  const trialRows = summary?.trialBalance
+  const journalRows = appendReportTotal(journalDetailRows, {
+    'رقم القيد': 'الإجمالي',
+    التاريخ: '',
+    الوصف: '',
+    الحساب: '',
+    مدين: sumReportColumn(journalDetailRows, 'مدين'),
+    دائن: sumReportColumn(journalDetailRows, 'دائن'),
+    الحالة: '',
+  });
+  const trialDetailRows = summary?.trialBalance
     .filter((row) => row.debit > 0 || row.credit > 0)
     .map((row) => ({
       'كود الحساب': row.code,
@@ -588,13 +605,21 @@ function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: 
       الرصيد: accountBalance(row),
     }))
     ?? buildTrialRows(journals, accounts);
+  const trialRows = appendReportTotal(trialDetailRows, {
+    'كود الحساب': '',
+    'اسم الحساب': 'الإجمالي',
+    النوع: '',
+    مدين: sumReportColumn(trialDetailRows, 'مدين'),
+    دائن: sumReportColumn(trialDetailRows, 'دائن'),
+    الرصيد: sumReportColumn(trialDetailRows, 'الرصيد'),
+  });
   const ledgerEntries = journals
     .flatMap((journal) => journal.lines
       .filter((line) => !selectedAccountId || String(line.accountId) === selectedAccountId)
       .map((line) => ({ journal, line, account: accountMap.get(String(line.accountId)) })))
     .sort((left, right) => String(left.journal.date).localeCompare(String(right.journal.date)) || String(left.journal.id).localeCompare(String(right.journal.id), undefined, { numeric: true }));
   const runningByAccount = new Map<string, number>();
-  const ledgerRows = ledgerEntries.map(({ journal, line, account }) => {
+  const ledgerDetailRows = ledgerEntries.map(({ journal, line, account }) => {
     const accountId = String(line.accountId);
     const change = account && (account.type === 'asset' || account.type === 'expense')
       ? line.debit - line.credit
@@ -610,10 +635,20 @@ function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: 
       'الرصيد التراكمي': running,
     };
   });
+  const ledgerRows = appendReportTotal(ledgerDetailRows, {
+    التاريخ: '',
+    البيان: 'الإجمالي',
+    'مرجع القيد': '',
+    مدين: sumReportColumn(ledgerDetailRows, 'مدين'),
+    دائن: sumReportColumn(ledgerDetailRows, 'دائن'),
+    'الرصيد التراكمي': selectedAccountId
+      ? runningByAccount.get(selectedAccountId) ?? 0
+      : Array.from(runningByAccount.values()).reduce((total, value) => total + value, 0),
+  });
   const incomeRows = summary ? [
     ...summary.incomeStatement.revenue.filter((row) => row.amount !== 0).map((row) => ({ البند: `إيرادات · ${row.name}`, المبلغ: row.amount, 'النسبة من الإيرادات': percentageOf(row.amount, summary.totals.revenue) })),
     ...summary.incomeStatement.expense.filter((row) => row.amount !== 0).map((row) => ({ البند: `مصروفات · ${row.name}`, المبلغ: row.amount, 'النسبة من الإيرادات': percentageOf(row.amount, summary.totals.revenue) })),
-    ...(summary.incomeStatement.netIncome !== 0 ? [{ البند: 'صافي الربح', المبلغ: summary.incomeStatement.netIncome, 'النسبة من الإيرادات': percentageOf(summary.incomeStatement.netIncome, summary.totals.revenue) }] : []),
+    { البند: 'الإجمالي · صافي الربح', المبلغ: summary.incomeStatement.netIncome, 'النسبة من الإيرادات': percentageOf(summary.incomeStatement.netIncome, summary.totals.revenue) },
   ] : [];
   const balanceRows = summary ? [
     ...summary.balanceSheet.assets.filter((row) => row.amount !== 0).map((row) => ({ 'كود الحساب': '', 'اسم الحساب': `أصل · ${row.name}`, الرصيد: row.amount })),
@@ -624,12 +659,30 @@ function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: 
     { 'كود الحساب': '', 'اسم الحساب': 'الأرباح غير المقفلة', الرصيد: summary.balanceSheet.unclosedEarnings },
     { 'كود الحساب': '', 'اسم الحساب': 'إجمالي الالتزامات وحقوق الملكية', الرصيد: summary.balanceSheet.totalLiabilitiesAndEquity },
   ] : [];
+  const invoiceDetailRows = dataset.invoices.map((row) => ({ 'رقم الفاتورة': row.number, التاريخ: row.date, العميل: row.customer, 'المجموع الفرعي': row.subtotal, الضريبة: row.tax, الإجمالي: row.total, الحالة: row.status }));
+  const invoiceRows = appendReportTotal(invoiceDetailRows, {
+    'رقم الفاتورة': 'الإجمالي',
+    التاريخ: '',
+    العميل: '',
+    'المجموع الفرعي': sumReportColumn(invoiceDetailRows, 'المجموع الفرعي'),
+    الضريبة: sumReportColumn(invoiceDetailRows, 'الضريبة'),
+    الإجمالي: sumReportColumn(invoiceDetailRows, 'الإجمالي'),
+    الحالة: '',
+  });
+  const expenseDetailRows = dataset.expenses.map((row) => ({ التاريخ: row.date, الوصف: row.description, الفئة: row.category, المبلغ: row.amount, 'طريقة الدفع': paymentMethodLabel(row.paymentMethod) }));
+  const expenseRows = appendReportTotal(expenseDetailRows, {
+    التاريخ: '',
+    الوصف: 'الإجمالي',
+    الفئة: '',
+    المبلغ: sumReportColumn(expenseDetailRows, 'المبلغ'),
+    'طريقة الدفع': '',
+  });
   return {
     journalRows,
     trialRows,
     ledgerRows,
-    invoiceRows: dataset.invoices.map((row) => ({ 'رقم الفاتورة': row.number, التاريخ: row.date, العميل: row.customer, 'المجموع الفرعي': row.subtotal, الضريبة: row.tax, الإجمالي: row.total, الحالة: row.status })),
-    expenseRows: dataset.expenses.map((row) => ({ التاريخ: row.date, الوصف: row.description, الفئة: row.category, المبلغ: row.amount, 'طريقة الدفع': paymentMethodLabel(row.paymentMethod) })),
+    invoiceRows,
+    expenseRows,
     incomeRows,
     balanceRows,
   };
@@ -740,7 +793,14 @@ function buildWorkbook(rows: Record<string, unknown>[], sheetName: string) {
     if (headerCell) headerCell.s = { fill: { fgColor: { rgb: '0D47D9' } }, font: { bold: true, color: { rgb: 'FFFFFF' } } };
     for (let rowIndex = 1; rowIndex <= range.e.r; rowIndex += 1) {
       const cell = worksheet[utils.encode_cell({ r: rowIndex, c: columnIndex })];
-      if (cell && typeof cell.v === 'number') cell.z = '#,##0.00';
+      if (!cell) continue;
+      if (typeof cell.v === 'number') cell.z = '#,##0.00';
+      if (isReportTotalRow(rows[rowIndex - 1])) {
+        cell.s = {
+          fill: { fgColor: { rgb: 'E8F1FF' } },
+          font: { bold: true, color: { rgb: '0A2F6B' } },
+        };
+      }
     }
   }
   const workbook = utils.book_new();
@@ -811,14 +871,15 @@ async function createPdf(title: string, rows: Record<string, unknown>[], from: s
     const pageRows = displayRows.slice(pageIndex * rowsPerPage, (pageIndex + 1) * rowsPerPage);
     pageRows.forEach((row, rowIndex) => {
       const y = tableTop + rowHeight * (rowIndex + 1);
+      const isTotal = isReportTotalRow(row);
       headers.forEach((header, columnIndex) => {
         const x = canvasWidth - margin - (columnIndex + 1) * columnWidth;
-        context.fillStyle = rowIndex % 2 === 0 ? '#ffffff' : '#f1f3f6';
+        context.fillStyle = isTotal ? '#e8f1ff' : rowIndex % 2 === 0 ? '#ffffff' : '#f1f3f6';
         context.fillRect(x, y, columnWidth, rowHeight);
-        context.strokeStyle = '#dce2ea';
+        context.strokeStyle = isTotal ? '#8fb8ee' : '#dce2ea';
         context.strokeRect(x, y, columnWidth, rowHeight);
-        context.fillStyle = '#0a1328';
-        context.font = '18px Arial, Tahoma, sans-serif';
+        context.fillStyle = isTotal ? '#0a3f91' : '#0a1328';
+        context.font = `${isTotal ? '700' : '400'} 18px Arial, Tahoma, sans-serif`;
         context.fillText(fitCanvasText(context, formatPdfValue(row[header]), columnWidth - 24), x + columnWidth - 12, y + rowHeight / 2);
       });
     });
@@ -888,6 +949,10 @@ function fitCanvasText(context: CanvasRenderingContext2D, value: string, maxWidt
 
 function formatPdfValue(value: unknown): string {
   return typeof value === 'number' ? numberFormatter.format(value) : String(value ?? '');
+}
+
+function isReportTotalRow(row: Record<string, unknown> | undefined): boolean {
+  return Boolean(row && Object.values(row).some((value) => typeof value === 'string' && value.startsWith('الإجمالي')));
 }
 
 function downloadBlob(blob: Blob, fileName: string) {
