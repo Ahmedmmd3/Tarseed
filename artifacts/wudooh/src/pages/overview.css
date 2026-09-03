@@ -102,6 +102,80 @@
   gap: 1rem;
 }
 
+.overview-financial-movements {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.overview-financial-table-wrap {
+  overflow-x: auto;
+}
+
+.overview-movement-table {
+  min-width: 440px;
+}
+
+.overview-movement-table th:nth-child(1),
+.overview-movement-table td:nth-child(1) {
+  width: 48%;
+}
+
+.overview-movement-table th:nth-child(2),
+.overview-movement-table td:nth-child(2) {
+  width: 20%;
+  text-align: center;
+}
+
+.overview-movement-table th:nth-child(3),
+.overview-movement-table td:nth-child(3) {
+  width: 32%;
+}
+
+.overview-movement-table td:nth-child(2) {
+  color: #7c8d9d;
+  font-size: .65rem;
+  font-weight: 800;
+}
+
+.overview-movement-track {
+  display: block;
+  height: 4px;
+  margin-top: .4rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf3f5;
+  direction: ltr;
+}
+
+.overview-movement-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.overview-movement-table.is-revenue .overview-movement-track i {
+  background: linear-gradient(90deg, #13a9a4, #4bd5d0);
+}
+
+.overview-movement-table.is-expense .overview-movement-track i {
+  background: linear-gradient(90deg, #d98561, #efb28f);
+}
+
+.overview-table-total td {
+  padding-top: .85rem;
+  border-top: 1px solid #c9dce5;
+  border-bottom: 0;
+  color: #0a3f91;
+  background: #f0f7ff;
+  font-weight: 800;
+}
+
+.overview-table-total td strong,
+.overview-table-total .overview-table-amount {
+  color: #0a3f91;
+}
+
 .overview-bars {
   display: flex;
   align-items: end;
@@ -263,6 +337,10 @@
   }
 
   .overview-analytics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-financial-movements {
     grid-template-columns: 1fr;
   }
 }

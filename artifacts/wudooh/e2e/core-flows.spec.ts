@@ -40,6 +40,10 @@ test.describe('المسارات التشغيلية الأساسية', () => {
     await expect(page.getByTestId('text-dashboard-heading')).toBeVisible();
     await expect(page.getByTestId('link-open-pos')).toBeVisible();
     await expect(page.getByTestId('link-open-reports')).toBeVisible();
+    await expect(page.getByTestId('panel-revenue-movements')).toBeVisible();
+    await expect(page.getByTestId('panel-expense-movements')).toBeVisible();
+    await expect(page.getByTestId('panel-revenue-movements').getByText('الإجمالي', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('panel-expense-movements').getByText('الإجمالي', { exact: true })).toBeVisible();
   });
 
   test('يفتح العملاء والفواتير والمصروفات', async ({ authenticatedPage: page }) => {

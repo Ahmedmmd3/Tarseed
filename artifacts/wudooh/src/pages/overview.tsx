@@ -33,6 +33,11 @@ type DashboardAccountingSummary = {
     netIncome: number;
   };
   incomeStatement: {
+    revenue: Array<{
+      id: string | number;
+      name: string;
+      amount: number;
+    }>;
     expense: Array<{
       id: string | number;
       name: string;
@@ -63,8 +68,21 @@ export default function Overview() {
   const totalReceivables = receivables.filter((record) => record.type === 'receivable').reduce((sum, record) => sum + (record.amount - record.paid), 0);
   const totalPayables = receivables.filter((record) => record.type === 'payable').reduce((sum, record) => sum + (record.amount - record.paid), 0);
   const pendingReceivables = receivables.filter((record) => record.status !== 'paid').sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime()).slice(0, 4);
+  const revenueMovements = (accountingSummary?.incomeStatement.revenue ?? accounts
+    .filter((account) => account.type === 'revenue')
+    .map((account) => ({ id: String(account.id), name: account.name, amount: account.balance })))
+    .filter((account) => account.amount > 0)
+    .sort((left, right) => right.amount - left.amount)
+    .slice(0, 6);
+  const expenseMovements = (accountingSummary?.incomeStatement.expense ?? accounts
+    .filter((account) => account.type === 'expense')
+    .map((account) => ({ id: String(account.id), name: account.name, amount: account.balance })))
+    .filter((account) => account.amount > 0)
+    .sort((left, right) => right.amount - left.amount)
+    .slice(0, 6);
   const topExpenses = accountingSummary
     ? accountingSummary.incomeStatement.expense
+      .slice()
       .filter((account) => account.amount > 0)
       .sort((left, right) => right.amount - left.amount)
       .slice(0, 4)
@@ -118,6 +136,7 @@ export default function Overview() {
           active
           && payload.totals
           && payload.incomeStatement
+          && Array.isArray(payload.incomeStatement.revenue)
           && Array.isArray(payload.incomeStatement.expense)
           && Number.isFinite(Number(payload.totals.revenue))
           && Number.isFinite(Number(payload.totals.expense))
@@ -130,6 +149,13 @@ export default function Overview() {
               netIncome: Number(payload.totals.netIncome),
             },
             incomeStatement: {
+              revenue: payload.incomeStatement.revenue
+                .map((account) => ({
+                  id: account.id,
+                  name: String(account.name ?? 'إيراد غير محدد'),
+                  amount: Number(account.amount),
+                }))
+                .filter((account) => Number.isFinite(account.amount)),
               expense: payload.incomeStatement.expense
                 .map((account) => ({
                   id: account.id,
@@ -372,6 +398,27 @@ export default function Overview() {
         </DataPanel>
       </section>
 
+      <section className="overview-financial-movements" aria-label="حركة الإيرادات والمصروفات">
+        <FinancialMovementTable
+          title="حركة الإيرادات"
+          subtitle="تفصيل الإيرادات المرحّلة حسب الحساب"
+          icon={ArrowUpRight}
+          rows={revenueMovements}
+          total={totalRevenue}
+          tone="revenue"
+          testId="panel-revenue-movements"
+        />
+        <FinancialMovementTable
+          title="حركة المصروفات"
+          subtitle="تفصيل المصروفات المرحّلة حسب الحساب"
+          icon={ArrowDownRight}
+          rows={expenseMovements}
+          total={totalExpense}
+          tone="expense"
+          testId="panel-expense-movements"
+        />
+      </section>
+
       <section aria-labelledby="modules-heading">
         <div className="mb-4 flex items-end justify-between gap-4 text-white">
           <div><p className="text-xs font-bold text-teal-200">كل أعمالك في مكان واحد</p><h2 id="modules-heading" className="mt-1 text-xl font-black sm:text-2xl">الوحدات الرئيسية</h2></div>
@@ -412,6 +459,67 @@ function DataPanel({ title, subtitle, icon: Icon, children, testId }: { title: s
   return <div className="rounded-2xl border border-white/10 bg-white p-5 shadow-xl shadow-slate-950/10" data-testid={testId}><div className="flex items-start gap-3 border-b border-slate-100 pb-4"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600"><Icon className="h-5 w-5" /></span><div><h2 className="text-lg font-black text-slate-900">{title}</h2><p className="mt-1 text-xs text-slate-400">{subtitle}</p></div></div><div className="pt-2">{children}</div></div>;
 }
 
+type FinancialMovement = {
+  id: string | number;
+  name: string;
+  amount: number;
+};
+
+function FinancialMovementTable({
+  title,
+  subtitle,
+  icon,
+  rows,
+  total,
+  tone,
+  testId,
+}: {
+  title: string;
+  subtitle: string;
+  icon: LucideIcon;
+  rows: FinancialMovement[];
+  total: number;
+  tone: 'revenue' | 'expense';
+  testId: string;
+}) {
+  const Icon = icon;
+  const maxAmount = Math.max(1, ...rows.map((row) => row.amount));
+  return (
+    <DataPanel title={title} subtitle={subtitle} icon={Icon} testId={testId}>
+      {rows.length > 0 ? (
+        <div className="overview-financial-table-wrap">
+          <table className={`overview-table overview-movement-table is-${tone}`} dir="rtl">
+            <thead>
+              <tr><th>البند</th><th>النسبة</th><th>المبلغ</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id} data-testid={`row-${tone}-movement-${row.id}`}>
+                  <td>
+                    <strong>{row.name}</strong>
+                    <span className="overview-movement-track" aria-hidden="true">
+                      <i style={{ width: `${Math.min(100, Math.round((row.amount / maxAmount) * 100))}%` }} />
+                    </span>
+                  </td>
+                  <td>{percentageOfTotal(row.amount, total)}%</td>
+                  <td className="overview-table-amount">{formatCurrency(row.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="overview-table-total">
+                <td><strong>الإجمالي</strong></td>
+                <td>100%</td>
+                <td className="overview-table-amount">{formatCurrency(total)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      ) : <EmptyState text={`لا توجد ${tone === 'revenue' ? 'إيرادات' : 'مصروفات'} مرحّلة`} />}
+    </DataPanel>
+  );
+}
+
 function EmptyState({ text }: { text: string }) {
   return <div className="py-8 text-center text-sm text-slate-400">{text}</div>;
 }
@@ -444,6 +552,10 @@ function journalSourceLabel(sourceType?: string): string {
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat('ar-SA', { style: 'currency', currency: 'SAR' }).format(amount);
+}
+
+function percentageOfTotal(value: number, total: number): number {
+  return total > 0 ? Math.round((value / total) * 100) : 0;
 }
 
 function weeklySummaryStorageKey(organizationId: number, userId: number): string {
