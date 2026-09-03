@@ -44,6 +44,10 @@ test.describe('المسارات التشغيلية الأساسية', () => {
     await expect(page.getByTestId('panel-expense-movements')).toBeVisible();
     await expect(page.getByTestId('panel-revenue-movements').getByText('الإجمالي', { exact: true })).toBeVisible();
     await expect(page.getByTestId('panel-expense-movements').getByText('الإجمالي', { exact: true })).toBeVisible();
+    const sidebar = page.locator('aside');
+    await expect(sidebar).toBeVisible();
+    await page.mouse.wheel(0, 1800);
+    await expect.poll(async () => (await sidebar.boundingBox())?.y ?? -1).toBeLessThan(2);
   });
 
   test('يفتح العملاء والفواتير والمصروفات', async ({ authenticatedPage: page }) => {

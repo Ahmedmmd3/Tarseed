@@ -230,7 +230,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
         {sidebarOpen && <button type="button" className="fixed inset-0 z-20 bg-slate-950/40 md:hidden" onClick={closeSidebar} aria-label="إغلاق القائمة" data-testid="button-close-menu-overlay" />}
 
-        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex h-screen min-h-0 w-[286px] flex-col border-l border-white/10 bg-[#0A1328] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:static md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
+        <aside className={`${sidebarOpen ? 'translate-x-0' : 'translate-x-full'} fixed inset-y-0 right-0 z-30 flex h-screen min-h-0 w-[286px] flex-col border-l border-white/10 bg-[#0A1328] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-white shadow-2xl transition-transform duration-200 md:sticky md:top-0 md:self-start md:z-auto md:w-72 md:translate-x-0 md:shadow-none`}>
           <div className="shrink-0 border-b border-white/10 px-5 py-4">
             <BrandLockup dark />
             <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
