@@ -1,8 +1,9 @@
 import { execFile } from 'node:child_process';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, test } from './fixtures';
 import { read as readXlsx, utils as xlsxUtils } from 'xlsx';
+import JSZip from 'jszip';
 
 const execFileAsync = promisify(execFile);
 const MIN_NON_WHITE_PIXEL_RATIO = 0.01;
@@ -53,7 +54,7 @@ test('يعرض صفحة التصدير ويتيح اختيار الفترة وا
   await expectPdfPageHasContent(firstPageImagePath, 'الصفحة الأولى');
 });
 
-test('يتحقق من سلامة كل الصفحات اللاحقة في تقرير PDF طويل', async ({ authenticatedPage: page }, testInfo) => {
+test('يتحقق من سلامة تقارير PDF الطويلة منفردة وداخل ZIP', async ({ authenticatedPage: page }, testInfo) => {
   const accounts = Array.from({ length: 30 }, (_, index) => ({
     id: `long-report-account-${index + 1}`,
     code: `ACCT-LONG-${String(index + 1).padStart(4, '0')}`,
@@ -234,6 +235,30 @@ test('يتحقق من سلامة كل الصفحات اللاحقة في تقر�
     await expectPdfRowsRetained(pdfPath, reportId, reportMarkers[reportId], arabicMarkers[reportId], pageCount, testInfo);
     await expect(page.getByTestId(`button-export-${reportId}-pdf`)).toBeEnabled();
   }
+
+  const zipDownloadPromise = page.waitForEvent('download');
+  await page.getByTestId('button-export-zip').click();
+  const zipDownload = await zipDownloadPromise;
+  expect(zipDownload.suggestedFilename()).toContain('ترصيد_تصدير');
+  const zipPath = testInfo.outputPath('long-export-reports.zip');
+  await zipDownload.saveAs(zipPath);
+  expect((await stat(zipPath)).size).toBeGreaterThan(0);
+
+  const pdfReports = reportIds.map((id) => ({
+    id,
+    fileName: {
+      journals: 'القيود_اليومية',
+      trial: 'ميزان_المراجعة',
+      ledger: 'دفتر_الأستاذ',
+      invoices: 'الفواتير',
+      expenses: 'المصاريف',
+      income: 'قائمة_الدخل',
+      balance: 'الميزانية_العمومية',
+    }[id],
+    rowMarkers: reportMarkers[id],
+    arabicMarkers: arabicMarkers[id],
+  }));
+  await expectZipPdfReportsComplete(zipPath, pdfReports, testInfo);
 });
 
 test('يتحقق من اكتمال كل ملفات Excel الطويلة عند فتحها', async ({ authenticatedPage: page }, testInfo) => {
@@ -440,8 +465,9 @@ async function expectPdfRowsRetained(
   arabicMarkers: string[],
   pageCount: number,
   testInfo: { outputPath: (path: string) => string },
+  outputPrefix = `long-export-${reportId}`,
 ) {
-  const textPath = testInfo.outputPath(`long-export-${reportId}-text.txt`);
+  const textPath = testInfo.outputPath(`${outputPrefix}-text.txt`);
   await execFileAsync('pdftotext', ['-layout', pdfPath, textPath]);
   const pdfText = normalizePdfTextForAssertion(await readFile(textPath, 'utf8'));
   const pageTexts = pdfText.split('\f').slice(0, pageCount);
@@ -467,4 +493,46 @@ async function expectPdfRowsRetained(
 
 function normalizePdfTextForAssertion(text: string): string {
   return text.normalize('NFC').replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '');
+}
+
+async function expectZipPdfReportsComplete(
+  zipPath: string,
+  reports: Array<{
+    id: string;
+    fileName: string;
+    rowMarkers: string[];
+    arabicMarkers: string[];
+  }>,
+  testInfo: { outputPath: (path: string) => string },
+) {
+  const archive = await JSZip.loadAsync(await readFile(zipPath));
+  const pdfEntries = Object.values(archive.files).filter((entry) => entry.name.startsWith('PDF/') && entry.name.endsWith('.pdf') && !entry.dir);
+  const expectedNames = reports.map((report) => `PDF/${report.fileName}.pdf`).sort();
+
+  expect(pdfEntries, 'ملف ZIP يجب أن يحتوي على ملفات PDF السبعة المتوقعة فقط.').toHaveLength(reports.length);
+  expect(pdfEntries.map((entry) => entry.name).sort(), 'ملف ZIP يجب أن يحتوي على أسماء تقارير PDF المتوقعة.').toEqual(expectedNames);
+
+  for (const report of reports) {
+    const entry = archive.files[`PDF/${report.fileName}.pdf`];
+    expect(entry, `${report.id} يجب أن يكون موجوداً داخل مجلد PDF في ZIP.`).toBeDefined();
+    const pdfPath = testInfo.outputPath(`long-export-zip-${report.id}.pdf`);
+    await writeFile(pdfPath, await entry.async('nodebuffer'));
+    expect((await stat(pdfPath)).size, `${report.id} داخل ZIP يجب ألا يكون فارغاً.`).toBeGreaterThan(0);
+
+    const { stdout: pdfInfo } = await execFileAsync('pdfinfo', [pdfPath]);
+    const pageCount = Number(pdfInfo.match(/^Pages:\s+(\d+)$/m)?.[1]);
+    const expectedPageCount = Math.ceil(Math.max(report.rowMarkers.length, report.arabicMarkers.length) / PDF_ROWS_PER_PAGE);
+    expect(Number.isFinite(pageCount), `${report.id} داخل ZIP يجب أن يعرض عدد الصفحات.`).toBe(true);
+    expect(pageCount, `${report.id} داخل ZIP يجب أن يحتوي على ${expectedPageCount} صفحات.`).toBe(expectedPageCount);
+
+    await expectPdfRowsRetained(
+      pdfPath,
+      report.id,
+      report.rowMarkers,
+      report.arabicMarkers,
+      pageCount,
+      testInfo,
+      `long-export-zip-${report.id}`,
+    );
+  }
 }
