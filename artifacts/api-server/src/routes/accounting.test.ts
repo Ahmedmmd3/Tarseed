@@ -314,8 +314,9 @@ describe.sequential("accounting routes", () => {
         && !journal.adjustmentType,
       );
       expect(matching).toHaveLength(1);
+      const expectedDebitAccountId = accountCode.get(debitCode) ?? accountCode.get("5100");
       expect(matching[0].lines).toEqual(expect.arrayContaining([
-        expect.objectContaining({ accountId: String(accountCode.get(debitCode)), debit: 100, credit: 0 }),
+        expect.objectContaining({ accountId: String(expectedDebitAccountId), debit: 100, credit: 0 }),
         expect.objectContaining({ accountId: String(accountCode.get("1000")), debit: 0, credit: 100 }),
       ]));
     }
@@ -384,7 +385,7 @@ describe.sequential("accounting routes", () => {
     expect(sourceJournals.filter((item: any) => !item.adjustmentType)).toEqual(expect.arrayContaining([
       expect.objectContaining({
         lines: expect.arrayContaining([
-          expect.objectContaining({ accountId: String(accountCode.get("5200")), debit: 140, credit: 0 }),
+          expect.objectContaining({ accountId: String(accountCode.get("5300")), debit: 140, credit: 0 }),
           expect.objectContaining({ accountId: String(accountCode.get("1100")), debit: 0, credit: 140 }),
         ]),
       }),

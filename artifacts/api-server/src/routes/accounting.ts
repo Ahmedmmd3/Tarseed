@@ -1521,6 +1521,42 @@ router.post("/accounting/reconciliations/:id/adjustments", requireAuth, requireS
   }
 });
 
+router.post("/accounting/journals/:id/convert-source-draft", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const journalId = Number(request.params.id);
+  if (!Number.isInteger(journalId) || journalId <= 0) {
+    response.status(400).json({ error: "معرّف القيد غير صحيح." });
+    return;
+  }
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const [journal] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, journalId),
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "journalEntries"),
+      )).for("update");
+      if (!journal) throw new AccountingMutationError(404, "القيد غير موجود في هذه المنشأة.");
+      await convertManualJournalToSourceDraft(tx, currentAuth.organizationId, journal);
+      const [updatedJournal] = await tx.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, journal.id)).for("update");
+      const data = updatedJournal?.data as Record<string, unknown> | undefined;
+      return {
+        converted: Boolean(data?.convertedSourceId),
+        journal: updatedJournal ? { ...updatedJournal.data, id: updatedJournal.id } : null,
+        source: data?.convertedSourceId ? { id: data.convertedSourceId, tableName: data.sourceDocumentTable } : null,
+      };
+    });
+    response.json(result);
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+});
+
 router.post("/accounting/journals/:id/:action", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
   const journalId = Number(request.params.id);
   const action = String(request.params.action ?? "") as JournalAdjustmentAction;
@@ -2329,41 +2365,6 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
     if (error instanceof SourceCorrectionError || error instanceof SourceJournalError || error instanceof AccountingMutationError || error instanceof EInvoiceAdjustmentError) {
       const code = "code" in error ? error.code : undefined;
       response.status(error.status).json({ error: error.message, ...(code ? { code } : {}) });
-      return;
-    }
-    throw error;
-  }
-});
-
-router.post("/accounting/journals/:id/convert-source-draft", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
-  const journalId = Number(request.params.id);
-  if (!Number.isInteger(journalId) || journalId <= 0) {
-    response.status(400).json({ error: "معرّف القيد غير صحيح." });
-    return;
-  }
-  const auth = response.locals.auth as AuthContext;
-  try {
-    const result = await db.transaction(async (tx) => {
-      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
-      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
-      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
-      const [journal] = await tx.select().from(erpRecordsTable).where(and(
-        eq(erpRecordsTable.id, journalId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "journalEntries"),
-      )).for("update");
-      if (!journal) throw new AccountingMutationError(404, "القيد غير موجود في هذه المنشأة.");
-      await convertManualJournalToSourceDraft(tx, currentAuth.organizationId, journal);
-      const [updatedJournal] = await tx.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, journal.id)).for("update");
-      const data = updatedJournal?.data as Record<string, unknown> | undefined;
-      return {
-        converted: Boolean(data?.convertedSourceId),
-        journal: updatedJournal ? { ...updatedJournal.data, id: updatedJournal.id } : null,
-        source: data?.convertedSourceId ? { id: data.convertedSourceId, tableName: data.sourceDocumentTable } : null,
-      };
-    });
-    response.json(result);
-  } catch (error) {
-    if (error instanceof AccountingMutationError) {
-      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
     }
     throw error;

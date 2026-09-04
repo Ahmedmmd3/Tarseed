@@ -107,6 +107,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Test journal source draft linking
+        run: pnpm --filter @workspace/api-server run test:accounting-routes
+
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
 

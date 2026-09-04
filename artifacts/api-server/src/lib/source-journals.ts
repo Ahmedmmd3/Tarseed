@@ -94,7 +94,8 @@ export function journalLinesForSource(
     "مشتريات": "5000",
     "أخرى": "5900",
   };
-  const expense = account(expenseCategoryMap[String(data.category ?? "")] ?? "5100");
+  const requestedExpenseCode = expenseCategoryMap[String(data.category ?? "")] ?? "5100";
+  const expense = account(requestedExpenseCode) ?? account("5100");
   const settlement = account(
     data.paymentMethod === "card" || data.paymentMethod === "transfer" ? "1100" : "1000",
   );
