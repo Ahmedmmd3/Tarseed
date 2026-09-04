@@ -4,6 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, erpRecordsTable } from "@workspace/db";
 import { requireAuth, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
+import { commonJournalSuggestion } from "../lib/journal-suggestion";
 
 const router: IRouter = Router();
 const MAX_QUESTION_LENGTH = 2_000;
@@ -72,11 +73,26 @@ const assistantSystemPrompt = `أنت مساعد مالي ذكي داخل نظا
 إذا لم تتوفر بيانات كافية، اذكر ذلك بوضوح ولا تخترع أرقاماً.
 إذا كان السؤال خارج نطاق التحليل المالي والمحاسبي، أجب حرفياً: هذا خارج اختصاصي`;
 
-const journalSuggestionSystemPrompt = (accountList: string) => `أنت محاسب قانوني عربي. عندك دليل الحسابات التالي:
+const journalSuggestionSystemPrompt = (accountList: string) => `أنت محاسب قانوني عربي دقيق داخل نظام ترصيد. عندك دليل الحسابات التالي:
 ${accountList}
-المستخدم يصف عملية مالية. أعد JSON فقط بهذا الشكل:
+
+حوّل وصف المستخدم العربي، حتى لو كان قصيراً أو عامياً، إلى قيد يومية متوازن.
+قواعد ملزمة:
+- استخدم فقط accountId موجوداً في دليل الحسابات أعلاه، وانسخه حرفياً كنص بين علامتي اقتباس.
+- debit وcredit أرقام JSON وليست نصوصاً.
+- إذا قال المستخدم "نقداً" أو "كاش" فاستخدم حساب الصندوق.
+- دفع الإيجار نقداً: مصروف الإيجار مدين، والصندوق دائن.
+- دفع الرواتب نقداً: مصروف الرواتب مدين، والصندوق دائن.
+- دفع المرافق نقداً: مصروف المرافق مدين، والصندوق دائن.
+- البيع النقدي: الصندوق مدين، وإيرادات المبيعات دائنة.
+- لا تضف ضريبة أو حساباً ثالثاً إلا إذا ذكر المستخدم الضريبة صراحة.
+- اجعل الوصف العربي موجزاً ومطابقاً للعملية.
+
+أعد JSON صالحاً فقط بهذا الشكل:
 {"description":"string","lines":[{"accountId":"string","debit":0,"credit":0}]}
-تأكد أن مجموع المدين = مجموع الدائن. لا تضف أي نص خارج الـ JSON.`;
+تأكد أن مجموع المدين = مجموع الدائن، وأن كل سطر يحتوي مبلغاً في طرف واحد فقط.
+مثال بنيوي: {"description":"دفع إيجار نقداً","lines":[{"accountId":"معرف حساب الإيجار من القائمة","debit":3000,"credit":0},{"accountId":"معرف حساب الصندوق من القائمة","debit":0,"credit":3000}]}
+لا تستخدم Markdown ولا تضف أي نص خارج JSON.`;
 
 router.post(
   "/assistant/financial",
@@ -97,8 +113,8 @@ router.post(
 
     try {
       const completion = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
+        model: "claude-sonnet-5",
+        max_tokens: 8192,
         system: assistantSystemPrompt,
         messages: [
           {
@@ -138,14 +154,15 @@ router.post(
       return;
     }
 
-    const accountList = accounts
+    const validAccounts = accounts
       .filter((account): account is { id: string; code: string; name: string } => {
         if (!account || typeof account !== "object") return false;
         const candidate = account as Record<string, unknown>;
         return typeof candidate.id === "string"
           && typeof candidate.code === "string"
           && typeof candidate.name === "string";
-      })
+      });
+    const accountList = validAccounts
       .map((account) => `${account.id} | ${account.code} - ${account.name}`)
       .join("\n");
 
@@ -155,9 +172,14 @@ router.post(
     }
 
     try {
+      const deterministicSuggestion = commonJournalSuggestion(operation, validAccounts);
+      if (deterministicSuggestion) {
+        response.json({ suggestion: deterministicSuggestion });
+        return;
+      }
       const completion = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
+        model: "claude-sonnet-5",
+        max_tokens: 8192,
         system: journalSuggestionSystemPrompt(accountList),
         messages: [{ role: "user", content: operation }],
       });
@@ -190,8 +212,8 @@ router.post(
 
     try {
       const completion = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 1000,
+        model: "claude-sonnet-5",
+        max_tokens: 8192,
         system: `استخرج من هذه الصورة بيانات الإيصال. أعد JSON فقط:
 {description: string, amount: number, date: string (YYYY-MM-DD), category: string (اختر من: إيجار|رواتب|مشتريات|مرافق|تسويق|نقل|صيانة|أخرى),
 vendor: string}
@@ -322,7 +344,7 @@ router.post(
       };
 
       const completion = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+        model: "claude-sonnet-5",
         max_tokens: 8192,
         system: weeklySummarySystemPrompt,
         messages: [{ role: "user", content: JSON.stringify(metrics) }],
@@ -535,7 +557,7 @@ router.post(
       let analysis: string | null = null;
       if (anomalies.length > 0) {
         const completion = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-5",
           max_tokens: 8192,
           system: anomalySystemPrompt,
           messages: [{

@@ -36,11 +36,16 @@ type JournalSuggestion = {
 };
 
 function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: string }>): JournalSuggestion {
-  const normalized = rawSuggestion
+  const withoutFences = rawSuggestion
     .trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/, '')
     .trim();
+  const firstBrace = withoutFences.indexOf('{');
+  const lastBrace = withoutFences.lastIndexOf('}');
+  const normalized = firstBrace >= 0 && lastBrace > firstBrace
+    ? withoutFences.slice(firstBrace, lastBrace + 1)
+    : withoutFences;
   let parsed: unknown;
   try {
     parsed = JSON.parse(normalized);
@@ -57,20 +62,32 @@ function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: str
   const lines = candidate.lines.map((line) => {
     if (!line || typeof line !== 'object') throw new Error(aiParseError);
     const candidateLine = line as { accountId?: unknown; debit?: unknown; credit?: unknown };
+    const accountId = typeof candidateLine.accountId === 'string' || typeof candidateLine.accountId === 'number'
+      ? String(candidateLine.accountId)
+      : '';
+    const normalizeNumber = (value: unknown) => {
+      if (typeof value === 'number') return value;
+      if (typeof value !== 'string') return Number.NaN;
+      const normalizedValue = value
+        .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+        .replace(/[٬،]/g, ',')
+        .replace(/,/g, '')
+        .trim();
+      return Number(normalizedValue);
+    };
+    const debit = normalizeNumber(candidateLine.debit);
+    const credit = normalizeNumber(candidateLine.credit);
     if (
-      typeof candidateLine.accountId !== 'string'
-      || !accountIds.has(candidateLine.accountId)
-      || typeof candidateLine.debit !== 'number'
-      || typeof candidateLine.credit !== 'number'
-      || !Number.isFinite(candidateLine.debit)
-      || !Number.isFinite(candidateLine.credit)
-      || candidateLine.debit < 0
-      || candidateLine.credit < 0
-      || ((candidateLine.debit > 0) === (candidateLine.credit > 0))
+      !accountIds.has(accountId)
+      || !Number.isFinite(debit)
+      || !Number.isFinite(credit)
+      || debit < 0
+      || credit < 0
+      || ((debit > 0) === (credit > 0))
     ) {
       throw new Error(aiParseError);
     }
-    return { accountId: candidateLine.accountId, debit: candidateLine.debit, credit: candidateLine.credit };
+    return { accountId, debit, credit };
   });
 
   const totalDebit = lines.reduce((sum, line) => sum + line.debit, 0);
