@@ -24,6 +24,7 @@ type CompletedInvoice = {
   subtotal?: number;
   tax?: number;
   issueDate: string;
+  executedAt: string;
   customerName: string;
   paymentMethod: 'cash' | 'card' | 'credit';
   warehouseName: string;
@@ -47,6 +48,13 @@ function roundMoney(value: number): number {
 
 function paymentMethodLabel(method: CompletedInvoice['paymentMethod']): string {
   return { cash: 'نقدي', card: 'شبكة', credit: 'آجل' }[method];
+}
+
+function formatExecutionDateTime(value: string): string {
+  return new Intl.DateTimeFormat('ar-SA', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value));
 }
 
 function escapePrintHtml(value: unknown): string {
@@ -99,7 +107,10 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, org
       <div class="grand-total"><div class="total-line"><span>الإجمالي مع الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
     </section>
     <div class="payment-line"><span>طريقة الدفع</span><strong>${paymentMethodLabel(invoice.paymentMethod)}</strong></div>
-    <footer class="footer">هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</footer>
+    <footer class="footer">
+      <div class="execution-time">تاريخ ووقت التنفيذ: ${escapePrintHtml(formatExecutionDateTime(invoice.executedAt))}</div>
+      <div>هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</div>
+    </footer>
   `;
   const a4Body = `
     <header class="brand">
@@ -118,7 +129,10 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, org
       <div class="total-line"><span>ضريبة القيمة المضافة</span><strong>${escapePrintHtml(formatCurrency(invoice.tax ?? 0))}</strong></div>
       <div class="grand-total"><div class="total-line"><span>الإجمالي شامل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
     </section>
-    <footer class="footer">هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</footer>
+    <footer class="footer">
+      <div class="execution-time">تاريخ ووقت التنفيذ: ${escapePrintHtml(formatExecutionDateTime(invoice.executedAt))}</div>
+      <div>هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</div>
+    </footer>
   `;
   printWindow.document.write(`<!doctype html>
     <html lang="ar" dir="rtl">
@@ -155,6 +169,7 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, org
           .grand-total { border: 2px solid #0d9488; border-radius: 6px; color: #087f73; font-size: ${isA4 ? '17px' : '13px'}; font-weight: 800; margin-top: 8px; padding: 8px; }
           .payment-line { border-bottom: 1px dashed #667085; border-top: 1px dashed #667085; font-size: 11px; margin-top: 12px; padding: 7px 0; }
           .footer { border-top: 1px solid #eaecf0; color: #98a2b3; font-size: ${isA4 ? '10px' : '8px'}; margin-top: 26px; padding-top: 10px; text-align: center; }
+           .execution-time { color: #667085; margin-bottom: 3px; }
           @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
         </style>
       </head>
@@ -395,6 +410,7 @@ export default function POS() {
         subtotal: data.invoice.subtotal === undefined ? subtotal : Number(data.invoice.subtotal),
         tax: data.invoice.tax === undefined ? tax : Number(data.invoice.tax),
         issueDate: new Date().toISOString().slice(0, 10),
+        executedAt: new Date().toISOString(),
         customerName: customerName.trim(),
         paymentMethod,
         warehouseName: warehouses.find((warehouse) => String(warehouse.id) === String(selectedWarehouse))?.name ?? '',
