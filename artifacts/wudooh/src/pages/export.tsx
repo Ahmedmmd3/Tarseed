@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { todayLocalDate } from '@/lib/date';
 
 type ExportReportId = 'journals' | 'trial' | 'ledger' | 'invoices' | 'expenses' | 'income' | 'balance' | 'zip';
 type ExportStatus = 'idle' | 'loading' | 'success' | 'error';
@@ -108,7 +109,7 @@ export default function Export() {
   const { toast } = useToast();
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
-  const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState(todayLocalDate());
   const [selectedAccountId, setSelectedAccountId] = useState('all');
   const [dataset, setDataset] = useState<Dataset>({ accounts: [], journals: [], invoices: [], expenses: [], summary: null });
   const [status, setStatus] = useState<ExportStatus>('idle');

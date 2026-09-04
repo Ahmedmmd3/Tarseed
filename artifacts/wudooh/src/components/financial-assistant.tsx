@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
 import { useStore, type Account, type Journal, type Receivable } from '@/context/store';
+import { formatLocalDate } from '@/lib/date';
 
 type AssistantMessage = {
   id: string;
@@ -30,7 +31,7 @@ const suggestions = [
 ];
 
 function dateKey(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return formatLocalDate(date);
 }
 
 function calculatePeriodTotals(journals: Journal[], accounts: Account[], from?: string, to?: string): PeriodTotals {

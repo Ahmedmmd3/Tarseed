@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
+import { todayLocalDate } from '@/lib/date';
 
 type Product = { id: number | string; name: string; barcode?: string | number; sku?: string; salePrice?: number | string; price?: number | string; sellPrice?: number | string; stock?: number | string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
@@ -372,7 +373,7 @@ export default function POS() {
       setPendingOperationId(clientOpId);
       const payload = {
         warehouseId: Number(selectedWarehouse),
-        issueDate: new Date().toISOString().slice(0, 10),
+        issueDate: todayLocalDate(),
         paymentMethod,
         dueDate: paymentMethod === 'credit' ? dueDate : undefined,
         customerName: customerName.trim() || undefined,
@@ -409,7 +410,7 @@ export default function POS() {
         total: data.invoice.total === undefined ? finalTotal : Number(data.invoice.total),
         subtotal: data.invoice.subtotal === undefined ? subtotal : Number(data.invoice.subtotal),
         tax: data.invoice.tax === undefined ? tax : Number(data.invoice.tax),
-        issueDate: new Date().toISOString().slice(0, 10),
+        issueDate: todayLocalDate(),
         executedAt: new Date().toISOString(),
         customerName: customerName.trim(),
         paymentMethod,
@@ -634,7 +635,7 @@ export default function POS() {
                 id="pos-due-date"
                 type="date"
                 value={dueDate}
-                min={new Date().toISOString().slice(0, 10)}
+                min={todayLocalDate()}
                 onChange={(event) => setDueDate(event.target.value)}
                 required
                 className="h-11 w-full rounded-xl border border-amber-200 bg-white px-4 text-sm font-medium text-slate-900 shadow-sm focus:border-teal-500 focus:outline-none"

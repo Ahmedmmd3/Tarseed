@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { buildLocalLedger } from '@/lib/local-ledger';
+import { todayLocalDate } from '@/lib/date';
 
 type LedgerMovement = {
   journalId: string | number;
@@ -62,7 +63,7 @@ export function LedgerReport() {
   const year = new Date().getFullYear();
   const [accountId, setAccountId] = useState('');
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
-  const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState(todayLocalDate());
   const [serverReport, setServerReport] = useState<LedgerReport | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

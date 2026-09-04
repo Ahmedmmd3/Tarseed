@@ -5,6 +5,7 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, TextInput, View 
 import { Card, Empty, Money, PermissionGate, Screen, commonStyles } from '@/components/AppUI';
 import { useApp } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { todayLocalDate } from '@/lib/date';
 
 const categories = ['إيجار', 'رواتب', 'مشتريات', 'مرافق', 'تسويق', 'نقل', 'صيانة', 'أخرى'];
 export default function ExpensesScreen() {
@@ -24,7 +25,7 @@ export default function ExpensesScreen() {
       return;
     }
     setSubmitting(true);
-    const result = await addExpense({ description: description.trim(), amount: numericAmount, date: new Date().toISOString().slice(0, 10), category, vendor: vendor.trim() || undefined });
+    const result = await addExpense({ description: description.trim(), amount: numericAmount, date: todayLocalDate(), category, vendor: vendor.trim() || undefined });
     setSubmitting(false);
     setOpen(false);
     setDescription('');

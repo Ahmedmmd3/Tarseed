@@ -4,6 +4,7 @@ import { Link } from 'wouter';
 import { useStore, type Journal } from '@/context/store';
 import { Button } from '@/components/ui/button';
 import { useCrud } from '@/hooks/use-crud';
+import { todayLocalDate } from '@/lib/date';
 import './overview.css';
 
 type Module = { title: string; description: string; href: string; icon: LucideIcon; tone: string; permission: string; ready: boolean; id: string };
@@ -95,7 +96,7 @@ export default function Overview() {
   const canReadSales = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.sales === true));
   const quotationsCrud = useCrud<any>('quotations', canReadSales);
   const purchaseOrdersCrud = useCrud<any>('purchaseOrders', canReadInventory);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayLocalDate();
   const pendingQuotations = quotationsCrud.data.filter((q: any) =>
     (q.status === 'draft' || q.status === 'sent')
     && !q.convertedInvoiceId

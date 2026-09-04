@@ -11,6 +11,7 @@ import { ReconciliationReport } from '@/components/accounting/reconciliation-rep
 import { AgingReport } from '@/components/accounting/aging-report';
 import { CheckSquare, Clock } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { todayLocalDate } from '@/lib/date';
 
 type ReportType = 'trial' | 'income' | 'balance' | 'ledger' | 'reconciliation' | 'aging';
 type ServerSummary = {
@@ -54,7 +55,7 @@ export default function Reports() {
   const [reportType, setReportType] = useState<ReportType>('trial');
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
-  const [toDate, setToDate] = useState(new Date().toISOString().slice(0, 10));
+  const [toDate, setToDate] = useState(todayLocalDate());
   const [closedPeriod, setClosedPeriod] = useState<string | null>(null);
   const [closeError, setCloseError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useStore } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
+import { todayLocalDate } from '@/lib/date';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -58,7 +59,7 @@ export function ReconciliationReport() {
   const [accountId, setAccountId] = useState<string>('');
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
-  const [statementDate, setStatementDate] = useState(new Date().toISOString().slice(0, 10));
+  const [statementDate, setStatementDate] = useState(todayLocalDate());
   
   const [sessions, setSessions] = useState<ReconSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);

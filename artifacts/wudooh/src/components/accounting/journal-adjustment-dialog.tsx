@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { AlertCircle, ArrowLeftRight, Calendar, CheckCircle2, FileText, Info, LoaderCircle, Plus, Trash2 } from 'lucide-react';
+import { todayLocalDate } from '@/lib/date';
 
 export type JournalAdjustmentInput = {
   date: string;
@@ -32,7 +33,7 @@ type JournalAdjustmentDialogProps = {
   onSubmit: (data: JournalAdjustmentInput) => void;
 };
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = todayLocalDate;
 const money = (amount: number) => new Intl.NumberFormat('ar-SA', { minimumFractionDigits: 2 }).format(amount);
 
 export function JournalAdjustmentDialog({

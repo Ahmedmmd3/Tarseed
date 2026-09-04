@@ -13,6 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { CrudTable } from '@/components/crud-table';
 import { AttachmentsPanel } from '@/components/attachments-panel';
 import { TransferDialog } from '@/components/transfer-dialog';
+import { todayLocalDate } from '@/lib/date';
 
 type Product = { id: number | string; name: string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
@@ -81,7 +82,7 @@ function SupplierPaymentsPanel() {
   const purchaseOrdersCrud = useCrud<PurchaseOrder>('purchaseOrders');
   const [paymentSupplier, setPaymentSupplier] = useState<Supplier | null>(null);
   const [allocations, setAllocations] = useState<Record<string, string>>({});
-  const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
+  const [paymentDate, setPaymentDate] = useState(todayLocalDate());
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'bank'>('bank');
   const [reference, setReference] = useState('');
   const [operationId, setOperationId] = useState('');
@@ -90,7 +91,7 @@ function SupplierPaymentsPanel() {
   const [paymentsLoading, setPaymentsLoading] = useState(false);
   const [reversingPayment, setReversingPayment] = useState<SupplierPayment | null>(null);
   const [reversalReason, setReversalReason] = useState('');
-  const [reversalDate, setReversalDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reversalDate, setReversalDate] = useState(todayLocalDate());
   const [reversalOperationId, setReversalOperationId] = useState('');
   const [reversing, setReversing] = useState(false);
 
@@ -140,7 +141,7 @@ function SupplierPaymentsPanel() {
   const openPayment = (supplier: Supplier) => {
     const related = payablesForSupplier(supplier);
     setPaymentSupplier(supplier);
-    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentDate(todayLocalDate());
     setPaymentMethod('bank');
     setReference('');
     setOperationId(crypto.randomUUID());
@@ -201,7 +202,7 @@ function SupplierPaymentsPanel() {
   const openReversal = (payment: SupplierPayment) => {
     setReversingPayment(payment);
     setReversalReason('');
-    setReversalDate(new Date().toISOString().slice(0, 10));
+    setReversalDate(todayLocalDate());
     setReversalOperationId(crypto.randomUUID());
   };
 
@@ -498,7 +499,7 @@ function PurchaseReceiptsWorkspace() {
   const [form, setForm] = useState({
     orderNumber: '',
     supplierName: '',
-    date: new Date().toISOString().slice(0, 10),
+    date: todayLocalDate(),
     warehouseId: '',
     paymentMethod: 'cash' as 'cash' | 'credit',
     dueDate: '',
@@ -608,7 +609,7 @@ function PurchaseReceiptsWorkspace() {
       }
 
       setOpen(false);
-      setForm({ orderNumber: '', supplierName: '', date: new Date().toISOString().slice(0, 10), warehouseId: '', paymentMethod: 'cash', dueDate: '' });
+      setForm({ orderNumber: '', supplierName: '', date: todayLocalDate(), warehouseId: '', paymentMethod: 'cash', dueDate: '' });
       setItems([]);
       setClientOperationId('');
       await purchaseOrdersCrud.load();

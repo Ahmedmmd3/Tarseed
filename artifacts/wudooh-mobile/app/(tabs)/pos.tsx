@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Card, Empty, Money, PermissionGate, Screen, commonStyles } from '@/components/AppUI';
 import { useApp, type Product } from '@/context/AppContext';
 import { useColors } from '@/hooks/useColors';
+import { todayLocalDate } from '@/lib/date';
 import { matchesProductBarcode, matchesProductSearch } from '@/lib/product-identifiers';
 
 type CartItem = { product: Product; quantity: number };
@@ -95,7 +96,7 @@ export default function PosScreen() {
     setNotice(null);
     const result = await checkout({
       warehouseId,
-      issueDate: new Date().toISOString().slice(0, 10),
+      issueDate: todayLocalDate(),
       paymentMethod,
       dueDate: paymentMethod === 'credit' ? dueDate : undefined,
       customerName: customerName.trim() || undefined,

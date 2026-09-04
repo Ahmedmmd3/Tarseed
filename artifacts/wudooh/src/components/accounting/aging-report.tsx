@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useStore } from '@/context/store';
+import { todayLocalDate } from '@/lib/date';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -47,7 +48,7 @@ type ComputedGroup = {
 
 export function AgingReport() {
   const { connectionMode, receivables: localReceivables } = useStore();
-  const [referenceDate, setReferenceDate] = useState(new Date().toISOString().slice(0, 10));
+  const [referenceDate, setReferenceDate] = useState(todayLocalDate());
   const [data, setData] = useState<AgingResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

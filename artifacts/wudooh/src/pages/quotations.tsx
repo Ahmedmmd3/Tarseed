@@ -10,6 +10,7 @@ import { useCrud } from '@/hooks/use-crud';
 import { useStore } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { addLocalDays, todayLocalDate } from '@/lib/date';
 
 type Product = { id: number | string; name: string; sellPrice?: number; price?: number; unitPrice?: number; vatRate?: number | string };
 type Customer = { id: number | string; name: string };
@@ -65,8 +66,8 @@ const defaultForm = () => ({
   number: '',
   customerId: '',
   customerName: '',
-  issueDate: new Date().toISOString().slice(0, 10),
-  expiryDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10),
+  issueDate: todayLocalDate(),
+  expiryDate: addLocalDays(30),
   status: 'draft' as Quotation['status'],
   notes: '',
 });
@@ -261,7 +262,7 @@ export default function Quotations() {
     if (filter === 'pending') return quotationsCrud.data.filter((q) => q.status === 'draft' || q.status === 'sent');
     if (filter === 'accepted') return quotationsCrud.data.filter((q) => q.status === 'accepted' || q.convertedInvoiceId);
     if (filter === 'expired') {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayLocalDate();
       return quotationsCrud.data.filter((q) => q.status === 'expired' || q.status === 'rejected' || (q.expiryDate < today && q.status !== 'accepted'));
     }
     return quotationsCrud.data.filter((q) => q.status === filter);
@@ -476,7 +477,7 @@ export default function Quotations() {
                     <TableCell>{q.issueDate}</TableCell>
                     <TableCell>
                       {q.expiryDate}
-                      {q.expiryDate < new Date().toISOString().slice(0, 10) && q.status !== 'accepted' && q.status !== 'expired' && (
+                      {q.expiryDate < todayLocalDate() && q.status !== 'accepted' && q.status !== 'expired' && (
                         <span className="mr-2 inline-flex items-center gap-1 text-xs font-bold text-rose-600" data-testid={`quotation-expired-${q.id}`}>
                           <AlertCircle className="h-3.5 w-3.5" /> منتهي الصلاحية
                         </span>

@@ -46,6 +46,7 @@ import { useStore } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trackEvent } from '@/lib/analytics';
+import { todayLocalDate } from '@/lib/date';
 
 type Product = {
   id: number | string;
@@ -163,7 +164,7 @@ const defaultForm = () => ({
   orderNumber: '',
   supplierId: '',
   supplierName: '',
-  issueDate: new Date().toISOString().slice(0, 10),
+  issueDate: todayLocalDate(),
   expectedDate: '',
   warehouseId: '',
   status: 'draft' as 'draft' | 'sent',
@@ -370,7 +371,7 @@ export default function PurchaseOrders() {
   const [expiringShareAlerts, setExpiringShareAlerts] = useState<ExpiringPurchaseOrderShare[]>([]);
 
   const [receiveOrder, setReceiveOrder] = useState<PurchaseOrder | null>(null);
-  const [receiptDate, setReceiptDate] = useState(new Date().toISOString().slice(0, 10));
+  const [receiptDate, setReceiptDate] = useState(todayLocalDate());
   const [receiptOperationId, setReceiptOperationId] = useState('');
   const [receiveItems, setReceiveItems] = useState<
     { productId: string; productName: string; quantity: number; max: number }[]
@@ -445,7 +446,7 @@ export default function PurchaseOrders() {
 
   const openReceive = (po: PurchaseOrder) => {
     setReceiveOrder(po);
-    setReceiptDate(new Date().toISOString().slice(0, 10));
+    setReceiptDate(todayLocalDate());
     setReceiptOperationId(crypto.randomUUID());
     setReceiveItems(
       po.items

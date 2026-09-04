@@ -24,11 +24,12 @@ import type { Journal } from '@/context/store';
 import { AttachmentsPanel } from '@/components/attachments-panel';
 import { TransferDialog } from '@/components/transfer-dialog';
 import { useCrud } from '@/hooks/use-crud';
+import { todayLocalDate } from '@/lib/date';
 
 type JournalStatusFilter = 'all' | 'draft' | 'posted';
 type Party = { id: number | string; name: string };
 
-const today = () => new Date().toISOString().split('T')[0];
+const today = todayLocalDate;
 const money = (amount: number) => new Intl.NumberFormat('ar-SA', { minimumFractionDigits: 2 }).format(amount);
 const aiParseError = 'لم أفهم العملية، حاول بوصف أوضح';
 

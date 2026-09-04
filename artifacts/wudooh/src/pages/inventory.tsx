@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { todayLocalDate } from '@/lib/date';
 
 type CatalogRecord = { id: number | string; name?: string; status?: string; cost?: number | string };
 type Balance = { id: number | string; productId: number | string; warehouseId: number | string; quantity: number | string };
@@ -59,7 +60,7 @@ function TransferWorkspace({ transfers, products, warehouses, loading, onChanged
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ productId: '', fromWarehouseId: '', toWarehouseId: '', quantity: '', date: new Date().toISOString().slice(0, 10), note: '' });
+  const [form, setForm] = useState({ productId: '', fromWarehouseId: '', toWarehouseId: '', quantity: '', date: todayLocalDate(), note: '' });
   const activeWarehouses = warehouses.filter((warehouse) => warehouse.status !== 'inactive');
 
   const submit = async (event: FormEvent) => {
@@ -76,7 +77,7 @@ function TransferWorkspace({ transfers, products, warehouses, loading, onChanged
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'تعذر إنشاء تحويل المخزون.');
       setOpen(false);
-      setForm({ productId: '', fromWarehouseId: '', toWarehouseId: '', quantity: '', date: new Date().toISOString().slice(0, 10), note: '' });
+      setForm({ productId: '', fromWarehouseId: '', toWarehouseId: '', quantity: '', date: todayLocalDate(), note: '' });
       await onChanged();
       toast({ title: 'تم تسجيل التحويل بانتظار الاعتماد.' });
     } catch (error) {
@@ -143,7 +144,7 @@ function AdjustmentWorkspace({ adjustments, products, warehouses, loading, onCha
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ productId: '', warehouseId: '', actualQuantity: '', reason: '', date: new Date().toISOString().slice(0, 10) });
+  const [form, setForm] = useState({ productId: '', warehouseId: '', actualQuantity: '', reason: '', date: todayLocalDate() });
   const activeWarehouses = warehouses.filter((warehouse) => warehouse.status !== 'inactive');
 
   const submit = async (event: FormEvent) => {

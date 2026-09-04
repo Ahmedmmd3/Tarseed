@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { todayLocalDate } from '@/lib/date';
 
 type SourceAction = 'cancel' | 'correct';
 type SourceField = {
@@ -27,7 +28,7 @@ type SourceDocumentAdjustmentDialogProps = {
   onCompleted: () => Promise<void> | void;
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = todayLocalDate;
 
 export function SourceDocumentAdjustmentDialog({
   open,
