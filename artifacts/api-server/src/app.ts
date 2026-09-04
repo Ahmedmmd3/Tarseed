@@ -10,6 +10,22 @@ import { isExpiredStripeSignatureError, processStripeWebhook } from "./lib/strip
 import { normalizeSaudiPhone } from "./lib/team-auth";
 
 const app: Express = express();
+app.use(
+  helmet({
+    // The API does not serve executable browser resources. Keep the existing
+    // restrictive API CSP below instead of Helmet's browser-oriented defaults.
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: { policy: "same-origin" },
+    crossOriginResourcePolicy: { policy: "same-origin" },
+    frameguard: { action: "deny" },
+    hsts: process.env.NODE_ENV === "production"
+      ? { maxAge: 31536000, includeSubDomains: true }
+      : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    permittedCrossDomainPolicies: { permittedPolicies: "none" },
+  }),
+);
 // The API service is reached by Replit's shared proxy over the local loopback
 // connection configured by artifact.toml. Trust only that exact peer; a hop
 // count would also trust a client that connects directly and supplies its own
@@ -185,22 +201,6 @@ app.use(
         };
       },
     },
-  }),
-);
-app.use(
-  helmet({
-    // The API does not serve executable browser resources. Keep the existing
-    // restrictive API CSP below instead of Helmet's browser-oriented defaults.
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-    crossOriginOpenerPolicy: { policy: "same-origin" },
-    crossOriginResourcePolicy: { policy: "same-origin" },
-    frameguard: { action: "deny" },
-    hsts: process.env.NODE_ENV === "production"
-      ? { maxAge: 31536000, includeSubDomains: true }
-      : false,
-    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
-    permittedCrossDomainPolicies: { permittedPolicies: "none" },
   }),
 );
 app.use((_request, response, next) => {
