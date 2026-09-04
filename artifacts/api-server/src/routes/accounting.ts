@@ -8,7 +8,7 @@ import { buildLedgerReport } from "../lib/accounting-ledger";
 import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type JournalAdjustmentAction, type JournalRecord } from "../lib/journal-adjustments";
 import { EInvoiceAdjustmentError, issueEInvoiceAdjustment } from "../lib/e-invoice-adjustments";
 import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, type SourceTable, SourceJournalError } from "../lib/source-journals";
-import { convertManualJournalToSourceDraft } from "./erp-data";
+import { convertManualJournalToSourceDraft, MutationRejected, synchronizeConvertedManualJournal } from "./erp-data";
 
 const router: IRouter = Router();
 
@@ -1657,7 +1657,7 @@ router.post("/accounting/journals/:id/:action", requireAuth, requireSubscription
         clientOperationId: reversalOperationId,
         data: { ...prepared.reversal, adjustmentRequestFingerprint: requestFingerprint },
       }).returning();
-      const [createdCorrection] = prepared.correction
+      const [insertedCorrection] = prepared.correction
         ? await tx.insert(erpRecordsTable).values({
           organizationId: currentAuth.organizationId,
           tableName: "journalEntries",
@@ -1665,6 +1665,33 @@ router.post("/accounting/journals/:id/:action", requireAuth, requireSubscription
           data: { ...prepared.correction, adjustmentRequestFingerprint: requestFingerprint },
         }).returning()
         : [];
+      let createdCorrection = insertedCorrection;
+      if (createdCorrection && original.conversionStatus === "linked_draft") {
+        try {
+          const correctedData = await synchronizeConvertedManualJournal(
+            tx,
+            currentAuth.organizationId,
+            lockedOriginal,
+            {
+              ...createdCorrection.data,
+              customerId: original.customerId,
+              customerName: original.customerName,
+              supplierId: original.supplierId,
+              supplierName: original.supplierName,
+            },
+            true,
+          );
+          [createdCorrection] = await tx.update(erpRecordsTable).set({
+            data: correctedData,
+            updatedAt: new Date(),
+          }).where(eq(erpRecordsTable.id, createdCorrection.id)).returning();
+        } catch (error) {
+          if (error instanceof MutationRejected) {
+            throw new AccountingMutationError(error.status, error.message, error.code);
+          }
+          throw error;
+        }
+      }
       const createdIds = [createdReversal.id, ...(createdCorrection ? [createdCorrection.id] : [])];
       const details = auditDetails(original, prepared, createdIds);
       await tx.insert(erpRecordsTable).values({

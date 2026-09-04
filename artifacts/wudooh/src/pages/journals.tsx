@@ -99,11 +99,12 @@ function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: str
 }
 
 export default function Journals() {
-  const { journals, accounts, addJournal, postJournal, adjustJournal, connectionMode } = useStore();
+  const { journals, accounts, addJournal, updateJournal, postJournal, adjustJournal, connectionMode } = useStore();
   const customersCrud = useCrud<Party>('customers');
   const suppliersCrud = useCrud<Party>('suppliers');
   const { toast } = useToast();
   const [isAddOpen, setIsAddOpen] = useState(false);
+  const [editingJournal, setEditingJournal] = useState<Journal | null>(null);
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [statusFilter, setStatusFilter] = useState<JournalStatusFilter>('all');
@@ -147,12 +148,24 @@ export default function Journals() {
   const canSubmit = Boolean(description.trim() && date && linesAreValid && isBalanced);
 
   const resetForm = () => {
+    setEditingJournal(null);
     setDate(today());
     setDescription('');
     setCustomerId('');
     setSupplierId('');
     setLines([{ accountId: '', debit: 0, credit: 0 }, { accountId: '', debit: 0, credit: 0 }]);
     setIsAiSuggested(false);
+  };
+
+  const openEditJournal = (journal: Journal) => {
+    setEditingJournal(journal);
+    setDate(journal.date);
+    setDescription(journal.description);
+    setCustomerId(journal.customerId ? String(journal.customerId) : '');
+    setSupplierId(journal.supplierId ? String(journal.supplierId) : '');
+    setLines(journal.lines.map(({ accountId, debit, credit }) => ({ accountId: String(accountId), debit: Number(debit) || 0, credit: Number(credit) || 0 })));
+    setIsAiSuggested(false);
+    setIsAddOpen(true);
   };
 
   const openSuggestionDialog = () => {
@@ -204,8 +217,22 @@ export default function Journals() {
     try {
       const customer = customersCrud.data.find((party) => String(party.id) === customerId);
       const supplier = suppliersCrud.data.find((party) => String(party.id) === supplierId);
-      await addJournal({ date, description: description.trim(), status: 'draft', lines: lines.map((line, index) => ({ ...line, id: `temp-${index}` })), ...(customer ? { customerId: String(customer.id), customerName: customer.name } : {}), ...(supplier ? { supplierId: String(supplier.id), supplierName: supplier.name } : {}) });
-      toast({ title: 'تم حفظ القيد', description: 'حُفظ القيد كمسودة، وسيُربط بمستند مسودة عند مطابقة نمط عملية واضح.' });
+      const journalData = {
+        date,
+        description: description.trim(),
+        lines: lines.map((line, index) => ({ ...line, id: `temp-${index}` })),
+        customerId: customer ? String(customer.id) : '',
+        customerName: customer?.name ?? '',
+        supplierId: supplier ? String(supplier.id) : '',
+        supplierName: supplier?.name ?? '',
+      };
+      if (editingJournal) {
+        await updateJournal(editingJournal.id, journalData);
+        toast({ title: 'تم تعديل القيد', description: 'حُدّث القيد والمسودة المرتبطة به معاً.' });
+      } else {
+        await addJournal({ ...journalData, status: 'draft' });
+        toast({ title: 'تم حفظ القيد', description: 'حُفظ القيد كمسودة، وسيُربط بمستند مسودة عند مطابقة نمط عملية واضح.' });
+      }
       setIsAddOpen(false);
       resetForm();
     } catch (error) {
@@ -308,7 +335,7 @@ export default function Journals() {
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <div className="flex flex-wrap items-center gap-3">
-                  <DialogTitle className="text-xl">إضافة قيد يومية</DialogTitle>
+                  <DialogTitle className="text-xl">{editingJournal ? 'تعديل قيد اليومية' : 'إضافة قيد يومية'}</DialogTitle>
                   {isAiSuggested && <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700" data-testid="badge-ai-suggested"><Sparkles className="ml-1 h-3.5 w-3.5" />مقترح بالذكاء الاصطناعي</Badge>}
                 </div>
               </DialogHeader>
@@ -421,7 +448,7 @@ export default function Journals() {
                 <DialogClose asChild><Button type="button" variant="ghost">إلغاء</Button></DialogClose>
                 <Button type="submit" disabled={!canSubmit} className="min-w-[120px]" data-testid="button-submit-journal">
                   {canSubmit ? <CheckCircle2 className="ml-2 h-4 w-4" /> : null}
-                  حفظ القيد
+                   {editingJournal ? 'حفظ التعديلات' : 'حفظ القيد'}
                 </Button>
               </DialogFooter>
             </form>
@@ -500,16 +527,24 @@ export default function Journals() {
                   </Badge>
                 )}
                 {journal.status === 'draft' && (
-                  <Button size="sm" onClick={() => { void handlePostJournal(journal.id); }} className="shadow-sm bg-primary/10 text-primary hover:bg-primary hover:text-white" data-testid={`button-post-${journal.id}`}>
-                    اعتماد وترحيل
-                  </Button>
-                )}
-                {journal.status === 'posted' && !journal.sourceType && journal.adjustmentType !== 'reversal' && !journalAdjustmentStatus(journals, journal.id) && (
                   <>
-                    <Button type="button" size="sm" variant="outline" onClick={() => openAdjustment(journal, 'reverse')} disabled={connectionMode !== 'remote'} data-testid={`button-reverse-${journal.id}`}>
-                      <RotateCcw className="ml-1.5 h-4 w-4" />
-                      عكس
+                    <Button type="button" size="sm" variant="outline" onClick={() => openEditJournal(journal)} disabled={connectionMode !== 'remote'} data-testid={`button-edit-journal-${journal.id}`}>
+                      <FilePenLine className="ml-1.5 h-4 w-4" />
+                      تعديل
                     </Button>
+                    <Button size="sm" onClick={() => { void handlePostJournal(journal.id); }} className="shadow-sm bg-primary/10 text-primary hover:bg-primary hover:text-white" data-testid={`button-post-${journal.id}`}>
+                      اعتماد وترحيل
+                    </Button>
+                  </>
+                )}
+                {journal.status === 'posted' && journal.adjustmentType !== 'reversal' && !journalAdjustmentStatus(journals, journal.id) && (
+                  <>
+                    {!journal.sourceType && (
+                      <Button type="button" size="sm" variant="outline" onClick={() => openAdjustment(journal, 'reverse')} disabled={connectionMode !== 'remote'} data-testid={`button-reverse-${journal.id}`}>
+                        <RotateCcw className="ml-1.5 h-4 w-4" />
+                        عكس
+                      </Button>
+                    )}
                     <Button type="button" size="sm" variant="outline" onClick={() => openAdjustment(journal, 'correct')} disabled={connectionMode !== 'remote'} data-testid={`button-correct-${journal.id}`}>
                       <FilePenLine className="ml-1.5 h-4 w-4" />
                       تصحيح

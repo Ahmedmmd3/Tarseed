@@ -459,15 +459,46 @@ describe.sequential("accounting routes", () => {
     expect(linked).toHaveLength(1);
     expect(linked[0]).toMatchObject({ status: "draft", customerId: customer.payload.record.id, customerName: customer.payload.record.name });
 
-    const edited = await api(`/data/journalEntries/${journal.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { description: "تعديل مرفوض" } });
-    expect(edited.response.status).toBe(409);
+    const edited = await api(`/data/journalEntries/${journal.id}`, {
+      method: "PATCH",
+      cookie: ownerA.cookie,
+      body: {
+        description: "بيع يدوي معدل",
+        lines: [{ accountId: String(ar.id), debit: 175, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 175 }],
+        convertedSourceId: 999999,
+        sourceDocumentId: 999999,
+      },
+    });
+    expect(edited.response.status).toBe(200);
+    expect(edited.payload.record).toMatchObject({ description: "بيع يدوي معدل", convertedSourceId: journal.convertedSourceId, sourceDocumentId: journal.sourceDocumentId });
+    const invoicesEdited = await api("/data/invoices", { cookie: ownerA.cookie });
+    expect(invoicesEdited.payload.records.filter((invoice: any) => Number(invoice.sourceJournalId) === Number(journal.id))).toEqual([
+      expect.objectContaining({ id: linked[0].id, status: "draft", total: 175, subtotal: 175 }),
+    ]);
     const removed = await api(`/data/journalEntries/${journal.id}`, { method: "DELETE", cookie: ownerA.cookie });
     expect(removed.response.status).toBe(409);
     const posted = await api(`/data/journalEntries/${journal.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { status: "posted" } });
     expect(posted.response.status).toBe(200);
     expect(posted.payload.record.status).toBe("posted");
+    const editedAfterPosting = await api(`/data/journalEntries/${journal.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { description: "تعديل بعد الترحيل" } });
+    expect(editedAfterPosting.response.status).toBe(409);
+    const corrected = await api(`/accounting/journals/${journal.id}/correct`, {
+      method: "POST",
+      cookie: ownerA.cookie,
+      headers: { "Idempotency-Key": `correct-linked-manual-${randomUUID()}` },
+      body: {
+        date: "2026-05-02",
+        reason: "تصحيح مبلغ البيع",
+        description: "بيع يدوي مصحح",
+        lines: [{ accountId: String(ar.id), debit: 180, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 180 }],
+      },
+    });
+    expect(corrected.response.status).toBe(201);
+    expect(corrected.payload.correction).toMatchObject({ adjustmentType: "correction", sourceId: linked[0].id });
     const invoicesAfter = await api("/data/invoices", { cookie: ownerA.cookie });
-    expect(invoicesAfter.payload.records.filter((invoice: any) => Number(invoice.sourceJournalId) === Number(journal.id))).toEqual(linked);
+    expect(invoicesAfter.payload.records.filter((invoice: any) => Number(invoice.sourceJournalId) === Number(journal.id))).toEqual([
+      expect.objectContaining({ id: linked[0].id, status: "draft", total: 180, subtotal: 180 }),
+    ]);
   });
 
   it("يحوّل قيد مصروف يدوي للمورد إلى مسودة واحدة ولا يكرر المصدر أو القيد عند الإعادة والمزامنة", async () => {
@@ -493,6 +524,18 @@ describe.sequential("accounting routes", () => {
     const expensesBefore = await api("/data/expenses", { cookie: ownerA.cookie });
     expect(expensesBefore.payload.records.filter((item: any) => Number(item.sourceJournalId) === Number(journal.id))).toEqual([
       expect.objectContaining({ status: "draft", supplierId: supplier.payload.record.id, vendor: supplier.payload.record.name }),
+    ]);
+    const edited = await api(`/data/journalEntries/${journal.id}`, {
+      method: "PATCH", cookie: ownerA.cookie,
+      body: {
+        description: "مصروف يدوي معدل",
+        lines: [{ accountId: String(expense.id), debit: 95, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 95 }],
+      },
+    });
+    expect(edited.response.status).toBe(200);
+    const expensesEdited = await api("/data/expenses", { cookie: ownerA.cookie });
+    expect(expensesEdited.payload.records.filter((item: any) => Number(item.sourceJournalId) === Number(journal.id))).toEqual([
+      expect.objectContaining({ id: expensesBefore.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(journal.id)).id, amount: 95, description: "مصروف يدوي معدل" }),
     ]);
     const repeat = await api(`/accounting/journals/${journal.id}/convert-source-draft`, { method: "POST", cookie: ownerA.cookie });
     expect(repeat.response.status).toBe(200);
@@ -560,8 +603,13 @@ describe.sequential("accounting routes", () => {
     const cash = accountsA.find((account) => String(account.code) === "1000");
     const purchase = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-05", description: "شراء بلا مورد", status: "draft", lines: [{ accountId: String(inventory.id), debit: 70, credit: 0 }, { accountId: String(payable.id), debit: 0, credit: 70 }] } });
     expect(purchase.response.status).toBe(201);
+    const purchaseEdited = await api(`/data/journalEntries/${purchase.payload.record.id}`, {
+      method: "PATCH", cookie: ownerA.cookie,
+      body: { lines: [{ accountId: String(inventory.id), debit: 75, credit: 0 }, { accountId: String(payable.id), debit: 0, credit: 75 }] },
+    });
+    expect(purchaseEdited.response.status).toBe(200);
     const orders = await api("/data/purchaseOrders", { cookie: ownerA.cookie });
-    expect(orders.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(purchase.payload.record.id))).toMatchObject({ accountingOnlyDraft: true, requiresCompletion: true, supplierName: expect.stringContaining("مورد غير محدد") });
+    expect(orders.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(purchase.payload.record.id))).toMatchObject({ accountingOnlyDraft: true, requiresCompletion: true, supplierName: expect.stringContaining("مورد غير محدد"), total: 75, subtotal: 75 });
     const journal = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-05", description: "مصروف مسودة معلوماتية", status: "draft", lines: [{ accountId: String(expense.id), debit: 33, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 33 }] } });
     const expenses = await api("/data/expenses", { cookie: ownerA.cookie });
     const source = expenses.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(journal.payload.record.id));

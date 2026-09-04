@@ -87,8 +87,13 @@ export function prepareJournalAdjustment(
   if (original.adjustmentType === "reversal") {
     throw new JournalAdjustmentError(409, "لا يمكن عكس أو تصحيح قيد عكس.");
   }
-  if (original.sourceType != null || original.sourceId != null) {
+  const isConvertedManualJournal = original.conversionStatus === "linked_draft"
+    && original.convertedSourceId != null;
+  if ((original.sourceType != null || original.sourceId != null) && !isConvertedManualJournal) {
     throw new JournalAdjustmentError(409, "هذا القيد مولّد من مستند مصدري. صحّح أو ألغِ المستند من شاشته حتى تبقى القيود والمخزون والذمم متطابقة.");
+  }
+  if (isConvertedManualJournal && action !== "correct") {
+    throw new JournalAdjustmentError(409, "القيد اليدوي المرتبط يُعدّل بعد الترحيل عبر التصحيح فقط.");
   }
   if (
     original.adjustmentStatus === "reversed"

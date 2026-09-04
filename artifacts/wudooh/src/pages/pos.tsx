@@ -53,7 +53,7 @@ function escapePrintHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character] ?? character));
 }
 
-function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat) {
+function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, organizationName: string) {
   const printWindow = window.open('', '_blank', 'width=900,height=700');
   if (!printWindow) {
     window.alert('تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.');
@@ -90,13 +90,13 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat) {
           .totals { margin-top: 16px; margin-right: auto; width: ${isA4 ? '52%' : '100%'}; }
           .total-line { display: flex; justify-content: space-between; border-bottom: 1px solid #eaecf0; padding: 5px 0; }
           .grand-total { border: 2px solid #0d9488; border-radius: 6px; color: #087f73; font-size: ${isA4 ? '17px' : '13px'}; font-weight: 800; margin-top: 8px; padding: 8px; }
-          .footer { color: #667085; margin-top: 26px; text-align: center; }
+          .footer { border-top: 1px solid #eaecf0; color: #98a2b3; font-size: ${isA4 ? '10px' : '8px'}; margin-top: 26px; padding-top: 10px; text-align: center; }
           @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
         </style>
       </head>
       <body>
         <header class="brand">
-          <div class="brand-name">ترصيد</div>
+          <div class="brand-name">${escapePrintHtml(organizationName)}</div>
           <h1>فاتورة بيع</h1>
           <div class="meta"><span>رقم الفاتورة: ${escapePrintHtml(invoice.number)}</span><span>التاريخ: ${escapePrintHtml(invoice.issueDate)}</span></div>
         </header>
@@ -111,7 +111,7 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat) {
           <div class="total-line"><span>ضريبة القيمة المضافة</span><strong>${escapePrintHtml(formatCurrency(invoice.tax ?? 0))}</strong></div>
           <div class="grand-total"><div class="total-line"><span>الإجمالي شامل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
         </section>
-        <div class="footer">شكراً لتعاملكم معنا</div>
+        <footer class="footer">هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</footer>
       </body>
     </html>`);
   printWindow.document.close();
@@ -407,7 +407,7 @@ export default function POS() {
             <p className="text-sm font-black text-slate-900">طباعة الفاتورة</p>
             <p className="mt-1 text-xs text-slate-600">استخدم نفس الإعداد المحفوظ قبل إتمام البيع.</p>
           </div>
-          <Button onClick={() => printInvoice(invoice, invoicePrintFormat)} size="lg" className="h-12 w-full gap-2 bg-blue-700 hover:bg-blue-800" data-testid="btn-print-invoice">
+          <Button onClick={() => printInvoice(invoice, invoicePrintFormat, currentUser?.projectName || 'اسم المؤسسة')} size="lg" className="h-12 w-full gap-2 bg-blue-700 hover:bg-blue-800" data-testid="btn-print-invoice">
             <Printer className="h-5 w-5" /> طباعة الفاتورة
           </Button>
         </div>

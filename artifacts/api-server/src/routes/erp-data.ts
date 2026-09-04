@@ -234,12 +234,19 @@ function isConvertedManualJournal(data: Record<string, unknown>): boolean {
   return data.convertedSourceId != null || data.sourceDocumentId != null;
 }
 
-function isOnlyConvertedJournalPosting(current: Record<string, unknown>, patch: unknown): boolean {
-  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
-  const data = patch as Record<string, unknown>;
-  return current.status === "draft"
-    && data.status === "posted"
-    && Object.keys(data).length === 1;
+const manualJournalLinkFields = [
+  "sourceType",
+  "sourceId",
+  "sourceDocumentTable",
+  "sourceDocumentId",
+  "convertedSourceId",
+  "conversionStatus",
+] as const;
+
+function withoutManualJournalLinkFields(data: Record<string, unknown>): Record<string, unknown> {
+  const result = { ...data };
+  for (const field of manualJournalLinkFields) delete result[field];
+  return result;
 }
 
 async function linkedManualDraftFor(
@@ -252,18 +259,6 @@ async function linkedManualDraftFor(
     eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, tableName),
   )).limit(1);
   return Boolean(record && isLinkedManualDraft(record.data));
-}
-
-async function convertedManualJournalFor(
-  organizationId: number,
-  tableName: string,
-  id: number,
-): Promise<Record<string, unknown> | null> {
-  if (tableName !== "journalEntries") return null;
-  const [record] = await db.select({ data: erpRecordsTable.data }).from(erpRecordsTable).where(and(
-    eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, tableName),
-  )).limit(1);
-  return record && isConvertedManualJournal(record.data) ? record.data : null;
 }
 
 function inferredManualJournalSource(
@@ -294,24 +289,23 @@ function inferredManualJournalSource(
   return null;
 }
 
-export async function convertManualJournalToSourceDraft(
+async function manualJournalSourceProjection(
   tx: DatabaseTransaction,
   organizationId: number,
-  journalRow: typeof erpRecordsTable.$inferSelect,
-): Promise<typeof erpRecordsTable.$inferSelect | null> {
-  const journal = journalRow.data as Record<string, unknown>;
-  if (journal.convertedSourceId || journal.sourceType || journal.status !== "draft") return null;
-  const accountRows = await tx.select().from(erpRecordsTable).where(and(
-    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "accounts"),
-  )).for("update");
-  const accounts = accountRows.map((row) => ({ ...row.data, id: row.id })) as Array<Record<string, unknown> & { id: number }>;
-  const inferred = inferredManualJournalSource(journal, accounts);
+  journalId: number,
+  journal: Record<string, unknown>,
+  accounts: Array<Record<string, unknown> & { id: number }>,
+  allowCorrection = false,
+): Promise<{ inferred: { tableName: ManualJournalSource; amount: number; category?: string }; sourceData: Record<string, unknown> } | null> {
+  const journalInput = withoutManualJournalLinkFields(journal);
+  if (allowCorrection && journalInput.adjustmentType === "correction") delete journalInput.adjustmentType;
+  const inferred = inferredManualJournalSource(journalInput, accounts);
   if (!inferred || inferred.amount <= 0) return null;
-  const date = String(journal.date);
-  const description = String(journal.description);
-  const rawPartyId = inferred.tableName === "invoices" ? journal.customerId : journal.supplierId;
+  const date = String(journalInput.date);
+  const description = String(journalInput.description);
+  const rawPartyId = inferred.tableName === "invoices" ? journalInput.customerId : journalInput.supplierId;
   let partyId = rawPartyId == null || rawPartyId === "" ? undefined : Number(rawPartyId);
-  let partyName = inferred.tableName === "invoices" ? journal.customerName : journal.supplierName;
+  let partyName: unknown;
   if (partyId !== undefined) {
     const partyTable = inferred.tableName === "invoices" ? "customers" : "suppliers";
     const [party] = await tx.select().from(erpRecordsTable).where(and(
@@ -324,24 +318,87 @@ export async function convertManualJournalToSourceDraft(
   const settlementCode = inferred.category?.split("|")[1] ?? inferred.category;
   const paymentMethod = settlementCode === "1100" ? "transfer" : settlementCode === "1200" || settlementCode === "2000" ? "credit" : "cash";
   const sourceData: Record<string, unknown> = inferred.tableName === "invoices"
-    ? { number: `MJ-${journalRow.id}`, issueDate: date, customerId: partyId || undefined, customerName: partyName || "عميل غير محدد — يلزم الاستكمال", subtotal: inferred.amount, tax: 0, total: inferred.amount, paymentMethod, status: "draft", items: [] }
+    ? { number: `MJ-${journalId}`, issueDate: date, customerId: partyId, customerName: partyName || "عميل غير محدد — يلزم الاستكمال", subtotal: inferred.amount, tax: 0, total: inferred.amount, paymentMethod, status: "draft", items: [] }
     : inferred.tableName === "purchaseOrders"
-      ? { orderNumber: `MJ-${journalRow.id}`, date, supplierId: partyId || undefined, supplierName: partyName || "مورد غير محدد — يلزم الاستكمال", subtotal: inferred.amount, tax: 0, total: inferred.amount, paymentMethod, status: "draft", items: [] }
-      : { description, date, amount: inferred.amount, category: (inferred.category ?? "أخرى").split("|")[0], vendor: partyName || "مورد غير محدد — يلزم الاستكمال", supplierId: partyId || undefined, paymentMethod, status: "draft" };
+      ? { orderNumber: `MJ-${journalId}`, date, supplierId: partyId, supplierName: partyName || "مورد غير محدد — يلزم الاستكمال", subtotal: inferred.amount, tax: 0, total: inferred.amount, paymentMethod, status: "draft", items: [] }
+      : { description, date, amount: inferred.amount, category: (inferred.category ?? "أخرى").split("|")[0], vendor: partyName || "مورد غير محدد — يلزم الاستكمال", supplierId: partyId, paymentMethod, status: "draft" };
+  return { inferred, sourceData };
+}
+
+export async function synchronizeConvertedManualJournal(
+  tx: DatabaseTransaction,
+  organizationId: number,
+  journalRow: typeof erpRecordsTable.$inferSelect,
+  journal: Record<string, unknown>,
+  allowCorrection = false,
+): Promise<Record<string, unknown>> {
+  const sourceId = Number(journalRow.data.convertedSourceId ?? journalRow.data.sourceDocumentId);
+  if (!Number.isInteger(sourceId) || sourceId <= 0) {
+    throw new MutationRejected(409, "تعذر العثور على المستند المرتبط بالقيد اليدوي.");
+  }
+  const accountRows = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "accounts"),
+  )).for("update");
+  const accounts = accountRows.map((row) => ({ ...row.data, id: row.id })) as Array<Record<string, unknown> & { id: number }>;
+  const projection = await manualJournalSourceProjection(tx, organizationId, journalRow.id, journal, accounts, allowCorrection);
+  if (!projection) {
+    throw new MutationRejected(409, "بعد التعديل لم يعد القيد يطابق نمط بيع أو شراء أو مصروف واضحاً.");
+  }
+  const [source] = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, sourceId),
+    eq(erpRecordsTable.organizationId, organizationId),
+  )).for("update");
+  if (!source || !isLinkedManualDraft(source.data) || Number(source.data.sourceJournalId) !== journalRow.id) {
+    throw new MutationRejected(409, "المستند المرتبط بالقيد اليدوي غير متاح أو لم يعد مسودة معلوماتية.");
+  }
+  await tx.update(erpRecordsTable).set({
+    tableName: projection.inferred.tableName,
+    data: {
+      ...projection.sourceData,
+      sourceJournalId: journalRow.id,
+      requiresCompletion: true,
+      accountingOnlyDraft: true,
+    },
+    updatedAt: new Date(),
+  }).where(eq(erpRecordsTable.id, source.id));
+  return {
+    ...withoutManualJournalLinkFields(journal),
+    sourceType: sourceTypeFor(projection.inferred.tableName),
+    sourceId: source.id,
+    sourceDocumentTable: projection.inferred.tableName,
+    sourceDocumentId: source.id,
+    convertedSourceId: source.id,
+    conversionStatus: "linked_draft",
+  };
+}
+
+export async function convertManualJournalToSourceDraft(
+  tx: DatabaseTransaction,
+  organizationId: number,
+  journalRow: typeof erpRecordsTable.$inferSelect,
+): Promise<typeof erpRecordsTable.$inferSelect | null> {
+  const journal = journalRow.data as Record<string, unknown>;
+  if (journal.convertedSourceId || journal.sourceType || journal.status !== "draft") return null;
+  const accountRows = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "accounts"),
+  )).for("update");
+  const accounts = accountRows.map((row) => ({ ...row.data, id: row.id })) as Array<Record<string, unknown> & { id: number }>;
+  const projection = await manualJournalSourceProjection(tx, organizationId, journalRow.id, journal, accounts);
+  if (!projection) return null;
   const [source] = await tx.insert(erpRecordsTable).values({
-    organizationId, tableName: inferred.tableName, clientOperationId: `MANUAL-JOURNAL-SOURCE-${journalRow.id}`,
-    data: { ...sourceData, sourceJournalId: journalRow.id, requiresCompletion: true, accountingOnlyDraft: true },
+    organizationId, tableName: projection.inferred.tableName, clientOperationId: `MANUAL-JOURNAL-SOURCE-${journalRow.id}`,
+    data: { ...projection.sourceData, sourceJournalId: journalRow.id, requiresCompletion: true, accountingOnlyDraft: true },
   }).onConflictDoNothing({
     target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
   }).returning();
   const existingSources = source ? [] : await tx.select().from(erpRecordsTable).where(and(
-    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, inferred.tableName),
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, projection.inferred.tableName),
     eq(erpRecordsTable.clientOperationId, `MANUAL-JOURNAL-SOURCE-${journalRow.id}`),
   )).for("update");
   const linked = source ?? existingSources[0];
   if (!linked) return null;
   await tx.update(erpRecordsTable).set({
-    data: { ...journal, sourceType: sourceTypeFor(inferred.tableName), sourceId: linked.id, sourceDocumentTable: inferred.tableName, sourceDocumentId: linked.id, convertedSourceId: linked.id, conversionStatus: "linked_draft" },
+    data: { ...journal, sourceType: sourceTypeFor(projection.inferred.tableName), sourceId: linked.id, sourceDocumentTable: projection.inferred.tableName, sourceDocumentId: linked.id, convertedSourceId: linked.id, conversionStatus: "linked_draft" },
     updatedAt: new Date(),
   }).where(eq(erpRecordsTable.id, journalRow.id));
   return linked;
@@ -671,7 +728,7 @@ async function publicPurchaseOrderDocument(
   };
 }
 
-class MutationRejected extends Error {
+export class MutationRejected extends Error {
   constructor(
     readonly status: number,
     message: string,
@@ -1647,11 +1704,6 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     response.status(409).json({ error: "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تعديلها من واجهة البيانات العامة." });
     return;
   }
-  const convertedJournal = await convertedManualJournalFor(access.auth.organizationId, access.tableName, id);
-  if (convertedJournal && !isOnlyConvertedJournalPosting(convertedJournal, request.body as Record<string, unknown>)) {
-    response.status(409).json({ error: "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط." });
-    return;
-  }
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
   if (SPECIALIZED_MUTATION_TABLES.has(access.tableName)) {
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
@@ -1785,14 +1837,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         if (existing.data.status === "posted") {
           throw new MutationRejected(409, "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك.");
         }
-        if (
-          isConvertedManualJournal(existing.data)
-          && !isOnlyConvertedJournalPosting(existing.data, body as Record<string, unknown>)
-        ) {
-          throw new MutationRejected(409, "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط.");
-        }
-
-        const data = { ...existing.data, ...(body as Record<string, unknown>) };
+        const safePatch = isConvertedManualJournal(existing.data)
+          ? withoutManualJournalLinkFields(body as Record<string, unknown>)
+          : body as Record<string, unknown>;
+        let data = { ...existing.data, ...safePatch };
         const error = validateJournal(data);
         if (error) throw new MutationRejected(400, error);
         if (await isClosedDate(currentAuth, String(data.date), tx)) {
@@ -1800,6 +1848,18 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         }
         if (!isLocationAllowed(currentAuth, access.tableName, data, existing.id)) {
           throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
+        }
+        const isPostingOnly = existing.data.status === "draft"
+          && data.status === "posted"
+          && Object.keys(safePatch).length === 1
+          && safePatch.status === "posted";
+        if (isConvertedManualJournal(existing.data) && !isPostingOnly) {
+          data = await synchronizeConvertedManualJournal(
+            tx,
+            currentAuth.organizationId,
+            existing,
+            data,
+          );
         }
 
         const [updated] = await tx.update(erpRecordsTable)
@@ -1840,14 +1900,6 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     response.status(409).json({ error: "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تعديلها من واجهة البيانات العامة." });
     return;
   }
-  if (
-    access.tableName === "journalEntries"
-    && isConvertedManualJournal(existing.data)
-    && !isOnlyConvertedJournalPosting(existing.data, body as Record<string, unknown>)
-  ) {
-    response.status(409).json({ error: "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط." });
-    return;
-  }
   if (access.tableName === "financialClosures") {
     response.status(405).json({ error: "لا يمكن تعديل الإقفال المالي بعد اعتماده." });
     return;
@@ -1856,7 +1908,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
     response.status(409).json({ error: "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك." });
     return;
   }
-  const data = { ...existing.data, ...(body as Record<string, unknown>) };
+  const initialPatch = access.tableName === "journalEntries" && isConvertedManualJournal(existing.data)
+    ? withoutManualJournalLinkFields(body as Record<string, unknown>)
+    : body as Record<string, unknown>;
+  const data = { ...existing.data, ...initialPatch };
   if (isAccountingSource(access.tableName) && await isClosedDate(access.auth, String(data.date ?? data.issueDate ?? ""))) {
     response.status(409).json({ error: "لا يمكن تعديل مصدر محاسبي في فترة مالية مقفلة." });
     return;
@@ -1898,13 +1953,6 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (isLinkedManualDraft(current.data)) {
         throw new MutationRejected(409, "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تعديلها من واجهة البيانات العامة.");
       }
-      if (
-        access.tableName === "journalEntries"
-        && isConvertedManualJournal(current.data)
-        && !isOnlyConvertedJournalPosting(current.data, body as Record<string, unknown>)
-      ) {
-        throw new MutationRejected(409, "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط.");
-      }
       if (access.tableName === "financialClosures") {
         throw new MutationRejected(405, "لا يمكن تعديل الإقفال المالي بعد اعتماده.");
       }
@@ -1917,7 +1965,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (access.tableName === "quotations" && (current.data.convertedInvoiceId || current.data.status === "accepted")) {
         throw new MutationRejected(409, "عرض السعر المحوّل إلى فاتورة غير قابل للتعديل.");
       }
-      let currentData = { ...current.data, ...(body as Record<string, unknown>) };
+      const currentPatch = access.tableName === "journalEntries" && isConvertedManualJournal(current.data)
+        ? withoutManualJournalLinkFields(body as Record<string, unknown>)
+        : body as Record<string, unknown>;
+      let currentData = { ...current.data, ...currentPatch };
       if (access.tableName === "receivables" && currentData.type === "payable"
         && (currentData.purchaseOrderId || currentData.purchaseId || currentData.purchaseReceiptOperationId)) {
         throw new MutationRejected(409, "ذمم أوامر الشراء تُنشأ وتُحدّث من مسارات الاستلام والسداد المعتمدة فقط.");
@@ -1981,6 +2032,18 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         if (error) throw new MutationRejected(400, error);
         if (await isClosedDate(currentAuth, String(currentData.date), tx)) {
           throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن ترحيل قيد فيها.");
+        }
+        const isPostingOnly = current.data.status === "draft"
+          && currentData.status === "posted"
+          && Object.keys(currentPatch).length === 1
+          && currentPatch.status === "posted";
+        if (isConvertedManualJournal(current.data) && !isPostingOnly) {
+          currentData = await synchronizeConvertedManualJournal(
+            tx,
+            currentAuth.organizationId,
+            current,
+            currentData,
+          );
         }
       }
       if (access.tableName === "accounts") {
