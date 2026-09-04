@@ -53,13 +53,14 @@ function escapePrintHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character] ?? character));
 }
 
-function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, organizationName: string) {
+function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, organizationName: string, cashierName: string) {
   const printWindow = window.open('', '_blank', 'width=900,height=700');
   if (!printWindow) {
     window.alert('تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة ثم أعد المحاولة.');
     return;
   }
   const isA4 = format === 'a4';
+  const totalQuantity = invoice.items.reduce((sum, item) => sum + item.quantity, 0);
   const itemsHtml = invoice.items.map((item, index) => `
     <tr>
       <td>${index + 1}</td>
@@ -69,6 +70,56 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, org
       <td>${escapePrintHtml(formatCurrency(item.total))}</td>
     </tr>
   `).join('');
+  const receiptBody = `
+    <header class="brand receipt-brand">
+      <div class="brand-name">${escapePrintHtml(organizationName)}</div>
+      <div class="receipt-title">فاتورة بيع</div>
+    </header>
+    <section class="receipt-meta">
+      <div><span>رقم الفاتورة</span><strong>${escapePrintHtml(invoice.number)}</strong></div>
+      <div><span>الفرع</span><strong>${escapePrintHtml(invoice.warehouseName || 'غير محدد')}</strong></div>
+      <div><span>الكاشير</span><strong>${escapePrintHtml(cashierName || 'غير محدد')}</strong></div>
+      <div><span>التاريخ</span><strong>${escapePrintHtml(invoice.issueDate)}</strong></div>
+    </section>
+    ${invoice.customerName ? `<div class="receipt-customer">العميل: <strong>${escapePrintHtml(invoice.customerName)}</strong></div>` : ''}
+    <table class="receipt-items">
+      <thead><tr><th>البند</th><th>الكمية</th><th>المبلغ</th></tr></thead>
+      <tbody>${invoice.items.map((item) => `
+        <tr>
+          <td class="item-name">${escapePrintHtml(item.name)}</td>
+          <td>${item.quantity}</td>
+          <td>${escapePrintHtml(formatCurrency(item.total))}</td>
+        </tr>
+      `).join('')}</tbody>
+    </table>
+    <div class="quantity-line"><span>إجمالي الكمية</span><strong>${totalQuantity}</strong></div>
+    <section class="totals receipt-totals">
+      <div class="total-line"><span>الإجمالي بدون الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.subtotal ?? 0))}</strong></div>
+      <div class="total-line"><span>الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.tax ?? 0))}</strong></div>
+      <div class="grand-total"><div class="total-line"><span>الإجمالي مع الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
+    </section>
+    <div class="payment-line"><span>طريقة الدفع</span><strong>${paymentMethodLabel(invoice.paymentMethod)}</strong></div>
+    <footer class="footer">هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</footer>
+  `;
+  const a4Body = `
+    <header class="brand">
+      <div class="brand-name">${escapePrintHtml(organizationName)}</div>
+      <h1>فاتورة بيع</h1>
+      <div class="meta"><span>رقم الفاتورة: ${escapePrintHtml(invoice.number)}</span><span>التاريخ: ${escapePrintHtml(invoice.issueDate)}</span></div>
+    </header>
+    ${invoice.customerName ? `<div class="customer">العميل: <strong>${escapePrintHtml(invoice.customerName)}</strong></div>` : ''}
+    <div class="meta"><span>الفرع: ${escapePrintHtml(invoice.warehouseName || 'غير محدد')}</span><span>الكاشير: ${escapePrintHtml(cashierName || 'غير محدد')}</span><span>الدفع: ${paymentMethodLabel(invoice.paymentMethod)}</span></div>
+    <table>
+      <thead><tr><th>#</th><th>الصنف</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr></thead>
+      <tbody>${itemsHtml}</tbody>
+    </table>
+    <section class="totals">
+      <div class="total-line"><span>المجموع قبل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.subtotal ?? 0))}</strong></div>
+      <div class="total-line"><span>ضريبة القيمة المضافة</span><strong>${escapePrintHtml(formatCurrency(invoice.tax ?? 0))}</strong></div>
+      <div class="grand-total"><div class="total-line"><span>الإجمالي شامل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
+    </section>
+    <footer class="footer">هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</footer>
+  `;
   printWindow.document.write(`<!doctype html>
     <html lang="ar" dir="rtl">
       <head>
@@ -81,37 +132,34 @@ function printInvoice(invoice: CompletedInvoice, format: InvoicePrintFormat, org
           .brand { border-bottom: 2px solid #0d9488; padding-bottom: 12px; text-align: center; }
           .brand-name { color: #0d9488; font-size: ${isA4 ? '25px' : '18px'}; font-weight: 800; }
           h1 { font-size: ${isA4 ? '21px' : '15px'}; margin: 8px 0 0; }
+          .receipt-title { font-size: 11px; font-weight: 700; margin-top: 2px; }
           .meta { color: #667085; display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; }
           .customer { border-bottom: 1px solid #d0d5dd; padding: 10px 0; }
+          .receipt-meta { border-bottom: 1px dashed #667085; padding: 8px 0; }
+          .receipt-meta div, .quantity-line, .payment-line { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+          .receipt-meta span, .quantity-line span, .payment-line span { color: #475467; }
+          .receipt-customer { border-bottom: 1px dashed #98a2b3; padding: 6px 0; }
           table { border-collapse: collapse; margin-top: 16px; width: 100%; }
           th, td { border-bottom: 1px solid #d0d5dd; padding: ${isA4 ? '8px 5px' : '5px 2px'}; text-align: right; vertical-align: top; }
           th { background: #f2f4f7; font-weight: 700; }
           .item-name { width: ${isA4 ? '38%' : '34%'}; }
+          .receipt-items { margin-top: 8px; }
+          .receipt-items th { border-bottom: 1px dashed #667085; border-top: 1px dashed #667085; background: transparent; }
+          .receipt-items td { border-bottom: 1px dotted #d0d5dd; }
+          .receipt-items th:nth-child(2), .receipt-items td:nth-child(2) { text-align: center; width: 18%; }
+          .receipt-items th:last-child, .receipt-items td:last-child { text-align: left; width: 30%; }
+          .quantity-line { border-bottom: 1px dashed #667085; margin-top: 4px; padding: 6px 0; }
           .totals { margin-top: 16px; margin-right: auto; width: ${isA4 ? '52%' : '100%'}; }
+          .receipt-totals { margin-top: 8px; }
           .total-line { display: flex; justify-content: space-between; border-bottom: 1px solid #eaecf0; padding: 5px 0; }
           .grand-total { border: 2px solid #0d9488; border-radius: 6px; color: #087f73; font-size: ${isA4 ? '17px' : '13px'}; font-weight: 800; margin-top: 8px; padding: 8px; }
+          .payment-line { border-bottom: 1px dashed #667085; border-top: 1px dashed #667085; font-size: 11px; margin-top: 12px; padding: 7px 0; }
           .footer { border-top: 1px solid #eaecf0; color: #98a2b3; font-size: ${isA4 ? '10px' : '8px'}; margin-top: 26px; padding-top: 10px; text-align: center; }
           @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
         </style>
       </head>
       <body>
-        <header class="brand">
-          <div class="brand-name">${escapePrintHtml(organizationName)}</div>
-          <h1>فاتورة بيع</h1>
-          <div class="meta"><span>رقم الفاتورة: ${escapePrintHtml(invoice.number)}</span><span>التاريخ: ${escapePrintHtml(invoice.issueDate)}</span></div>
-        </header>
-        ${invoice.customerName ? `<div class="customer">العميل: <strong>${escapePrintHtml(invoice.customerName)}</strong></div>` : ''}
-        <div class="meta"><span>المستودع: ${escapePrintHtml(invoice.warehouseName || 'غير محدد')}</span><span>الدفع: ${paymentMethodLabel(invoice.paymentMethod)}</span></div>
-        <table>
-          <thead><tr><th>#</th><th>الصنف</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr></thead>
-          <tbody>${itemsHtml}</tbody>
-        </table>
-        <section class="totals">
-          <div class="total-line"><span>المجموع قبل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.subtotal ?? 0))}</strong></div>
-          <div class="total-line"><span>ضريبة القيمة المضافة</span><strong>${escapePrintHtml(formatCurrency(invoice.tax ?? 0))}</strong></div>
-          <div class="grand-total"><div class="total-line"><span>الإجمالي شامل الضريبة</span><strong>${escapePrintHtml(formatCurrency(invoice.total))}</strong></div></div>
-        </section>
-        <footer class="footer">هذه الفاتورة تم إنشاؤها عن طريق تطبيق ترصيد</footer>
+        ${isA4 ? a4Body : receiptBody}
       </body>
     </html>`);
   printWindow.document.close();
@@ -407,7 +455,7 @@ export default function POS() {
             <p className="text-sm font-black text-slate-900">طباعة الفاتورة</p>
             <p className="mt-1 text-xs text-slate-600">استخدم نفس الإعداد المحفوظ قبل إتمام البيع.</p>
           </div>
-          <Button onClick={() => printInvoice(invoice, invoicePrintFormat, currentUser?.projectName || 'اسم المؤسسة')} size="lg" className="h-12 w-full gap-2 bg-blue-700 hover:bg-blue-800" data-testid="btn-print-invoice">
+          <Button onClick={() => printInvoice(invoice, invoicePrintFormat, currentUser?.projectName || 'اسم المؤسسة', currentUser?.name || '')} size="lg" className="h-12 w-full gap-2 bg-blue-700 hover:bg-blue-800" data-testid="btn-print-invoice">
             <Printer className="h-5 w-5" /> طباعة الفاتورة
           </Button>
         </div>
