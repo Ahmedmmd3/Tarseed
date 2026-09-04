@@ -430,4 +430,215 @@ describe.sequential("accounting routes", () => {
       item.sourceType === "expense" && Number(item.sourceId) === legacyId && !item.adjustmentType,
     )).toHaveLength(1);
   });
+
+  it("يحوّل قيد بيع يدوي للعميل إلى فاتورة مسودة واحدة ويظل القيد قابلاً للترحيل", async () => {
+    const customer = await api("/data/customers", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { name: `عميل قيد بيع ${randomUUID()}` },
+    });
+    expect(customer.response.status).toBe(201);
+    const ar = accountsA.find((account) => String(account.code) === "1200");
+    const sales = accountsA.find((account) => String(account.code) === "4000");
+    expect(ar).toBeTruthy();
+    expect(sales).toBeTruthy();
+    const created = await api("/data/journalEntries", {
+      method: "POST", cookie: ownerA.cookie,
+      body: {
+        date: "2026-05-01", description: "بيع يدوي للعميل", status: "draft",
+        customerId: customer.payload.record.id,
+        lines: [{ accountId: String(ar.id), debit: 150, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 150 }],
+      },
+    });
+    expect(created.response.status).toBe(201);
+    const journal = created.payload.record;
+    expect(journal.conversionStatus).toBe("linked_draft");
+    expect(journal.sourceType).toBe("sale");
+    const invoices = await api("/data/invoices", { cookie: ownerA.cookie });
+    const linked = invoices.payload.records.filter((invoice: any) => Number(invoice.sourceJournalId) === Number(journal.id));
+    expect(linked).toHaveLength(1);
+    expect(linked[0]).toMatchObject({ status: "draft", customerId: customer.payload.record.id, customerName: customer.payload.record.name });
+
+    const edited = await api(`/data/journalEntries/${journal.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { description: "تعديل مرفوض" } });
+    expect(edited.response.status).toBe(409);
+    const removed = await api(`/data/journalEntries/${journal.id}`, { method: "DELETE", cookie: ownerA.cookie });
+    expect(removed.response.status).toBe(409);
+    const posted = await api(`/data/journalEntries/${journal.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { status: "posted" } });
+    expect(posted.response.status).toBe(200);
+    expect(posted.payload.record.status).toBe("posted");
+    const invoicesAfter = await api("/data/invoices", { cookie: ownerA.cookie });
+    expect(invoicesAfter.payload.records.filter((invoice: any) => Number(invoice.sourceJournalId) === Number(journal.id))).toEqual(linked);
+  });
+
+  it("يحوّل قيد مصروف يدوي للمورد إلى مسودة واحدة ولا يكرر المصدر أو القيد عند الإعادة والمزامنة", async () => {
+    const supplier = await api("/data/suppliers", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { name: `مورد قيد مصروف ${randomUUID()}` },
+    });
+    expect(supplier.response.status).toBe(201);
+    const expense = accountsA.find((account) => account.type === "expense" && String(account.code) === "5100");
+    const cash = accountsA.find((account) => String(account.code) === "1000");
+    expect(expense).toBeTruthy();
+    expect(cash).toBeTruthy();
+    const created = await api("/data/journalEntries", {
+      method: "POST", cookie: ownerA.cookie,
+      body: {
+        date: "2026-05-02", description: "مصروف يدوي للمورد", status: "draft", supplierId: supplier.payload.record.id,
+        lines: [{ accountId: String(expense.id), debit: 90, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 90 }],
+      },
+    });
+    expect(created.response.status).toBe(201);
+    const journal = created.payload.record;
+    expect(journal.sourceType).toBe("expense");
+    const expensesBefore = await api("/data/expenses", { cookie: ownerA.cookie });
+    expect(expensesBefore.payload.records.filter((item: any) => Number(item.sourceJournalId) === Number(journal.id))).toEqual([
+      expect.objectContaining({ status: "draft", supplierId: supplier.payload.record.id, vendor: supplier.payload.record.name }),
+    ]);
+    const repeat = await api(`/accounting/journals/${journal.id}/convert-source-draft`, { method: "POST", cookie: ownerA.cookie });
+    expect(repeat.response.status).toBe(200);
+    expect(repeat.payload.converted).toBe(true);
+    const synced = await api("/accounting/sync-source-journals", { method: "POST", cookie: ownerA.cookie });
+    expect(synced.response.status).toBe(200);
+    const expensesAfter = await api("/data/expenses", { cookie: ownerA.cookie });
+    const journalsAfter = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    expect(expensesAfter.payload.records.filter((item: any) => Number(item.sourceJournalId) === Number(journal.id))).toHaveLength(1);
+    expect(journalsAfter.payload.records.filter((item: any) =>
+      item.sourceType === "expense" && Number(item.sourceId) === Number(journal.sourceId),
+    )).toHaveLength(1);
+  });
+
+  it("لا يحوّل القيد العام الملتبس ويرفض طرف منشأة أخرى", async () => {
+    const asset = accountsA.find((account) => account.type === "asset" && String(account.code) === "1000");
+    const equity = accountsA.find((account) => account.type === "equity");
+    const foreignCustomer = await api("/data/customers", {
+      method: "POST", cookie: ownerB.cookie, body: { name: `عميل منشأة أخرى ${randomUUID()}` },
+    });
+    expect(foreignCustomer.response.status).toBe(201);
+    const foreign = await api("/data/journalEntries", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { date: "2026-05-03", description: "طرف غير تابع", status: "draft", customerId: foreignCustomer.payload.record.id, lines: [{ accountId: String(asset.id), debit: 10, credit: 0 }, { accountId: String(equity.id), debit: 0, credit: 10 }] },
+    });
+    expect(foreign.response.status).toBe(400);
+    const created = await api("/data/journalEntries", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { date: "2026-05-03", description: "قيد عام ملتبس", status: "draft", lines: [{ accountId: String(asset.id), debit: 10, credit: 0 }, { accountId: String(equity.id), debit: 0, credit: 10 }] },
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.payload.record.convertedSourceId).toBeFalsy();
+    const conversion = await api(`/accounting/journals/${created.payload.record.id}/convert-source-draft`, { method: "POST", cookie: ownerA.cookie });
+    expect(conversion.response.status).toBe(200);
+    expect(conversion.payload.converted).toBe(false);
+  });
+
+  it("يرفض الأنماط المختلطة والأسطر الإضافية ويحتفظ بطريقة دفع الطرف المقابل", async () => {
+    const cash = accountsA.find((account) => String(account.code) === "1000");
+    const bank = accountsA.find((account) => String(account.code) === "1100");
+    const ar = accountsA.find((account) => String(account.code) === "1200");
+    const sales = accountsA.find((account) => String(account.code) === "4000");
+    const expense = accountsA.find((account) => String(account.code) === "5100");
+    const created = await api("/data/journalEntries", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { date: "2026-05-04", description: "بيع بنكي دقيق", status: "draft", lines: [{ accountId: String(bank.id), debit: 50, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 50 }] },
+    });
+    expect(created.response.status).toBe(201);
+    const invoices = await api("/data/invoices", { cookie: ownerA.cookie });
+    expect(invoices.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(created.payload.record.id))).toMatchObject({ paymentMethod: "transfer" });
+    for (const lines of [
+      [{ accountId: String(ar.id), debit: 50, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 50 }, { accountId: String(cash.id), debit: 1, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 1 }],
+      [{ accountId: String(expense.id), debit: 50, credit: 0 }, { accountId: String(bank.id), debit: 0, credit: 40 }, { accountId: String(cash.id), debit: 0, credit: 10 }],
+    ]) {
+      const result = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-04", description: `نمط مرفوض ${randomUUID()}`, status: "draft", lines } });
+      expect(result.response.status).toBe(201);
+      expect(result.payload.record.convertedSourceId).toBeFalsy();
+    }
+  });
+
+  it("ينشئ شراء بلا مورد كمسودة ناقصة ولا تنشئ مسودة المصروف قيود دورة حياة", async () => {
+    const inventory = accountsA.find((account) => String(account.code) === "1300");
+    const payable = accountsA.find((account) => String(account.code) === "2000");
+    const expense = accountsA.find((account) => String(account.code) === "5100");
+    const cash = accountsA.find((account) => String(account.code) === "1000");
+    const purchase = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-05", description: "شراء بلا مورد", status: "draft", lines: [{ accountId: String(inventory.id), debit: 70, credit: 0 }, { accountId: String(payable.id), debit: 0, credit: 70 }] } });
+    expect(purchase.response.status).toBe(201);
+    const orders = await api("/data/purchaseOrders", { cookie: ownerA.cookie });
+    expect(orders.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(purchase.payload.record.id))).toMatchObject({ accountingOnlyDraft: true, requiresCompletion: true, supplierName: expect.stringContaining("مورد غير محدد") });
+    const journal = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-05", description: "مصروف مسودة معلوماتية", status: "draft", lines: [{ accountId: String(expense.id), debit: 33, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 33 }] } });
+    const expenses = await api("/data/expenses", { cookie: ownerA.cookie });
+    const source = expenses.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(journal.payload.record.id));
+    const before = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    expect((await api(`/data/expenses/${source.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { accountingOnlyDraft: false, requiresCompletion: false, sourceJournalId: null } })).response.status).toBe(409);
+    expect((await api(`/data/expenses/${source.id}`, { method: "DELETE", cookie: ownerA.cookie })).response.status).toBe(409);
+    const after = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    expect(after.payload.records.length).toBe(before.payload.records.length);
+  });
+
+  it("يعيد التحويل الرابط المحفوظ ويمنع التكرار عند تخزين معرّف المصدر كسلسلة", async () => {
+    const expense = accountsA.find((account) => String(account.code) === "5100");
+    const cash = accountsA.find((account) => String(account.code) === "1000");
+    const created = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-06", description: "خصم سلسلة المصدر", status: "draft", lines: [{ accountId: String(expense.id), debit: 41, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 41 }] } });
+    const retry = await api(`/accounting/journals/${created.payload.record.id}/convert-source-draft`, { method: "POST", cookie: ownerA.cookie });
+    expect(retry.payload.journal).toMatchObject({ id: created.payload.record.id, convertedSourceId: created.payload.record.convertedSourceId });
+    await pool.query("update erp_records set data = jsonb_set(data, '{sourceId}', to_jsonb(data->>'sourceId')) where id = $1", [created.payload.record.id]);
+    expect((await api("/accounting/sync-source-journals", { method: "POST", cookie: ownerA.cookie })).response.status).toBe(200);
+    const journals = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    expect(journals.payload.records.filter((item: any) => item.sourceType === "expense" && String(item.sourceId) === String(created.payload.record.sourceId))).toHaveLength(1);
+  });
+
+  it("يرفض تصحيح وإلغاء مسودات القيد اليدوي المعلوماتية دون قيود أو حركة مخزون", async () => {
+    const bank = accountsA.find((account) => String(account.code) === "1100");
+    const sales = accountsA.find((account) => String(account.code) === "4000");
+    const expense = accountsA.find((account) => String(account.code) === "5100");
+    const cash = accountsA.find((account) => String(account.code) === "1000");
+    const sale = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-07", description: "فاتورة مسودة محمية", status: "draft", lines: [{ accountId: String(bank.id), debit: 61, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 61 }] } });
+    const expenseJournal = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-07", description: "مصروف مسودة محمي", status: "draft", lines: [{ accountId: String(expense.id), debit: 62, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 62 }] } });
+    expect((await api(`/data/journalEntries/${sale.payload.record.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { status: "posted" } })).response.status).toBe(200);
+    expect((await api(`/data/journalEntries/${expenseJournal.payload.record.id}`, { method: "PATCH", cookie: ownerA.cookie, body: { status: "posted" } })).response.status).toBe(200);
+    const invoices = await api("/data/invoices", { cookie: ownerA.cookie });
+    const expenses = await api("/data/expenses", { cookie: ownerA.cookie });
+    const invoice = invoices.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(sale.payload.record.id));
+    const expenseDraft = expenses.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(expenseJournal.payload.record.id));
+    const journalsBefore = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    const inventoryBefore = await api("/data/inventoryBalances", { cookie: ownerA.cookie });
+    for (const [table, source] of [["invoices", invoice], ["expenses", expenseDraft]] as const) {
+      for (const action of ["cancel", "correct"] as const) {
+        const result = await api(`/accounting/sources/${table}/${source.id}/${action}`, {
+          method: "POST", cookie: ownerA.cookie, headers: { "Idempotency-Key": `manual-draft-${table}-${action}-${randomUUID()}` },
+          body: { reason: "محاولة تشغيلية مرفوضة" },
+        });
+        expect(result.response.status).toBe(409);
+        expect(result.payload.error).toContain("مسودة معلوماتية");
+      }
+    }
+    const journalsAfter = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    const inventoryAfter = await api("/data/inventoryBalances", { cookie: ownerA.cookie });
+    expect(journalsAfter.payload.records.length).toBe(journalsBefore.payload.records.length);
+    expect(inventoryAfter.payload.records).toEqual(inventoryBefore.payload.records);
+  });
+
+  it("يرفض حذف كل مصادر القيد اليدوي المرتبطة ويبقي الرابط نفسه عند إعادة التحويل", async () => {
+    const bank = accountsA.find((account) => String(account.code) === "1100");
+    const sales = accountsA.find((account) => String(account.code) === "4000");
+    const inventory = accountsA.find((account) => String(account.code) === "1300");
+    const payable = accountsA.find((account) => String(account.code) === "2000");
+    const expense = accountsA.find((account) => String(account.code) === "5100");
+    const cash = accountsA.find((account) => String(account.code) === "1000");
+    const inputs = [
+      { table: "invoices", lines: [{ accountId: String(bank.id), debit: 81, credit: 0 }, { accountId: String(sales.id), debit: 0, credit: 81 }] },
+      { table: "purchaseOrders", lines: [{ accountId: String(inventory.id), debit: 82, credit: 0 }, { accountId: String(payable.id), debit: 0, credit: 82 }] },
+      { table: "expenses", lines: [{ accountId: String(expense.id), debit: 83, credit: 0 }, { accountId: String(cash.id), debit: 0, credit: 83 }] },
+    ];
+    const journalsBefore = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    for (const input of inputs) {
+      const created = await api("/data/journalEntries", { method: "POST", cookie: ownerA.cookie, body: { date: "2026-05-08", description: `مصدر محمي ${input.table}`, status: "draft", lines: input.lines } });
+      expect(created.response.status).toBe(201);
+      const sources = await api(`/data/${input.table}`, { cookie: ownerA.cookie });
+      const source = sources.payload.records.find((item: any) => Number(item.sourceJournalId) === Number(created.payload.record.id));
+      expect(source).toBeTruthy();
+      expect((await api(`/data/${input.table}/${source.id}`, { method: "DELETE", cookie: ownerA.cookie })).response.status).toBe(409);
+      const retry = await api(`/accounting/journals/${created.payload.record.id}/convert-source-draft`, { method: "POST", cookie: ownerA.cookie });
+      expect(retry.payload.journal).toMatchObject({ convertedSourceId: source.id, sourceId: source.id });
+      expect(retry.payload.source).toEqual({ id: source.id, tableName: input.table });
+    }
+    const journalsAfter = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    expect(journalsAfter.payload.records.length).toBe(journalsBefore.payload.records.length + 3);
+  });
 });

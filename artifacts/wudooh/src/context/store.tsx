@@ -35,6 +35,14 @@ export type Journal = {
   adjustmentReason?: string;
   sourceType?: 'sale' | 'purchase' | 'expense' | 'expenses' | 'opening_balance' | 'opening_balance_correction';
   sourceId?: string;
+  customerId?: string;
+  customerName?: string;
+  supplierId?: string;
+  supplierName?: string;
+  sourceDocumentTable?: 'invoices' | 'purchaseOrders' | 'expenses';
+  sourceDocumentId?: string;
+  convertedSourceId?: string;
+  conversionStatus?: 'linked_draft';
 };
 
 export type JournalAdjustmentInput = {

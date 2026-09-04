@@ -958,6 +958,9 @@ router.post("/data/purchaseOrders/:id/receive", requireAuth, requireSubscription
 
       await requireOpenFinancialDate(tx, currentAuth.organizationId, receiptDate);
       const order = await lockRecord(tx, currentAuth.organizationId, "purchaseOrders", purchaseOrderId);
+      if (order.data.accountingOnlyDraft === true || order.data.requiresCompletion === true) {
+        throw new InventoryRouteError("أكمل بيانات مستند القيد اليدوي أولاً قبل الاستلام.", 409, "accounting_only_draft_incomplete");
+      }
       const warehouseId = integer(order.data.warehouseId, "موقع الاستلام");
       requireLocations(currentAuth, [warehouseId]);
       if (!["draft", "sent", "partial"].includes(String(order.data.status))) {

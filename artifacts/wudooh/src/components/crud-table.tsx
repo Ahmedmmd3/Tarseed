@@ -430,7 +430,7 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
                           </Button>
                         </>
                       )}
-                      {isAccountingSource && item.status !== 'cancelled' && item.status !== 'canceled' && item.status !== 'corrected' && (
+                       {isAccountingSource && item.status !== 'cancelled' && item.status !== 'canceled' && item.status !== 'corrected' && item.accountingOnlyDraft !== true && item.requiresCompletion !== true && item.sourceJournalId == null && (
                         <>
                           <Button type="button" variant="ghost" size="sm" onClick={() => setSourceAdjustment({ item, action: 'correct' })} aria-label="تصحيح من المصدر" data-testid={`button-correct-source-${table}-${item.id}`}>
                             <FilePenLine className="ml-1 h-4 w-4 text-blue-600" />

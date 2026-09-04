@@ -199,6 +199,14 @@ function validateJournal(data: Record<string, unknown>): string | null {
     return "يجب إدخال تاريخ وبيان للقيد.";
   }
   if (data.status !== "draft" && data.status !== "posted") return "حالة القيد غير صحيحة.";
+  if (data.customerId != null && data.customerId !== "" && data.supplierId != null && data.supplierId !== "") {
+    return "اختر عميلاً أو مورداً واحداً فقط للقيد.";
+  }
+  for (const [field, label] of [["customerId", "العميل"], ["supplierId", "المورد"]] as const) {
+    if (data[field] != null && data[field] !== "" && (!Number.isInteger(Number(data[field])) || Number(data[field]) <= 0)) {
+      return `معرّف ${label} غير صحيح.`;
+    }
+  }
   if (!Array.isArray(data.lines) || data.lines.length < 2) return "يجب أن يحتوي القيد على سطرين على الأقل.";
   let debit = 0;
   let credit = 0;
@@ -214,6 +222,129 @@ function validateJournal(data: Record<string, unknown>): string | null {
     credit += lineCredit;
   }
   return Math.abs(debit - credit) > 0.005 ? "إجمالي المدين يجب أن يساوي إجمالي الدائن." : null;
+}
+
+type ManualJournalSource = "invoices" | "purchaseOrders" | "expenses";
+
+function isLinkedManualDraft(data: Record<string, unknown>): boolean {
+  return data.accountingOnlyDraft === true || data.requiresCompletion === true || data.sourceJournalId != null;
+}
+
+function isConvertedManualJournal(data: Record<string, unknown>): boolean {
+  return data.convertedSourceId != null || data.sourceDocumentId != null;
+}
+
+function isOnlyConvertedJournalPosting(current: Record<string, unknown>, patch: unknown): boolean {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) return false;
+  const data = patch as Record<string, unknown>;
+  return current.status === "draft"
+    && data.status === "posted"
+    && Object.keys(data).length === 1;
+}
+
+async function linkedManualDraftFor(
+  organizationId: number,
+  tableName: string,
+  id: number,
+): Promise<boolean> {
+  if (tableName !== "invoices" && tableName !== "purchaseOrders" && tableName !== "expenses") return false;
+  const [record] = await db.select({ data: erpRecordsTable.data }).from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, tableName),
+  )).limit(1);
+  return Boolean(record && isLinkedManualDraft(record.data));
+}
+
+async function convertedManualJournalFor(
+  organizationId: number,
+  tableName: string,
+  id: number,
+): Promise<Record<string, unknown> | null> {
+  if (tableName !== "journalEntries") return null;
+  const [record] = await db.select({ data: erpRecordsTable.data }).from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.id, id), eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, tableName),
+  )).limit(1);
+  return record && isConvertedManualJournal(record.data) ? record.data : null;
+}
+
+function inferredManualJournalSource(
+  journal: Record<string, unknown>,
+  accounts: Array<Record<string, unknown> & { id: number }>,
+): { tableName: ManualJournalSource; amount: number; category?: string } | null {
+  // Only recognize the deliberately narrow, canonical patterns.  This keeps
+  // opening, closing, adjustment and mixed/general entries out of the flow.
+  if (journal.sourceType || journal.adjustmentType) return null;
+  const byId = new Map(accounts.map((account) => [String(account.id), account]));
+  const lines = normalizedJournalLines(journal.lines);
+  if (lines.length !== 2 || new Set(lines.map((line) => line.accountId)).size !== 2) return null;
+  const paired = lines.map((line) => ({ line, account: byId.get(line.accountId) }));
+  if (paired.some((item) => !item.account)) return null;
+  const debit = paired.find((item) => item.line.debit > 0);
+  const credit = paired.find((item) => item.line.credit > 0);
+  if (!debit || !credit || Math.abs(debit.line.debit - credit.line.credit) > 0.005) return null;
+  const debitCode = String(debit.account!.code);
+  const creditCode = String(credit.account!.code);
+  const amount = roundMoney(debit.line.debit);
+  if (debit.account!.type === "asset" && ["1000", "1100", "1200"].includes(debitCode) && credit.account!.type === "revenue") {
+    return { tableName: "invoices", amount, category: debitCode };
+  }
+  if (debitCode === "1300" && creditCode === "2000") return { tableName: "purchaseOrders", amount, category: "credit" };
+  if (debit.account!.type === "expense" && ["1000", "1100", "2000"].includes(creditCode)) {
+    return { tableName: "expenses", amount, category: `${String(debit.account!.name ?? "أخرى")}|${creditCode}` };
+  }
+  return null;
+}
+
+export async function convertManualJournalToSourceDraft(
+  tx: DatabaseTransaction,
+  organizationId: number,
+  journalRow: typeof erpRecordsTable.$inferSelect,
+): Promise<typeof erpRecordsTable.$inferSelect | null> {
+  const journal = journalRow.data as Record<string, unknown>;
+  if (journal.convertedSourceId || journal.sourceType || journal.status !== "draft") return null;
+  const accountRows = await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, "accounts"),
+  )).for("update");
+  const accounts = accountRows.map((row) => ({ ...row.data, id: row.id })) as Array<Record<string, unknown> & { id: number }>;
+  const inferred = inferredManualJournalSource(journal, accounts);
+  if (!inferred || inferred.amount <= 0) return null;
+  const date = String(journal.date);
+  const description = String(journal.description);
+  const rawPartyId = inferred.tableName === "invoices" ? journal.customerId : journal.supplierId;
+  let partyId = rawPartyId == null || rawPartyId === "" ? undefined : Number(rawPartyId);
+  let partyName = inferred.tableName === "invoices" ? journal.customerName : journal.supplierName;
+  if (partyId !== undefined) {
+    const partyTable = inferred.tableName === "invoices" ? "customers" : "suppliers";
+    const [party] = await tx.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.id, partyId), eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, partyTable),
+    )).for("update");
+    if (!party) throw new MutationRejected(400, `${partyTable === "customers" ? "العميل" : "المورد"} غير موجود في هذه المنشأة.`);
+    partyId = party.id;
+    partyName = String(party.data.name ?? "");
+  }
+  const settlementCode = inferred.category?.split("|")[1] ?? inferred.category;
+  const paymentMethod = settlementCode === "1100" ? "transfer" : settlementCode === "1200" || settlementCode === "2000" ? "credit" : "cash";
+  const sourceData: Record<string, unknown> = inferred.tableName === "invoices"
+    ? { number: `MJ-${journalRow.id}`, issueDate: date, customerId: partyId || undefined, customerName: partyName || "عميل غير محدد — يلزم الاستكمال", subtotal: inferred.amount, tax: 0, total: inferred.amount, paymentMethod, status: "draft", items: [] }
+    : inferred.tableName === "purchaseOrders"
+      ? { orderNumber: `MJ-${journalRow.id}`, date, supplierId: partyId || undefined, supplierName: partyName || "مورد غير محدد — يلزم الاستكمال", subtotal: inferred.amount, tax: 0, total: inferred.amount, paymentMethod, status: "draft", items: [] }
+      : { description, date, amount: inferred.amount, category: (inferred.category ?? "أخرى").split("|")[0], vendor: partyName || "مورد غير محدد — يلزم الاستكمال", supplierId: partyId || undefined, paymentMethod, status: "draft" };
+  const [source] = await tx.insert(erpRecordsTable).values({
+    organizationId, tableName: inferred.tableName, clientOperationId: `MANUAL-JOURNAL-SOURCE-${journalRow.id}`,
+    data: { ...sourceData, sourceJournalId: journalRow.id, requiresCompletion: true, accountingOnlyDraft: true },
+  }).onConflictDoNothing({
+    target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+  }).returning();
+  const existingSources = source ? [] : await tx.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, organizationId), eq(erpRecordsTable.tableName, inferred.tableName),
+    eq(erpRecordsTable.clientOperationId, `MANUAL-JOURNAL-SOURCE-${journalRow.id}`),
+  )).for("update");
+  const linked = source ?? existingSources[0];
+  if (!linked) return null;
+  await tx.update(erpRecordsTable).set({
+    data: { ...journal, sourceType: sourceTypeFor(inferred.tableName), sourceId: linked.id, sourceDocumentTable: inferred.tableName, sourceDocumentId: linked.id, convertedSourceId: linked.id, conversionStatus: "linked_draft" },
+    updatedAt: new Date(),
+  }).where(eq(erpRecordsTable.id, journalRow.id));
+  return linked;
 }
 
 const quotationStatuses = new Set(["draft", "sent", "rejected"]);
@@ -1409,6 +1540,22 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       if (access.tableName === "journalEntries" && await isClosedDate(currentAuth, String(recordData.date), tx)) {
         throw new MutationRejected(409, "الفترة المالية مقفلة ولا يمكن إنشاء قيد فيها.");
       }
+      if (access.tableName === "journalEntries") {
+        const partyField = recordData.customerId != null && recordData.customerId !== "" ? "customerId" : recordData.supplierId != null && recordData.supplierId !== "" ? "supplierId" : null;
+        if (partyField) {
+          const partyId = Number(recordData[partyField]);
+          const partyTable = partyField === "customerId" ? "customers" : "suppliers";
+          const [party] = await tx.select().from(erpRecordsTable).where(and(
+            eq(erpRecordsTable.id, partyId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, partyTable),
+          )).for("update");
+          if (!party) throw new MutationRejected(400, `${partyField === "customerId" ? "العميل" : "المورد"} غير موجود في هذه المنشأة.`);
+          recordData = {
+            ...recordData,
+            [partyField]: party.id,
+            [partyField === "customerId" ? "customerName" : "supplierName"]: String(party.data.name ?? ""),
+          };
+        }
+      }
       if (access.tableName === "accounts") {
         await validateAccountHierarchy(tx, currentAuth.organizationId, null, recordData);
       }
@@ -1446,13 +1593,19 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       }).onConflictDoNothing({
         target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
       }).returning();
-      const saved = inserted ?? (clientOperationId
+      let saved = inserted ?? (clientOperationId
         ? (await tx.select().from(erpRecordsTable).where(and(
           eq(erpRecordsTable.organizationId, access.auth.organizationId),
           eq(erpRecordsTable.tableName, access.tableName),
           eq(erpRecordsTable.clientOperationId, clientOperationId),
         )).limit(1))[0]
         : undefined);
+      if (inserted && access.tableName === "journalEntries") {
+        const source = await convertManualJournalToSourceDraft(tx, currentAuth.organizationId, inserted);
+        if (source) {
+          saved = { ...inserted, data: { ...(inserted.data as Record<string, unknown>), sourceType: sourceTypeFor(source.tableName as ManualJournalSource), sourceId: source.id, sourceDocumentTable: source.tableName, sourceDocumentId: source.id, convertedSourceId: source.id, conversionStatus: "linked_draft" } };
+        }
+      }
       if (inserted && access.tableName === "expenses") {
         await createExpenseSourceJournal(
           tx,
@@ -1488,6 +1641,15 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
   const id = Number(request.params.id);
   if (!access || !Number.isInteger(id)) {
     if (access) response.status(400).json({ error: "معرّف السجل غير صالح." });
+    return;
+  }
+  if (await linkedManualDraftFor(access.auth.organizationId, access.tableName, id)) {
+    response.status(409).json({ error: "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تعديلها من واجهة البيانات العامة." });
+    return;
+  }
+  const convertedJournal = await convertedManualJournalFor(access.auth.organizationId, access.tableName, id);
+  if (convertedJournal && !isOnlyConvertedJournalPosting(convertedJournal, request.body as Record<string, unknown>)) {
+    response.status(409).json({ error: "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط." });
     return;
   }
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
@@ -1623,6 +1785,12 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         if (existing.data.status === "posted") {
           throw new MutationRejected(409, "القيد المرحّل غير قابل للتعديل. أنشئ قيداً عكسياً بدلاً من ذلك.");
         }
+        if (
+          isConvertedManualJournal(existing.data)
+          && !isOnlyConvertedJournalPosting(existing.data, body as Record<string, unknown>)
+        ) {
+          throw new MutationRejected(409, "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط.");
+        }
 
         const data = { ...existing.data, ...(body as Record<string, unknown>) };
         const error = validateJournal(data);
@@ -1666,6 +1834,18 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
   ));
   if (!existing || !isLocationAllowed(access.auth, access.tableName, existing.data, existing.id)) {
     response.status(404).json({ error: "السجل غير متاح." });
+    return;
+  }
+  if (isLinkedManualDraft(existing.data)) {
+    response.status(409).json({ error: "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تعديلها من واجهة البيانات العامة." });
+    return;
+  }
+  if (
+    access.tableName === "journalEntries"
+    && isConvertedManualJournal(existing.data)
+    && !isOnlyConvertedJournalPosting(existing.data, body as Record<string, unknown>)
+  ) {
+    response.status(409).json({ error: "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط." });
     return;
   }
   if (access.tableName === "financialClosures") {
@@ -1714,6 +1894,16 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       )).for("update");
       if (!current || !isLocationAllowed(currentAuth, access.tableName, current.data, current.id)) {
         throw new MutationRejected(404, "السجل غير متاح.");
+      }
+      if (isLinkedManualDraft(current.data)) {
+        throw new MutationRejected(409, "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تعديلها من واجهة البيانات العامة.");
+      }
+      if (
+        access.tableName === "journalEntries"
+        && isConvertedManualJournal(current.data)
+        && !isOnlyConvertedJournalPosting(current.data, body as Record<string, unknown>)
+      ) {
+        throw new MutationRejected(409, "القيد اليدوي المرتبط بمستند مسودة لا يقبل التعديل أو الحذف؛ يمكن اعتماده وترحيله فقط.");
       }
       if (access.tableName === "financialClosures") {
         throw new MutationRejected(405, "لا يمكن تعديل الإقفال المالي بعد اعتماده.");
@@ -1799,7 +1989,7 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       if (!isLocationAllowed(currentAuth, access.tableName, currentData, current.id)) {
         throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
       }
-      if (access.tableName === "expenses") {
+      if (access.tableName === "expenses" && current.data.accountingOnlyDraft !== true) {
         if (await isClosedDate(
           currentAuth,
           String(current.data.date ?? ""),
@@ -1964,6 +2154,10 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
     if (access) response.status(400).json({ error: "معرّف السجل غير صالح." });
     return;
   }
+  if (await linkedManualDraftFor(access.auth.organizationId, access.tableName, id)) {
+    response.status(409).json({ error: "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن حذفها من واجهة البيانات العامة." });
+    return;
+  }
   if (rejectUnauthorizedInventoryCatalogMutation(access, response)) return;
   if (SPECIALIZED_MUTATION_TABLES.has(access.tableName)) {
     response.status(405).json({ error: specializedMutationMessage(access.tableName) });
@@ -2025,6 +2219,14 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
     response.status(404).json({ error: "السجل غير متاح." });
     return;
   }
+  if (isLinkedManualDraft(record.data)) {
+    response.status(409).json({ error: "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن حذفها من واجهة البيانات العامة." });
+    return;
+  }
+  if (access.tableName === "journalEntries" && isConvertedManualJournal(record.data)) {
+    response.status(409).json({ error: "القيد اليدوي المرتبط بمستند مسودة لا يمكن حذفه." });
+    return;
+  }
   if (access.tableName === "financialClosures") {
     response.status(405).json({ error: "لا يمكن حذف الإقفال المالي المعتمد." });
     return;
@@ -2055,6 +2257,12 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       if (!current || !isLocationAllowed(currentAuth, access.tableName, current.data, current.id)) {
         throw new MutationRejected(404, "السجل غير متاح.");
       }
+      if (isLinkedManualDraft(current.data)) {
+        throw new MutationRejected(409, "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن حذفها من واجهة البيانات العامة.");
+      }
+      if (access.tableName === "journalEntries" && isConvertedManualJournal(current.data)) {
+        throw new MutationRejected(409, "القيد اليدوي المرتبط بمستند مسودة لا يمكن حذفه.");
+      }
       if (access.tableName === "financialClosures") {
         throw new MutationRejected(405, "لا يمكن حذف الإقفال المالي المعتمد.");
       }
@@ -2077,7 +2285,7 @@ router.delete("/data/:table/:id", requireAuth, requireSubscriptionAccess, requir
       )) {
         throw new MutationRejected(409, "لا يمكن حذف مصدر محاسبي من فترة مالية مقفلة.");
       }
-      if (access.tableName === "expenses") {
+      if (access.tableName === "expenses" && current.data.accountingOnlyDraft !== true) {
         const activeJournal = await activeExpenseJournal(tx, currentAuth.organizationId, current.id);
         if (activeJournal) {
           const operationId = `AUTO-EXPENSES-${current.id}-DELETE-${operationFingerprint(current.data).slice(0, 160)}`;

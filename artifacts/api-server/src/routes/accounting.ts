@@ -8,6 +8,7 @@ import { buildLedgerReport } from "../lib/accounting-ledger";
 import { auditDetails, JournalAdjustmentError, prepareJournalAdjustment, type JournalAdjustmentAction, type JournalRecord } from "../lib/journal-adjustments";
 import { EInvoiceAdjustmentError, issueEInvoiceAdjustment } from "../lib/e-invoice-adjustments";
 import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, type SourceTable, SourceJournalError } from "../lib/source-journals";
+import { convertManualJournalToSourceDraft } from "./erp-data";
 
 const router: IRouter = Router();
 
@@ -1714,6 +1715,13 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
       if (!source || !isLocationAllowed(currentAuth, tableName, source.data, source.id)) {
         throw new SourceCorrectionError(404, "المستند غير متاح ضمن نطاقك.");
       }
+      if (
+        source.data.accountingOnlyDraft === true
+        || source.data.requiresCompletion === true
+        || source.data.sourceJournalId != null
+      ) {
+        throw new SourceCorrectionError(409, "هذه مسودة معلوماتية مرتبطة بقيد يدوي ولا يمكن تصحيحها أو إلغاؤها من مسارات المستندات التشغيلية.");
+      }
 
       const [replayedEvent] = await tx.select().from(erpRecordsTable).where(and(
         eq(erpRecordsTable.organizationId, currentAuth.organizationId),
@@ -2327,6 +2335,41 @@ router.post("/accounting/sources/:table/:id/:action", requireAuth, requireSubscr
   }
 });
 
+router.post("/accounting/journals/:id/convert-source-draft", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (request: Request, response: Response): Promise<void> => {
+  const journalId = Number(request.params.id);
+  if (!Number.isInteger(journalId) || journalId <= 0) {
+    response.status(400).json({ error: "معرّف القيد غير صحيح." });
+    return;
+  }
+  const auth = response.locals.auth as AuthContext;
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || !hasAccountingAccess(currentAuth)) throw lockedAccountingMutationError(response);
+      const [journal] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.id, journalId), eq(erpRecordsTable.organizationId, currentAuth.organizationId), eq(erpRecordsTable.tableName, "journalEntries"),
+      )).for("update");
+      if (!journal) throw new AccountingMutationError(404, "القيد غير موجود في هذه المنشأة.");
+      await convertManualJournalToSourceDraft(tx, currentAuth.organizationId, journal);
+      const [updatedJournal] = await tx.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, journal.id)).for("update");
+      const data = updatedJournal?.data as Record<string, unknown> | undefined;
+      return {
+        converted: Boolean(data?.convertedSourceId),
+        journal: updatedJournal ? { ...updatedJournal.data, id: updatedJournal.id } : null,
+        source: data?.convertedSourceId ? { id: data.convertedSourceId, tableName: data.sourceDocumentTable } : null,
+      };
+    });
+    response.json(result);
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+});
+
 router.post("/accounting/sync-source-journals", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   const [invoices, purchases, expenses, existingJournals] = await Promise.all([
@@ -2337,20 +2380,20 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
   ]);
   const existingSources = new Set(existingJournals.map((journal) => {
     const normalizedType = journal.sourceType === "expense" ? "expenses" : journal.sourceType;
-    return `${normalizedType}:${journal.sourceId}`;
+    return `${normalizedType}:${String(journal.sourceId)}`;
   }));
   const sources = [
-    ...invoices.map((record) => ({ record, tableName: "invoices" as const, type: sourceTypeFor("invoices"), label: "فاتورة بيع" })),
+    ...invoices.filter((record) => record.accountingOnlyDraft !== true && !record.sourceJournalId).map((record) => ({ record, tableName: "invoices" as const, type: sourceTypeFor("invoices"), label: "فاتورة بيع" })),
     ...purchases
-      .filter((record) => !Array.isArray(record.receipts) && (record.received === true || record.status === "completed"))
+      .filter((record) => record.accountingOnlyDraft !== true && !record.sourceJournalId && !Array.isArray(record.receipts) && (record.received === true || record.status === "completed"))
       .map((record) => ({ record, tableName: "purchaseOrders" as const, type: sourceTypeFor("purchaseOrders"), label: "أمر شراء" })),
-    ...expenses.map((record) => ({ record, tableName: "expenses" as const, type: sourceTypeFor("expenses"), label: "مصروف" })),
+    ...expenses.filter((record) => record.accountingOnlyDraft !== true && !record.sourceJournalId).map((record) => ({ record, tableName: "expenses" as const, type: sourceTypeFor("expenses"), label: "مصروف" })),
   ];
   let created = 0;
   const skipped: Array<{ sourceId: number; reason: string }> = [];
 
   for (const source of sources) {
-    const sourceKey = `${source.type}:${source.record.id}`;
+      const sourceKey = `${source.type === "expense" ? "expenses" : source.type}:${String(source.record.id)}`;
     if (existingSources.has(sourceKey)) continue;
     const inserted = await db.transaction(async (tx) => {
       if (!await lockAndValidateDataGeneration(tx, response)) return false;
@@ -2374,7 +2417,7 @@ router.post("/accounting/sync-source-journals", requireAuth, requireSubscription
       if (isClosed) return "closed" as const;
       const currentJournals = await organizationRecordsFor(currentAuth, "journalEntries", tx);
       if (currentJournals.some((journal) => sourceTypeVariants(source.tableName).includes(String(journal.sourceType))
-        && journal.sourceId === source.record.id)) {
+        && String(journal.sourceId) === String(source.record.id))) {
         return "exists" as const;
       }
       const accounts = await organizationRecordsFor(currentAuth, "accounts", tx);

@@ -23,8 +23,10 @@ import { JournalAdjustmentDialog, type JournalAdjustmentInput } from '@/componen
 import type { Journal } from '@/context/store';
 import { AttachmentsPanel } from '@/components/attachments-panel';
 import { TransferDialog } from '@/components/transfer-dialog';
+import { useCrud } from '@/hooks/use-crud';
 
 type JournalStatusFilter = 'all' | 'draft' | 'posted';
+type Party = { id: number | string; name: string };
 
 const today = () => new Date().toISOString().split('T')[0];
 const money = (amount: number) => new Intl.NumberFormat('ar-SA', { minimumFractionDigits: 2 }).format(amount);
@@ -98,6 +100,8 @@ function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: str
 
 export default function Journals() {
   const { journals, accounts, addJournal, postJournal, adjustJournal, connectionMode } = useStore();
+  const customersCrud = useCrud<Party>('customers');
+  const suppliersCrud = useCrud<Party>('suppliers');
   const { toast } = useToast();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [fromDate, setFromDate] = useState('');
@@ -106,6 +110,8 @@ export default function Journals() {
   const [search, setSearch] = useState('');
   const [date, setDate] = useState(today);
   const [description, setDescription] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [supplierId, setSupplierId] = useState('');
   const [lines, setLines] = useState<Omit<JournalLine, 'id'>[]>([
     { accountId: '', debit: 0, credit: 0 },
     { accountId: '', debit: 0, credit: 0 },
@@ -143,6 +149,8 @@ export default function Journals() {
   const resetForm = () => {
     setDate(today());
     setDescription('');
+    setCustomerId('');
+    setSupplierId('');
     setLines([{ accountId: '', debit: 0, credit: 0 }, { accountId: '', debit: 0, credit: 0 }]);
     setIsAiSuggested(false);
   };
@@ -194,8 +202,10 @@ export default function Journals() {
       return;
     }
     try {
-      await addJournal({ date, description: description.trim(), status: 'draft', lines: lines.map((line, index) => ({ ...line, id: `temp-${index}` })) });
-      toast({ title: 'تم حفظ القيد', description: 'حُفظ القيد كمسودة ويمكن ترحيله بعد المراجعة.' });
+      const customer = customersCrud.data.find((party) => String(party.id) === customerId);
+      const supplier = suppliersCrud.data.find((party) => String(party.id) === supplierId);
+      await addJournal({ date, description: description.trim(), status: 'draft', lines: lines.map((line, index) => ({ ...line, id: `temp-${index}` })), ...(customer ? { customerId: String(customer.id), customerName: customer.name } : {}), ...(supplier ? { supplierId: String(supplier.id), supplierName: supplier.name } : {}) });
+      toast({ title: 'تم حفظ القيد', description: 'حُفظ القيد كمسودة، وسيُربط بمستند مسودة عند مطابقة نمط عملية واضح.' });
       setIsAddOpen(false);
       resetForm();
     } catch (error) {
@@ -311,6 +321,23 @@ export default function Journals() {
                     <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-slate-400 pointer-events-none" />
                   </div>
                 </div>
+               <div className="grid grid-cols-1 gap-5 rounded-lg border border-blue-100 bg-blue-50/50 p-4 sm:grid-cols-2">
+                 <div className="space-y-2">
+                   <Label htmlFor="journal-customer" className="text-sm font-semibold">العميل (اختياري)</Label>
+                   <select id="journal-customer" value={customerId} disabled={Boolean(supplierId)} onChange={(event) => setCustomerId(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 text-sm" data-testid="select-journal-customer">
+                     <option value="">بدون عميل</option>
+                     {customersCrud.data.map((party) => <option key={party.id} value={party.id}>{party.name}</option>)}
+                   </select>
+                 </div>
+                 <div className="space-y-2">
+                   <Label htmlFor="journal-supplier" className="text-sm font-semibold">المورد (اختياري)</Label>
+                   <select id="journal-supplier" value={supplierId} disabled={Boolean(customerId)} onChange={(event) => setSupplierId(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 text-sm" data-testid="select-journal-supplier">
+                     <option value="">بدون مورد</option>
+                     {suppliersCrud.data.map((party) => <option key={party.id} value={party.id}>{party.name}</option>)}
+                   </select>
+                 </div>
+                 <p className="sm:col-span-2 text-xs text-blue-800">يمكن اختيار طرف واحد فقط. المستند المرتبط مسودة معلوماتية قابلة للاستكمال؛ يبقى هذا القيد هو القيد المحاسبي المعتمد ولا يؤثر الإنشاء في المخزون.</p>
+               </div>
                 <div className="space-y-2">
                   <Label htmlFor="desc" className="text-sm font-semibold">البيان / الشرح</Label>
                   <div className="relative">
@@ -467,6 +494,11 @@ export default function Journals() {
                 <Badge variant={journal.status === 'posted' ? 'success' : 'secondary'} className={journal.status === 'posted' ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-amber-100 text-amber-800 hover:bg-amber-200'}>
                   {journal.status === 'posted' ? 'مرحّل ومعتمد' : 'مسودة غير معتمدة'}
                 </Badge>
+                {journal.conversionStatus === 'linked_draft' && (
+                  <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-800" data-testid={`badge-conversion-${journal.id}`}>
+                    <Link2 className="ml-1 h-3.5 w-3.5" />مرتبط بمستند مسودة
+                  </Badge>
+                )}
                 {journal.status === 'draft' && (
                   <Button size="sm" onClick={() => { void handlePostJournal(journal.id); }} className="shadow-sm bg-primary/10 text-primary hover:bg-primary hover:text-white" data-testid={`button-post-${journal.id}`}>
                     اعتماد وترحيل
