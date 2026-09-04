@@ -9,93 +9,34 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet';
 import { Textarea } from '@/components/ui/textarea';
-import { useStore, type Account, type Journal, type Receivable } from '@/context/store';
-import { formatLocalDate } from '@/lib/date';
 
 type AssistantMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  discountAnalysis?: DiscountAnalysis;
 };
 
-type PeriodTotals = {
-  revenue: number;
-  expenses: number;
-  netProfit: number;
+type DiscountAnalysis = {
+  productName: string;
+  vatRate: number;
+  currentPriceExVat: number;
+  costFloorExVat: number;
+  costSource: 'fifo' | 'product';
+  recommendedDiscountPercent: number;
+  recommendedPriceExVat: number;
+  maxNoLossDiscountPercent: number;
+  expectedMarginAmount: number;
+  expectedMarginPercent: number;
+  warnings: string[];
 };
 
 const suggestions = [
   'كم الإيرادات والمصروفات هذا الشهر؟',
   'قارن الربح بين هذا الشهر والشهر الماضي',
   'ما الذمم المتأخرة؟',
+  'ما الخصم الآمن لمنتج [اسم المنتج]؟',
 ];
-
-function dateKey(date: Date) {
-  return formatLocalDate(date);
-}
-
-function calculatePeriodTotals(journals: Journal[], accounts: Account[], from?: string, to?: string): PeriodTotals {
-  const accountTypes = new Map(accounts.map((account) => [account.id, account.type]));
-  const totals = journals
-    .filter((journal) => journal.status === 'posted')
-    .filter((journal) => (!from || journal.date >= from) && (!to || journal.date <= to))
-    .reduce(
-      (current, journal) => {
-        journal.lines.forEach((line) => {
-          const type = accountTypes.get(line.accountId);
-          if (type === 'revenue') current.revenue += line.credit - line.debit;
-          if (type === 'expense') current.expenses += line.debit - line.credit;
-        });
-        return current;
-      },
-      { revenue: 0, expenses: 0 },
-    );
-
-  return { ...totals, netProfit: totals.revenue - totals.expenses };
-}
-
-function buildFinancialContext(accounts: Account[], journals: Journal[], receivables: Receivable[]) {
-  const now = new Date();
-  const currentMonthFrom = dateKey(new Date(now.getFullYear(), now.getMonth(), 1));
-  const currentMonthTo = dateKey(new Date(now.getFullYear(), now.getMonth() + 1, 0));
-  const previousMonthFrom = dateKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const previousMonthTo = dateKey(new Date(now.getFullYear(), now.getMonth(), 0));
-  const allTime = calculatePeriodTotals(journals, accounts);
-  const currentMonth = calculatePeriodTotals(journals, accounts, currentMonthFrom, currentMonthTo);
-  const previousMonth = calculatePeriodTotals(journals, accounts, previousMonthFrom, previousMonthTo);
-  const outstandingReceivables = receivables
-    .filter((record) => record.type === 'receivable')
-    .reduce((total, record) => total + Math.max(0, record.amount - record.paid), 0);
-  const outstandingPayables = receivables
-    .filter((record) => record.type === 'payable')
-    .reduce((total, record) => total + Math.max(0, record.amount - record.paid), 0);
-  const overdueReceivables = receivables
-    .filter((record) => record.type === 'receivable' && record.dueDate < dateKey(now))
-    .reduce((total, record) => total + Math.max(0, record.amount - record.paid), 0);
-  const accountBreakdown = accounts
-    .filter((account) => account.status === 'active')
-    .slice(0, 40)
-    .map((account) => `${account.code} ${account.name}: ${account.balance.toFixed(2)} ريال`)
-    .join('؛ ');
-
-  return [
-    `الفترة الحالية: ${currentMonthFrom} إلى ${currentMonthTo}`,
-    `إجمالي الإيرادات: ${allTime.revenue.toFixed(2)} ريال`,
-    `إجمالي المصروفات: ${allTime.expenses.toFixed(2)} ريال`,
-    `صافي الربح: ${allTime.netProfit.toFixed(2)} ريال`,
-    `إيرادات هذا الشهر: ${currentMonth.revenue.toFixed(2)} ريال`,
-    `مصروفات هذا الشهر: ${currentMonth.expenses.toFixed(2)} ريال`,
-    `صافي ربح هذا الشهر: ${currentMonth.netProfit.toFixed(2)} ريال`,
-    `إيرادات الشهر الماضي: ${previousMonth.revenue.toFixed(2)} ريال`,
-    `مصروفات الشهر الماضي: ${previousMonth.expenses.toFixed(2)} ريال`,
-    `صافي ربح الشهر الماضي: ${previousMonth.netProfit.toFixed(2)} ريال`,
-    `الذمم المدينة القائمة: ${outstandingReceivables.toFixed(2)} ريال`,
-    `الذمم الدائنة القائمة: ${outstandingPayables.toFixed(2)} ريال`,
-    `الذمم المدينة المتأخرة: ${overdueReceivables.toFixed(2)} ريال`,
-    `عدد القيود المرحلة: ${journals.filter((journal) => journal.status === 'posted').length}`,
-    `تفاصيل الحسابات: ${accountBreakdown || 'لا توجد حسابات متاحة'}`,
-  ].join('\n');
-}
 
 function formatMessage(content: string) {
   return content.split('\n').map((line, index) => (
@@ -106,8 +47,27 @@ function formatMessage(content: string) {
   ));
 }
 
+const currency = (value: number) => `${value.toFixed(2)} ريال`;
+
+function DiscountCard({ analysis }: { analysis: DiscountAnalysis }) {
+  return (
+    <section className="mt-3 rounded-xl border border-teal-200 bg-teal-50 p-3 text-right text-xs leading-6 text-slate-700" aria-label="توصية الخصم الآمنة">
+      <p className="font-black text-teal-900">توصية خصم آمنة — {analysis.productName}</p>
+      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+        <span>السعر الحالي (قبل الضريبة)</span><b dir="ltr">{currency(analysis.currentPriceExVat)}</b>
+        <span>أرضية التكلفة ({analysis.costSource === 'fifo' ? 'FIFO متاح' : 'تكلفة المنتج'})</span><b dir="ltr">{currency(analysis.costFloorExVat)}</b>
+        <span>الخصم المقترح</span><b>{analysis.recommendedDiscountPercent.toFixed(2)}%</b>
+        <span>السعر المقترح قبل الضريبة</span><b dir="ltr">{currency(analysis.recommendedPriceExVat)}</b>
+        <span>أقصى خصم بلا خسارة</span><b>{analysis.maxNoLossDiscountPercent.toFixed(2)}%</b>
+        <span>الهامش المتوقع</span><b>{currency(analysis.expectedMarginAmount)} ({analysis.expectedMarginPercent.toFixed(2)}%)</b>
+      </div>
+      <p className="mt-2 border-t border-teal-200 pt-2 text-[11px] text-slate-500">ضريبة القيمة المضافة: {analysis.vatRate}% · هذه توصية فقط ولا تغيّر السعر تلقائياً.</p>
+      {analysis.warnings.map((warning) => <p key={warning} className="mt-1 font-semibold text-amber-800">{warning}</p>)}
+    </section>
+  );
+}
+
 export function FinancialAssistant() {
-  const { accounts, journals, receivables } = useStore();
   const [open, setOpen] = React.useState(false);
   const [question, setQuestion] = React.useState('');
   const [isLoading, setIsLoading] = React.useState(false);
@@ -116,7 +76,7 @@ export function FinancialAssistant() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: 'مرحباً! أنا مساعدك المالي. اسألني عن الإيرادات، المصروفات، الأرباح أو الذمم.',
+      content: 'مرحباً! أنا مساعدك المالي. اسألني عن الإيرادات والمصروفات والأرباح والذمم، أو اطلب مني خصماً آمناً لأي منتج.',
     },
   ]);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
@@ -147,10 +107,13 @@ export function FinancialAssistant() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question: trimmedQuestion,
-          context: buildFinancialContext(accounts, journals, receivables),
+          history: messages
+            .filter((message) => message.id !== 'welcome')
+            .slice(-10)
+            .map(({ role, content }) => ({ role, content })),
         }),
       });
-      const payload = await response.json().catch(() => ({})) as { answer?: string; error?: string };
+      const payload = await response.json().catch(() => ({})) as { answer?: string; error?: string; discountAnalysis?: DiscountAnalysis };
       if (!response.ok) throw new Error(payload.error ?? 'تعذر الحصول على إجابة.');
       setMessages((current) => [
         ...current,
@@ -158,6 +121,7 @@ export function FinancialAssistant() {
           id: `assistant-${Date.now()}`,
           role: 'assistant',
           content: payload.answer ?? 'لم أتمكن من إعداد إجابة حالياً.',
+          discountAnalysis: payload.discountAnalysis,
         },
       ]);
     } catch (requestError) {
@@ -201,7 +165,7 @@ export function FinancialAssistant() {
 
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5" aria-live="polite">
             <div className="rounded-2xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs leading-6 text-teal-900">
-              يعتمد المساعد على القيود المرحلة والذمم المسجلة في منشأتك.
+              يعتمد المساعد على القيود والفواتير والذمم والأسعار وتكلفة المخزون الموثوقة في منشأتك.
             </div>
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -214,6 +178,7 @@ export function FinancialAssistant() {
                   data-testid={`assistant-message-${message.role}`}
                 >
                   {formatMessage(message.content)}
+                  {message.discountAnalysis && <DiscountCard analysis={message.discountAnalysis} />}
                 </div>
               </div>
             ))}
