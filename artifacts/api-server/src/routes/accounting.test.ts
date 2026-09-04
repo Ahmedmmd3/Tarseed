@@ -270,6 +270,226 @@ describe.sequential("accounting routes", () => {
     expect(Number(balance.quantity)).toBe(7);
   });
 
+  it("ينفذ مرتجعات البيع الكاملة والجزئية بأمان وبشكل idempotent", async () => {
+    const warehouses = await api("/data/warehouses", { cookie: ownerA.cookie });
+    expect(warehouses.response.status).toBe(200);
+    const warehouse = warehouses.payload.records[0];
+    const product = (await api("/data/products", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { name: `منتج مرتجع ${randomUUID()}`, sku: `RET-${randomUUID().slice(0, 8)}`, sellPrice: 20, costPrice: 6, vatRate: 15, stock: 0, status: "active" },
+    })).payload.record;
+    expect(product).toBeTruthy();
+    expect((await api("/inventory/adjustments", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { productId: product.id, warehouseId: warehouse.id, actualQuantity: 10, unitCostExVat: 6, reason: "رصيد اختبار المرتجعات", date: "2026-06-01" },
+    })).response.status).toBe(200);
+    const checkoutBody = {
+      warehouseId: warehouse.id, issueDate: "2026-06-02", paymentMethod: "cash",
+      items: [{ productId: product.id, quantity: 3 }], clientOperationId: `return-sale-${randomUUID()}`,
+    };
+    const sold = await api("/inventory/checkout", { method: "POST", cookie: ownerA.cookie, body: checkoutBody });
+    expect(sold.response.status).toBe(200);
+    const invoice = sold.payload.invoice;
+    const originalInvoice = structuredClone(invoice);
+    const fullBody = {
+      invoiceId: invoice.id, returnDate: "2026-06-03", reason: "إرجاع كامل للاختبار",
+      items: [{ productId: product.id, quantity: 3 }], clientOperationId: `return-full-${randomUUID()}`,
+    };
+    const full = await api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: fullBody });
+    expect(full.response.status).toBe(200);
+    expect(full.payload.created).toBe(true);
+    const replay = await api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: fullBody });
+    expect(replay.response.status).toBe(200);
+    expect(replay.payload.created).toBe(false);
+    expect(replay.payload.salesReturn.id).toBe(full.payload.salesReturn.id);
+    const mismatch = await api("/inventory/sales-returns", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { ...fullBody, items: [{ productId: product.id, quantity: 2 }] },
+    });
+    expect(mismatch.response.status).toBe(409);
+
+    const invoiceList = await api("/data/invoices", { cookie: ownerA.cookie });
+    expect(invoiceList.response.status).toBe(200);
+    const afterFullInvoice = invoiceList.payload.records.find((row: any) => Number(row.id) === Number(invoice.id));
+    expect(afterFullInvoice).toMatchObject({
+      items: originalInvoice.items, subtotal: originalInvoice.subtotal, tax: originalInvoice.tax, total: originalInvoice.total,
+    });
+    let balances = await api("/data/inventoryBalances", { cookie: ownerA.cookie });
+    expect(Number(balances.payload.records.find((row: any) => Number(row.productId) === product.id && Number(row.warehouseId) === warehouse.id).quantity)).toBe(10);
+    let journals = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    const returnJournal = journals.payload.records.find((row: any) => Number(row.sourceId) === Number(full.payload.salesReturn.id) && row.sourceType === "sale");
+    expect(returnJournal).toBeTruthy();
+    expect(returnJournal.lines.reduce((sum: number, line: any) => sum + Number(line.debit), 0)).toBe(
+      returnJournal.lines.reduce((sum: number, line: any) => sum + Number(line.credit), 0),
+    );
+
+    const partialSale = await api("/inventory/checkout", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { ...checkoutBody, issueDate: "2026-06-04", items: [{ productId: product.id, quantity: 5 }], clientOperationId: `return-partial-sale-${randomUUID()}` },
+    });
+    expect(partialSale.response.status).toBe(200);
+    const partialOne = await api("/inventory/sales-returns", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { invoiceId: partialSale.payload.invoice.id, returnDate: "2026-06-05", reason: "مرتجع جزئي أول", items: [{ productId: product.id, quantity: 2 }], clientOperationId: `return-partial-one-${randomUUID()}` },
+    });
+    expect(partialOne.response.status).toBe(200);
+    const partialTwo = await api("/inventory/sales-returns", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { invoiceId: partialSale.payload.invoice.id, returnDate: "2026-06-06", reason: "مرتجع جزئي ثان", items: [{ productId: product.id, quantity: 3 }], clientOperationId: `return-partial-two-${randomUUID()}` },
+    });
+    expect(partialTwo.response.status).toBe(200);
+    const overReturn = await api("/inventory/sales-returns", {
+      method: "POST", cookie: ownerA.cookie,
+      body: { invoiceId: partialSale.payload.invoice.id, returnDate: "2026-06-07", reason: "تجاوز الكمية", items: [{ productId: product.id, quantity: 1 }], clientOperationId: `return-over-${randomUUID()}` },
+    });
+    expect(overReturn.response.status).toBe(409);
+    balances = await api("/data/inventoryBalances", { cookie: ownerA.cookie });
+    expect(Number(balances.payload.records.find((row: any) => Number(row.productId) === product.id && Number(row.warehouseId) === warehouse.id).quantity)).toBe(10);
+  });
+
+  it("يسلسل المرتجعات المتزامنة ويعيد FIFO وفواتير الآجل بدقة", async () => {
+    const warehouse = (await api("/data/warehouses", { cookie: ownerA.cookie })).payload.records[0];
+    const createStockedProduct = async (label: string, layers: Array<[number, number]>) => {
+      const created = await api("/data/products", { method: "POST", cookie: ownerA.cookie, body: {
+        name: `${label} ${randomUUID()}`, sku: `${label}-${randomUUID().slice(0, 8)}`, sellPrice: 20, vatRate: 15, stock: 0, status: "active",
+      } });
+      expect(created.response.status).toBe(201);
+      let quantity = 0;
+      for (const [added, cost] of layers) {
+        quantity += added;
+        const adjustment = await api("/inventory/adjustments", { method: "POST", cookie: ownerA.cookie, body: {
+          productId: created.payload.record.id, warehouseId: warehouse.id, actualQuantity: quantity, unitCostExVat: cost,
+          reason: `طبقة ${label}`, date: "2026-07-01",
+        } });
+        expect(adjustment.response.status).toBe(200);
+      }
+      return created.payload.record;
+    };
+    const checkout = async (productId: number, quantity: number, operation: string, paymentMethod = "cash") => {
+      const result = await api("/inventory/checkout", { method: "POST", cookie: ownerA.cookie, body: {
+        warehouseId: warehouse.id, issueDate: "2026-07-02", paymentMethod, ...(paymentMethod === "credit" ? { dueDate: "2026-07-30" } : {}),
+        items: [{ productId, quantity }], clientOperationId: operation,
+      } });
+      expect(result.response.status).toBe(200);
+      return result.payload.invoice;
+    };
+
+    const concurrentProduct = await createStockedProduct("CON", [[4, 5]]);
+    const concurrentInvoice = await checkout(concurrentProduct.id, 4, `con-sale-${randomUUID()}`);
+    const sameRequest = { invoiceId: concurrentInvoice.id, returnDate: "2026-07-03", reason: "إعادة متزامنة", items: [{ productId: concurrentProduct.id, quantity: 2 }], clientOperationId: `con-same-${randomUUID()}` };
+    const [sameLeft, sameRight] = await Promise.all([
+      api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: sameRequest }),
+      api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: sameRequest }),
+    ]);
+    expect(sameLeft.response.status).toBe(200);
+    expect(sameRight.response.status).toBe(200);
+    expect(sameLeft.payload.salesReturn.id).toBe(sameRight.payload.salesReturn.id);
+    const competing = await Promise.all([
+      api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: { ...sameRequest, clientOperationId: `con-a-${randomUUID()}`, items: [{ productId: concurrentProduct.id, quantity: 2 }] } }),
+      api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: { ...sameRequest, clientOperationId: `con-b-${randomUUID()}`, items: [{ productId: concurrentProduct.id, quantity: 2 }] } }),
+    ]);
+    expect(competing.map((result) => result.response.status).sort()).toEqual([200, 409]);
+
+    const fifoProduct = await createStockedProduct("FIFO", [[2, 5], [2, 9]]);
+    const fifoInvoice = await checkout(fifoProduct.id, 4, `fifo-sale-${randomUUID()}`);
+    expect(fifoInvoice.cogsTotal).toBe(28);
+    const fifoReturns = [];
+    for (const quantity of [1, 3]) {
+      const returned = await api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: {
+        invoiceId: fifoInvoice.id, returnDate: quantity === 1 ? "2026-07-04" : "2026-07-05", reason: "اختبار FIFO",
+        items: [{ productId: fifoProduct.id, quantity }], clientOperationId: `fifo-return-${quantity}-${randomUUID()}`,
+      } });
+      expect(returned.response.status).toBe(200);
+      fifoReturns.push(returned.payload.salesReturn);
+    }
+    expect(fifoReturns.reduce((sum, item) => sum + Number(item.cogsTotal), 0)).toBe(Number(fifoInvoice.cogsTotal));
+    const fifoCosts = fifoReturns.flatMap((item) => item.items.flatMap((line: any) => line.returnFifoAllocations.map((allocation: any) => Number(allocation.unitCostExVat))));
+    expect(fifoCosts).toEqual(expect.arrayContaining([5, 9]));
+
+    const unpaidProduct = await createStockedProduct("CRU", [[1, 7]]);
+    const unpaidInvoice = await checkout(unpaidProduct.id, 1, `credit-unpaid-${randomUUID()}`, "credit");
+    const unpaidReturn = await api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: {
+      invoiceId: unpaidInvoice.id, returnDate: "2026-07-06", reason: "آجل غير مدفوع", items: [{ productId: unpaidProduct.id, quantity: 1 }], clientOperationId: `credit-unpaid-return-${randomUUID()}`,
+    } });
+    expect(unpaidReturn.response.status).toBe(200);
+    expect(Number(unpaidReturn.payload.salesReturn.arReduction)).toBe(Number(unpaidInvoice.total));
+    expect(Number(unpaidReturn.payload.salesReturn.refundAmount)).toBe(0);
+    let receivables = await api("/data/receivables", { cookie: ownerA.cookie });
+    expect(receivables.payload.records.find((row: any) => Number(row.invoiceId) === Number(unpaidInvoice.id))).toMatchObject({ amount: unpaidInvoice.total, paid: unpaidInvoice.total, status: "paid" });
+
+    const partialProduct = await createStockedProduct("CRP", [[1, 7]]);
+    const partialInvoice = await checkout(partialProduct.id, 1, `credit-partial-${randomUUID()}`, "credit");
+    await pool.query("update erp_records set data = jsonb_set(data, '{paid}', '10'::jsonb) where organization_id = $1 and table_name = 'receivables' and data->>'invoiceId' = $2", [ownerA.organizationId, String(partialInvoice.id)]);
+    const partialReturn = await api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: {
+      invoiceId: partialInvoice.id, returnDate: "2026-07-07", reason: "آجل مدفوع جزئيا", items: [{ productId: partialProduct.id, quantity: 1 }], clientOperationId: `credit-partial-return-${randomUUID()}`,
+    } });
+    expect(partialReturn.response.status).toBe(200);
+    expect(Number(partialReturn.payload.salesReturn.arReduction)).toBe(Number(partialInvoice.total) - 10);
+    expect(Number(partialReturn.payload.salesReturn.refundAmount)).toBe(10);
+    receivables = await api("/data/receivables", { cookie: ownerA.cookie });
+    expect(receivables.payload.records.find((row: any) => Number(row.invoiceId) === Number(partialInvoice.id))).toMatchObject({ amount: partialInvoice.total, paid: partialInvoice.total, status: "paid" });
+    const journals = await api("/data/journalEntries", { cookie: ownerA.cookie });
+    const partialJournal = journals.payload.records.find((row: any) => Number(row.sourceId) === Number(partialReturn.payload.salesReturn.id));
+    expect(partialJournal.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ credit: Number(partialInvoice.total) - 10 }),
+      expect.objectContaining({ credit: 10 }),
+    ]));
+  });
+
+  it("يسترد كسور net وVAT بالكامل عبر ثلاثة مرتجعات دون بقايا تقريب", async () => {
+    const warehouse = (await api("/data/warehouses", { cookie: ownerA.cookie })).payload.records[0];
+    const productResult = await api("/data/products", { method: "POST", cookie: ownerA.cookie, body: {
+      name: `منتج كسور ${randomUUID()}`, sku: `ROUND-${randomUUID().slice(0, 8)}`, sellPrice: 0.1, vatRate: 15, stock: 0, status: "active",
+    } });
+    expect(productResult.response.status).toBe(201);
+    const product = productResult.payload.record;
+    expect((await api("/inventory/adjustments", { method: "POST", cookie: ownerA.cookie, body: {
+      productId: product.id, warehouseId: warehouse.id, actualQuantity: 3, unitCostExVat: 0.03,
+      reason: "اختبار كسور المرتجع", date: "2026-07-08",
+    } })).response.status).toBe(200);
+    const checkout = await api("/inventory/checkout", { method: "POST", cookie: ownerA.cookie, body: {
+      warehouseId: warehouse.id, issueDate: "2026-07-08", paymentMethod: "cash",
+      items: [{ productId: product.id, quantity: 3 }], clientOperationId: `round-sale-${randomUUID()}`,
+    } });
+    expect(checkout.response.status).toBe(200);
+    const invoice = checkout.payload.invoice;
+    const returns = [];
+    for (let index = 0; index < 3; index += 1) {
+      const result = await api("/inventory/sales-returns", { method: "POST", cookie: ownerA.cookie, body: {
+        invoiceId: invoice.id, returnDate: `2026-07-${String(9 + index).padStart(2, "0")}`, reason: `مرتجع كسور ${index + 1}`,
+        items: [{ productId: product.id, quantity: 1 }], clientOperationId: `round-return-${index}-${randomUUID()}`,
+      } });
+      expect(result.response.status).toBe(200);
+      returns.push(result.payload.salesReturn);
+    }
+    const sum = (field: string) => Math.round(returns.reduce((total, item) => total + Number(item[field]), 0) * 100) / 100;
+    expect(sum("subtotal")).toBe(Number(invoice.subtotal));
+    expect(sum("tax")).toBe(Number(invoice.tax));
+    expect(sum("total")).toBe(Number(invoice.total));
+
+    const journals = (await api("/data/journalEntries", { cookie: ownerA.cookie })).payload.records;
+    const accountCode = new Map(accountsA.map((account: any) => [String(account.code), String(account.id)]));
+    const returnJournals = returns.map((salesReturn) => journals.find((journal: any) =>
+      journal.sourceType === "sale" && Number(journal.sourceId) === Number(salesReturn.id),
+    ));
+    expect(returnJournals.every(Boolean)).toBe(true);
+    const journalDebit = (accountId: string) => Math.round(returnJournals.reduce((total: number, journal: any) =>
+      total + journal.lines.filter((line: any) => line.accountId === accountId).reduce((lineTotal: number, line: any) => lineTotal + Number(line.debit), 0), 0) * 100) / 100;
+    expect(journalDebit(accountCode.get("4000"))).toBe(Number(invoice.subtotal));
+    expect(journalDebit(accountCode.get("2100"))).toBe(Number(invoice.tax));
+
+    const creditNotes = await pool.query(
+      "select tax_exclusive_amount, tax_amount, tax_inclusive_amount from e_invoice_documents where organization_id = $1 and invoice_record_id = $2 and document_type = 'credit_note'",
+      [ownerA.organizationId, invoice.id],
+    );
+    if (creditNotes.rows.length) {
+      const noteSum = (field: string) => Math.round(creditNotes.rows.reduce((total: number, row: any) => total + Number(row[field]), 0) * 100) / 100;
+      expect(noteSum("tax_exclusive_amount")).toBe(Number(invoice.subtotal));
+      expect(noteSum("tax_amount")).toBe(Number(invoice.tax));
+      expect(noteSum("tax_inclusive_amount")).toBe(Number(invoice.total));
+    }
+  });
+
   it("ينشئ قيد المصروف بالتصنيف وطريقة الدفع ولا يكرر القيد عند إعادة الطلب", async () => {
     const accountCode = new Map(accountsA.map((account: any) => [String(account.code), account.id]));
     const categories = [

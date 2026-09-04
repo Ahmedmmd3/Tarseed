@@ -4,6 +4,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, eInvoiceDocumentsTable, eInvoiceUnitsTable, erpRecordsTable, teamAuditLogsTable } from "@workspace/db";
 import { configurationIsComplete, decryptEInvoiceSecret, generateInvoiceDocument, type SellerProfile } from "../lib/e-invoicing";
 import { savePrivateInvoiceXml } from "../lib/private-object-store";
+import { EInvoiceAdjustmentError, issueEInvoiceAdjustment } from "../lib/e-invoice-adjustments";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -38,6 +39,15 @@ function requireSalesOrInventory(_request: Request, response: Response, next: Ne
   const auth = response.locals.auth as AuthContext | undefined;
   if (!auth || (auth.roleId !== "owner" && auth.permissions.inventory !== true && auth.permissions.sales !== true)) {
     response.status(403).json({ error: "ليس لديك صلاحية لتسجيل المبيعات." });
+    return;
+  }
+  next();
+}
+
+function requireSalesInventoryOrAccounting(_request: Request, response: Response, next: NextFunction): void {
+  const auth = response.locals.auth as AuthContext | undefined;
+  if (!auth || (auth.roleId !== "owner" && auth.permissions.inventory !== true && auth.permissions.sales !== true)) {
+    response.status(403).json({ error: "ليس لديك صلاحية لتسجيل مرتجعات المبيعات." });
     return;
   }
   next();
@@ -1170,6 +1180,272 @@ router.post("/data/purchaseOrders/:id/receive", requireAuth, requireSubscription
       return { order: orderOutput, receipt: receiptOutput, replayed: false };
     });
     return result;
+  });
+});
+
+router.get("/inventory/sales-returns", requireAuth, requireSubscriptionAccess, requireSalesInventoryOrAccounting, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const returns = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    eq(erpRecordsTable.tableName, "salesReturns"),
+  ));
+  response.json({
+    returns: returns
+      .filter((record) => canAccessLocations(auth, [Number(record.data.warehouseId)].filter(Number.isInteger)))
+      .sort((left, right) => String(right.data.date ?? "").localeCompare(String(left.data.date ?? "")) || right.id - left.id)
+      .map((record) => output(record, auth.organizationId)),
+  });
+});
+
+router.post("/inventory/sales-returns", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireSalesInventoryOrAccounting, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  await runAction(response, async () => {
+    const body = bodyOf(request);
+    const invoiceId = integer(body.invoiceId, "الفاتورة الأصلية");
+    const returnDate = saleDate(body.returnDate);
+    const reason = requiredText(body.reason, "سبب المرتجع", 500);
+    const clientOperationId = requiredText(body.clientOperationId, "معرّف العملية", 200);
+    if (!reason) throw new InventoryRouteError("سبب المرتجع مطلوب.", 400);
+    if (!clientOperationId) throw new InventoryRouteError("معرّف العملية مطلوب.", 400);
+    const rawItems = Array.isArray(body.items) ? body.items : [];
+    if (!rawItems.length || rawItems.length > 100) throw new InventoryRouteError("أضف صنفاً واحداً على الأقل إلى المرتجع.", 400);
+    const requested = new Map<number, number>();
+    for (const raw of rawItems) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new InventoryRouteError("أحد بنود المرتجع غير صحيح.", 400);
+      const item = raw as RecordData;
+      const productId = integer(item.productId, "المنتج");
+      requested.set(productId, (requested.get(productId) ?? 0) + integer(item.quantity, "كمية المرتجع"));
+    }
+    const normalizedItems = [...requested.entries()].sort(([a], [b]) => a - b).map(([productId, quantity]) => ({ productId, quantity }));
+    const requestFingerprint = fingerprint({ invoiceId, returnDate, reason, items: normalizedItems });
+
+    const result = await db.transaction(async (tx) => {
+      await requireLockedDataGeneration(tx, response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || (currentAuth.roleId !== "owner" && currentAuth.permissions.inventory !== true && currentAuth.permissions.sales !== true)) {
+        throw new InventoryRouteError("تغيرت صلاحيات المستخدم أثناء تنفيذ المرتجع.", 403);
+      }
+      await requireOpenFinancialDate(tx, auth.organizationId, returnDate);
+      const invoice = await lockRecord(tx, auth.organizationId, "invoices", invoiceId);
+      // The invoice row is the stable serialization lock for all return attempts
+      // against it.  Check idempotency only after acquiring it.
+      const [duplicate] = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "salesReturns"),
+        eq(erpRecordsTable.clientOperationId, clientOperationId),
+      )).limit(1).for("update");
+      if (duplicate) {
+        if (duplicate.data.requestFingerprint !== requestFingerprint) throw new InventoryRouteError("معرّف العملية مستخدم لطلب مختلف.");
+        return { salesReturn: duplicate, created: false };
+      }
+      if (["cancelled", "canceled", "voided", "corrected"].includes(String(invoice.data.status))) {
+        throw new InventoryRouteError("لا يمكن إرجاع فاتورة ملغاة أو مصححة.", 409);
+      }
+      const invoiceWarehouseId = integer(invoice.data.warehouseId, "موقع الفاتورة");
+      requireLocations(currentAuth, [invoiceWarehouseId]);
+      await lockWarehouses(tx, auth.organizationId, [invoiceWarehouseId]);
+      const invoiceItems = Array.isArray(invoice.data.items) ? invoice.data.items : [];
+      if (!invoiceItems.length) throw new InventoryRouteError("الفاتورة الأصلية لا تحتوي على بنود قابلة للإرجاع.", 409);
+
+      // Lock all earlier returns before calculating remaining quantities.
+      const earlierReturns = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, auth.organizationId),
+        eq(erpRecordsTable.tableName, "salesReturns"),
+        sql`${erpRecordsTable.data}->>'originalInvoiceId' = ${String(invoiceId)}`,
+      )).for("update");
+      const returnedBySource = new Map<string, number>();
+      const returnedAmountsBySource = new Map<string, { net: number; vat: number }>();
+      const returnedByAllocation = new Map<string, { quantity: number; costAmount: number }>();
+      for (const previous of earlierReturns) {
+        const lines = Array.isArray(previous.data.items) ? previous.data.items : [];
+        for (const raw of lines) {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+          const line = raw as RecordData;
+          const key = `${Number(line.productId)}:${Number(line.sourceLineIndex ?? -1)}`;
+          returnedBySource.set(key, (returnedBySource.get(key) ?? 0) + Number(line.quantity ?? 0));
+          const priorAmounts = returnedAmountsBySource.get(key) ?? { net: 0, vat: 0 };
+          returnedAmountsBySource.set(key, {
+            net: money(priorAmounts.net + Number(line.lineNet ?? 0)),
+            vat: money(priorAmounts.vat + Number(line.vatAmount ?? 0)),
+          });
+          const allocations = Array.isArray(line.returnFifoAllocations) ? line.returnFifoAllocations : [];
+          for (const allocation of allocations) {
+            if (!allocation || typeof allocation !== "object" || Array.isArray(allocation)) continue;
+            const item = allocation as RecordData;
+            const allocationKey = `${key}:${Number(item.sourceAllocationIndex)}`;
+            const prior = returnedByAllocation.get(allocationKey) ?? { quantity: 0, costAmount: 0 };
+            returnedByAllocation.set(allocationKey, {
+              quantity: prior.quantity + Number(item.quantity ?? 0),
+              costAmount: money(prior.costAmount + Number(item.costAmount ?? 0)),
+            });
+          }
+        }
+      }
+
+      const lines: Array<RecordData> = [];
+      for (const { productId, quantity: requestedQuantity } of normalizedItems) {
+        let remainingRequest = requestedQuantity;
+        const sourceLines = invoiceItems
+          .map((raw, sourceLineIndex) => ({ raw, sourceLineIndex }))
+          .filter(({ raw }) => raw && typeof raw === "object" && !Array.isArray(raw) && Number((raw as RecordData).productId) === productId);
+        if (!sourceLines.length) throw new InventoryRouteError("الصنف غير موجود في الفاتورة الأصلية.", 409);
+        for (const { raw, sourceLineIndex } of sourceLines) {
+          const source = raw as RecordData;
+          const originalQuantity = Number(source.quantity);
+          const alreadyReturned = returnedBySource.get(`${productId}:${sourceLineIndex}`) ?? 0;
+          const returnedAmounts = returnedAmountsBySource.get(`${productId}:${sourceLineIndex}`) ?? { net: 0, vat: 0 };
+          const available = originalQuantity - alreadyReturned;
+          if (!Number.isFinite(originalQuantity) || originalQuantity <= 0 || available <= 0) continue;
+          const quantity = Math.min(remainingRequest, available);
+          if (quantity <= 0) continue;
+          const sourceNet = money(Number(source.lineNet ?? 0));
+          const sourceVat = money(Number(source.vatAmount ?? 0));
+          const isFinalSlice = quantity >= available - 0.000001;
+          const net = isFinalSlice ? money(sourceNet - returnedAmounts.net) : money(sourceNet * quantity / originalQuantity);
+          const vat = isFinalSlice ? money(sourceVat - returnedAmounts.vat) : money(sourceVat * quantity / originalQuantity);
+          const originalAllocations = Array.isArray(source.fifoAllocations) ? source.fifoAllocations : [];
+          if (!originalAllocations.length) throw new InventoryRouteError("تخصيصات FIFO للفاتورة الأصلية غير متاحة.", 409);
+          let allocationRequest = quantity;
+          const returnFifoAllocations: Array<RecordData> = [];
+          for (let sourceAllocationIndex = 0; sourceAllocationIndex < originalAllocations.length && allocationRequest > 0; sourceAllocationIndex += 1) {
+            const allocation = originalAllocations[sourceAllocationIndex];
+            if (!allocation || typeof allocation !== "object" || Array.isArray(allocation)) throw new InventoryRouteError("تخصيصات FIFO للفواتير غير صالحة.", 409);
+            const sourceAllocation = allocation as RecordData;
+            const allocationQuantity = Number(sourceAllocation.quantity);
+            const sourceCost = money(Number(sourceAllocation.costAmount));
+            const unitCostExVat = Number(sourceAllocation.unitCostExVat);
+            const prior = returnedByAllocation.get(`${productId}:${sourceLineIndex}:${sourceAllocationIndex}`) ?? { quantity: 0, costAmount: 0 };
+            const availableAllocation = allocationQuantity - prior.quantity;
+            if (!Number.isFinite(allocationQuantity) || allocationQuantity <= 0 || !Number.isFinite(sourceCost) || sourceCost < 0 || !Number.isFinite(unitCostExVat) || unitCostExVat < 0) throw new InventoryRouteError("تخصيصات FIFO للفواتير غير صالحة.", 409);
+            if (availableAllocation <= 0) continue;
+            const allocationReturnQuantity = Math.min(allocationRequest, availableAllocation);
+            // The final slice takes the residual original amount, guaranteeing that
+            // all partial returns add up exactly to the original FIFO allocation.
+            const costAmount = allocationReturnQuantity >= availableAllocation - 0.000001
+              ? money(sourceCost - prior.costAmount)
+              : money(allocationReturnQuantity * unitCostExVat);
+            returnFifoAllocations.push({ sourceAllocationIndex, sourceLayerId: sourceAllocation.layerId, quantity: allocationReturnQuantity, unitCostExVat, costAmount });
+            allocationRequest -= allocationReturnQuantity;
+          }
+          if (allocationRequest > 0.000001) throw new InventoryRouteError("تخصيصات FIFO للفواتير لا تغطي كمية المرتجع.", 409);
+          const cost = money(returnFifoAllocations.reduce((sum, allocation) => sum + Number(allocation.costAmount), 0));
+          if (![sourceNet, sourceVat, returnedAmounts.net, returnedAmounts.vat, net, vat, cost].every(Number.isFinite)
+            || sourceNet < 0 || sourceVat < 0 || returnedAmounts.net < 0 || returnedAmounts.vat < 0
+            || returnedAmounts.net > sourceNet || returnedAmounts.vat > sourceVat || net < 0 || vat < 0 || cost < 0) {
+            throw new InventoryRouteError("بيانات أسعار أو ضريبة الفاتورة الأصلية غير صالحة.", 409);
+          }
+          lines.push({
+            productId, sourceLineIndex, quantity, warehouseId: Number(source.warehouseId ?? invoiceWarehouseId),
+            name: String(source.name ?? `صنف #${productId}`), sku: String(source.sku ?? ""),
+            unitPriceExVat: money(net / quantity), lineNet: net, vatRate: Number(source.vatRate ?? 0),
+            vatAmount: vat, lineGross: money(net + vat), unitCost: money(cost / quantity), costAmount: cost, returnFifoAllocations,
+          });
+          remainingRequest -= quantity;
+          if (remainingRequest <= 0) break;
+        }
+        if (remainingRequest > 0.000001) throw new InventoryRouteError("كمية المرتجع تتجاوز الكمية المتبقية القابلة للإرجاع.", 409);
+      }
+
+      const subtotal = money(lines.reduce((sum, line) => sum + Number(line.lineNet), 0));
+      const tax = money(lines.reduce((sum, line) => sum + Number(line.vatAmount), 0));
+      const total = money(subtotal + tax);
+      const cogsTotal = money(lines.reduce((sum, line) => sum + Number(line.costAmount), 0));
+      if (total <= 0) throw new InventoryRouteError("إجمالي المرتجع يجب أن يكون موجباً.", 409);
+      const [created] = await tx.insert(erpRecordsTable).values({
+        organizationId: auth.organizationId, tableName: "salesReturns", clientOperationId,
+        data: { number: "", originalInvoiceId: invoice.id, originalInvoiceNumber: invoice.data.number, warehouseId: invoiceWarehouseId,
+          date: returnDate, reason, items: lines, subtotal, tax, total, cogsTotal, refundMethod: invoice.data.paymentMethod,
+          refundStatus: "posted", requestFingerprint, createdAt: new Date().toISOString() },
+      }).onConflictDoNothing({
+        target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
+      }).returning();
+      if (!created) {
+        const [existing] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "salesReturns"),
+          eq(erpRecordsTable.clientOperationId, clientOperationId),
+        )).limit(1).for("update");
+        if (!existing) throw new InventoryRouteError("تعذر حجز معرّف عملية المرتجع؛ أعد المحاولة.", 409);
+        if (existing.data.requestFingerprint !== requestFingerprint) throw new InventoryRouteError("معرّف العملية مستخدم لطلب مختلف.");
+        return { salesReturn: existing, created: false };
+      }
+      const salesReturn = await updateData(tx, created, { ...created.data, number: `SR-${created.id}` });
+
+      for (const line of lines) {
+        const product = await lockRecord(tx, auth.organizationId, "products", Number(line.productId));
+        const warehouseId = integer(line.warehouseId, "موقع بند الفاتورة");
+        requireLocations(currentAuth, [warehouseId]);
+        await lockWarehouses(tx, auth.organizationId, [warehouseId]);
+        const balances = await lockBalancesForProduct(tx, auth.organizationId, product.id);
+        const balance = balanceFor(balances, warehouseId);
+        if (balance) await updateData(tx, balance, { ...balance.data, quantity: quantityOf(balance) + Number(line.quantity) });
+        else await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryBalances", data: { productId: product.id, warehouseId, quantity: Number(line.quantity) } });
+        for (const allocation of line.returnFifoAllocations as Array<RecordData>) {
+          await tx.insert(erpRecordsTable).values({ organizationId: auth.organizationId, tableName: "inventoryLayers", data: {
+            productId: product.id, warehouseId, originalQuantity: Number(allocation.quantity), remainingQuantity: Number(allocation.quantity),
+            unitCostExVat: Number(allocation.unitCostExVat), layerType: "sales_return", salesReturnId: salesReturn.id,
+            originalInvoiceId: invoice.id, sourceLayerId: allocation.sourceLayerId, returnedAt: new Date().toISOString(),
+          } });
+        }
+        await reconcileProductTotal(tx, auth.organizationId, product);
+      }
+      const method = String(invoice.data.paymentMethod);
+      let receivable: ErpRecord | undefined;
+      let arReduction = 0;
+      let refundAmount = total;
+      const refundMethod = method === "card" || method === "transfer" ? method : "cash";
+      if (method === "credit") {
+        [receivable] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.organizationId, auth.organizationId), eq(erpRecordsTable.tableName, "receivables"),
+          sql`${erpRecordsTable.data}->>'invoiceId' = ${String(invoice.id)}`,
+        )).limit(1).for("update");
+        if (receivable) {
+          const amount = Number(receivable.data.amount ?? 0);
+          const paid = Math.min(amount, Math.max(0, Number(receivable.data.paid ?? 0)));
+          arReduction = Math.min(total, Math.max(0, money(amount - paid)));
+          refundAmount = money(total - arReduction);
+        }
+      }
+      const accounts = await accountsByCode(tx, auth.organizationId);
+      const requiredAccount = (code: string): ErpRecord => {
+        const account = accounts.get(code);
+        if (!account) throw new InventoryRouteError(`الحساب الأساسي ${code} غير متاح أو غير نشط.`, 409);
+        return account;
+      };
+      const cashRefund = requiredAccount(refundMethod === "card" || refundMethod === "transfer" ? "1100" : "1000");
+      const journalLines = [
+        { accountId: String(requiredAccount("4000").id), debit: subtotal, credit: 0 },
+        { accountId: String(requiredAccount("2100").id), debit: tax, credit: 0 },
+        { accountId: String(requiredAccount("1300").id), debit: cogsTotal, credit: 0 },
+        { accountId: String(requiredAccount("5500").id), debit: 0, credit: cogsTotal },
+      ];
+      if (method === "credit") {
+        if (arReduction) journalLines.splice(2, 0, { accountId: String(requiredAccount("1200").id), debit: 0, credit: arReduction });
+        if (refundAmount) journalLines.splice(2, 0, { accountId: String(cashRefund.id), debit: 0, credit: refundAmount });
+      } else {
+        journalLines.splice(2, 0, { accountId: String(cashRefund.id), debit: 0, credit: total });
+      }
+      const journal = await postJournal(tx, auth.organizationId, "sale", salesReturn.id, returnDate, `مرتجع مبيعات ${salesReturn.data.number}`, journalLines);
+      if (receivable) {
+        const amount = Number(receivable.data.amount ?? 0);
+        const paid = Math.min(amount, Math.max(0, Number(receivable.data.paid ?? 0)));
+        const nextPaid = money(Math.min(amount, paid + arReduction));
+        await updateData(tx, receivable, { ...receivable.data, paid: nextPaid, status: nextPaid >= amount - 0.005 ? "paid" : nextPaid > 0 ? "partial" : "unpaid", salesReturnId: salesReturn.id });
+      }
+      let eInvoiceDocumentId: number | undefined;
+      try {
+        const note = await issueEInvoiceAdjustment(tx, { organizationId: auth.organizationId, invoiceRecordId: invoice.id,
+          parentDocumentId: Number(invoice.data.eInvoiceDocumentId) || undefined, operationId: `sales-return:${salesReturn.id}`,
+          documentType: "credit_note", reason, taxExclusiveAmount: subtotal, taxAmount: tax,
+          adjustmentLines: lines.map((line) => ({ taxExclusiveAmount: Number(line.lineNet), taxAmount: Number(line.vatAmount), vatRate: Number(line.vatRate) })), issueAt: new Date(`${returnDate}T12:00:00.000Z`) });
+        eInvoiceDocumentId = note?.document.id;
+      } catch (error) {
+        if (!(error instanceof EInvoiceAdjustmentError)) throw error;
+      }
+      const finalized = await updateData(tx, salesReturn, { ...salesReturn.data, refundAmount, refundMethod, arReduction, journalEntryId: journal.id, eInvoiceDocumentId: eInvoiceDocumentId ?? null, eInvoiceStatus: eInvoiceDocumentId ? "created" : "pending_original_document" });
+      await audit(tx, currentAuth, "sales_return_recorded", String(finalized.id));
+      return { salesReturn: finalized, created: true };
+    });
+    return { salesReturn: output(result.salesReturn, auth.organizationId), created: result.created };
   });
 });
 
