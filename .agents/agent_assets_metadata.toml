@@ -42,3 +42,10 @@ mtime_ms = 1787506512482
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/15c8c383-2018-4a99-8692-aa07d6b4ceab/8f0cd421-7b80-48eb-aad3-457d90c22893"
 storage_version_token = "1787506551410972"
 content_type = "image/png"
+
+[[outputs]]
+id = "65Jjye9F8z7U22QXrrvpR"
+uri = "file://artifacts/tarseed-launch-video/public/audio/bg_music.mp3"
+type = "audio"
+title = "Tarseed launch background music"
+description = "Generated music: Driving modern fintech electronic instrumental background music scoring a 15-second vertical Arabic accounting product reveal. Crisp muted synth pulses, subtle digital percussion, 11…"

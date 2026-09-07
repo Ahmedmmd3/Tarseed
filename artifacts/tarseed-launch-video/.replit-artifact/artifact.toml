@@ -1,0 +1,29 @@
+kind = "video"
+videoAspectRatio = "9:16"
+previewPath = "/tarseed-launch-video/"
+title = "ترصيد — المحاسبة بطريقة أوضح"
+description = "فيديو إعلاني عمودي مدته 15 ثانية لمنصات Reels وTikTok، يعرض مشكلة تعقيد المحاسبة ثم يكشف ترصيد كالحل، بنصوص عربية متحركة وشعار العلامة في النهاية."
+version = "1.0.0"
+id = "artifacts/tarseed-launch-video"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/tarseed-launch-video/" ]
+localPort = 24265
+
+[services.development]
+run = "pnpm --filter @workspace/tarseed-launch-video run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/tarseed-launch-video", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/tarseed-launch-video/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24265"
+BASE_PATH = "/tarseed-launch-video/"
