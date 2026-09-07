@@ -53,7 +53,7 @@ export default function VideoTemplate({
 
   return (
     <VideoPausedContext.Provider value={paused}>
-      <VideoCanvas aspectRatio={VIDEO_ASPECT_RATIO} style={{ backgroundColor: 'var(--brand-bg)' }} className="dark">
+      <VideoCanvas aspectRatio={VIDEO_ASPECT_RATIO} style={{ backgroundColor: '#010619' }} className="dark">
         <AnimatePresence mode="popLayout">{Scene && <Scene key={currentSceneKey} />}</AnimatePresence>
         <audio ref={audioRef} src={`${import.meta.env.BASE_URL}audio/bg_music.mp3`} preload="auto" autoPlay muted={muted} />
       </VideoCanvas>
