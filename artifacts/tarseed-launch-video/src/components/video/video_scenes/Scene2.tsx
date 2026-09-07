@@ -16,7 +16,7 @@ export function Scene2() {
   const imagePaths = [
     `${import.meta.env.BASE_URL}images/server_tangle.jpg`,
     `${import.meta.env.BASE_URL}images/glowing_charts.jpg`,
-    `${import.meta.env.BASE_URL}images/heavy_binders.jpg`,
+    `${import.meta.env.BASE_URL}images/office_files_mess.jpg`,
   ];
 
   return (
