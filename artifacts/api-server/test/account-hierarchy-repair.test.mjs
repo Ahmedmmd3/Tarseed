@@ -281,6 +281,24 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   assert.equal(movedCycleAccount.response.status, 200, JSON.stringify(movedCycleAccount.payload));
   assert.equal(movedCycleAccount.payload.parentId, parent.id);
 
+  const auditDetailsFor = async (account) => {
+    const logs = (await repairAuditLogs()).filter((log) => log.entity === String(account.id));
+    assert.equal(logs.length, 1);
+    return JSON.parse(logs[0].details);
+  };
+  assert.deepEqual(await auditDetailsFor(orphan), {
+    issueKind: "missing_parent",
+    repairType: "detach",
+    oldParentId: 999999999,
+    newParentId: null,
+  });
+  assert.deepEqual(await auditDetailsFor(cycleA), {
+    issueKind: "cycle",
+    repairType: "reparent",
+    oldParentId: cycleB.id,
+    newParentId: parent.id,
+  });
+
   const issuesAfterBreakingCycle = await request("/accounting/account-hierarchy/issues", { cookie: ownerCookie });
   assert.ok(!issuesAfterBreakingCycle.payload.issues.some((issue) => issue.kind === "cycle" && issue.cycleAccountIds.some(
     (accountId) => [cycleA.id, cycleB.id].includes(accountId),
@@ -314,6 +332,12 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   assert.equal(branchRepairAuditLogs[0].organizationId, organizationId);
   assert.equal(branchRepairAuditLogs[0].actorId, ownerId);
   assert.equal(branchRepairAuditLogs[0].action, "account_hierarchy_repaired");
+  assert.deepEqual(JSON.parse(branchRepairAuditLogs[0].details), {
+    issueKind: "type_mismatch",
+    repairType: "match_parent_type",
+    oldParentId: parent.id,
+    newParentId: parent.id,
+  });
 
   const replayedRepair = await request("/accounting/account-hierarchy/repair", {
     method: "POST",

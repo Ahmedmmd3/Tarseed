@@ -1210,6 +1210,20 @@ router.post("/accounting/account-hierarchy/repair", requireAuth, requireSubscrip
             : issue.kind === "cycle" && issue.cycleAccountIds.includes(accountId)
         ));
         if (unresolved) throw new MutationRejected(409, "لم يؤدِ الاختيار إلى إزالة الخلل من شجرة الحسابات.");
+        const parsedOldParentId = parseAccountParentId(account.data.parent);
+        await tx.insert(teamAuditLogsTable).values({
+          organizationId: currentAuth.organizationId,
+          actorId: currentAuth.id,
+          actorName: currentAuth.name || currentAuth.email,
+          action: "account_hierarchy_repaired",
+          entity: String(accountId),
+          details: JSON.stringify({
+            issueKind: repairableIssue.kind,
+            repairType: requestedParentId === null ? "detach" : "reparent",
+            oldParentId: parsedOldParentId === undefined ? null : parsedOldParentId,
+            newParentId: requestedParentId,
+          }),
+        });
         return {
           auth: currentAuth,
           repaired: [accountId],
@@ -1253,11 +1267,21 @@ router.post("/accounting/account-hierarchy/repair", requireAuth, requireSubscrip
       if (findAccountHierarchyIssues(repairedRows).some((issue) => descendants.has(issue.accountId))) {
         throw new MutationRejected(409, "تعذر إصلاح الفرع دون إبقاء تعارض داخله.");
       }
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: currentAuth.organizationId,
+        actorId: currentAuth.id,
+        actorName: currentAuth.name || currentAuth.email,
+        action: "account_hierarchy_repaired",
+        entity: String(accountId),
+        details: JSON.stringify({
+          issueKind: "type_mismatch",
+          repairType: "match_parent_type",
+          oldParentId: parentId,
+          newParentId: parentId,
+        }),
+      });
       return { auth: currentAuth, repaired: [...descendants], targetType, parentId, repairKind: "type_mismatch" as const };
     });
-    if (result.repaired.length > 0) {
-      await audit(result.auth, response, "account_hierarchy_repaired", String(accountId));
-    }
     response.json({
       repairedAccountIds: result.repaired,
       targetType: result.targetType,
