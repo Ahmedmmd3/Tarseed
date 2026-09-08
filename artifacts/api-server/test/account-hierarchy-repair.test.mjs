@@ -48,6 +48,9 @@ test("يفحص المنطق المشترك الأب النشط والتصنيف 
 let invalidAncestorParent;
 let cycleA;
 let cycleB;
+let longCycleA;
+let longCycleB;
+let longCycleC;
 
 async function request(path, { method = "GET", body, cookie } = {}) {
   const response = await fetch(`${origin}/api${path}`, {
@@ -192,6 +195,21 @@ before(async () => {
   await db.update(erpRecordsTable).set({
     data: { ...cycleA.data, parent: String(cycleB.id) },
   }).where(eq(erpRecordsTable.id, cycleA.id));
+  longCycleA = await createRecord("accounts", {
+    code: `T-${suffix}-12`, name: "طرف الدورة الطويلة الأول", type: "asset",
+    openingBalance: 0, balance: 0, status: "active",
+  });
+  longCycleB = await createRecord("accounts", {
+    code: `T-${suffix}-13`, name: "طرف الدورة الطويلة الثاني", type: "asset", parent: String(longCycleA.id),
+    openingBalance: 0, balance: 0, status: "active",
+  });
+  longCycleC = await createRecord("accounts", {
+    code: `T-${suffix}-14`, name: "طرف الدورة الطويلة الثالث", type: "asset", parent: String(longCycleB.id),
+    openingBalance: 0, balance: 0, status: "active",
+  });
+  await db.update(erpRecordsTable).set({
+    data: { ...longCycleA.data, parent: String(longCycleC.id) },
+  }).where(eq(erpRecordsTable.id, longCycleA.id));
 });
 
 after(async () => {
@@ -454,8 +472,15 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   assert.ok(!issuesBefore.payload.issues.some((issue) => issue.kind === "inactive_parent"));
   const [invalidParentBeforeRepair] = await db.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, invalidParent.id));
   assert.equal(invalidParentBeforeRepair.data.parent, "legacy-parent");
-  const cycleIssue = issuesBefore.payload.issues.find((issue) => issue.kind === "cycle");
+  const cycleIssue = issuesBefore.payload.issues.find((issue) => issue.kind === "cycle"
+    && issue.cycleAccountIds.includes(cycleA.id));
   assert.deepEqual([...cycleIssue.cycleAccountIds].sort((a, b) => a - b), [cycleA.id, cycleB.id].sort((a, b) => a - b));
+  const longCycleIssue = issuesBefore.payload.issues.find((issue) => issue.kind === "cycle"
+    && issue.cycleAccountIds.includes(longCycleA.id));
+  assert.deepEqual(
+    [...longCycleIssue.cycleAccountIds].sort((a, b) => a - b),
+    [longCycleA.id, longCycleB.id, longCycleC.id].sort((a, b) => a - b),
+  );
 
   const invalidMove = await request("/accounting/account-hierarchy/repair", {
     method: "POST",
@@ -525,9 +550,44 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     newParentId: parent.id,
   });
 
+  const repairedLongCycle = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: longCycleA.id, parentId: parent.id, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(repairedLongCycle.response.status, 200, JSON.stringify(repairedLongCycle.payload));
+  assert.equal(repairedLongCycle.payload.parentId, parent.id);
+
+  const longCycleRowsAfterRepair = await db.select().from(erpRecordsTable).where(inArray(
+    erpRecordsTable.id,
+    [longCycleA.id, longCycleB.id, longCycleC.id],
+  ));
+  const longCycleAfterRepairById = new Map(longCycleRowsAfterRepair.map((row) => [row.id, row.data]));
+  assert.equal(longCycleAfterRepairById.get(longCycleA.id).parent, String(parent.id));
+  assert.equal(
+    longCycleAfterRepairById.get(longCycleB.id).parent,
+    String(longCycleA.id),
+    "يجب أن يبقى رابط الطرف الثاني غير المعدل كما هو",
+  );
+  assert.equal(
+    longCycleAfterRepairById.get(longCycleC.id).parent,
+    String(longCycleB.id),
+    "يجب أن يبقى رابط الطرف الثالث غير المعدل كما هو",
+  );
+  assert.ok(!findAccountHierarchyIssues(longCycleRowsAfterRepair).some((issue) => issue.kind === "cycle"));
+  assert.deepEqual(await auditDetailsFor(longCycleA), {
+    issueKind: "cycle",
+    repairType: "reparent",
+    oldParentId: longCycleC.id,
+    newParentId: parent.id,
+  });
+
   const issuesAfterBreakingCycle = await request("/accounting/account-hierarchy/issues", { cookie: ownerCookie });
   assert.ok(!issuesAfterBreakingCycle.payload.issues.some((issue) => issue.kind === "cycle" && issue.cycleAccountIds.some(
     (accountId) => [cycleA.id, cycleB.id].includes(accountId),
+  )));
+  assert.ok(!issuesAfterBreakingCycle.payload.issues.some((issue) => issue.kind === "cycle" && issue.cycleAccountIds.some(
+    (accountId) => [longCycleA.id, longCycleB.id, longCycleC.id].includes(accountId),
   )));
   assert.ok(issuesAfterBreakingCycle.payload.issues.some(
     (issue) => issue.kind === "type_mismatch" && issue.accountId === cycleB.id,
