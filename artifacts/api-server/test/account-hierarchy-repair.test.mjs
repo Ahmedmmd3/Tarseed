@@ -88,6 +88,30 @@ test("يفحص المنطق المشترك الأب النشط والتصنيف 
     && [...issue.cycleAccountIds].sort((left, right) => left - right).join(",") === "4,5"));
 });
 
+test("يثبت ترتيب البلاغات عند تغير ترتيب صفوف الحسابات", () => {
+  const rows = [
+    { id: 30, data: { code: "30", name: "أب موقوف", type: "asset", status: "inactive", parent: null } },
+    { id: 20, data: { code: "20", name: "أب مختلف", type: "liability", status: "active", parent: null } },
+    { id: 10, data: { code: "10", name: "مشكلتان", type: "asset", status: "active", parent: "20" } },
+    { id: 40, data: { code: "40", name: "تحت أب موقوف", type: "asset", status: "active", parent: "30" } },
+    { id: 50, data: { code: "50", name: "أب مفقود", type: "asset", status: "active", parent: "999" } },
+    { id: 60, data: { code: "60", name: "رابط مشوه", type: "asset", status: "active", parent: "legacy" } },
+    { id: 70, data: { code: "70", name: "دورة", type: "asset", status: "active", parent: "70" } },
+  ];
+  const issueOrder = (orderedRows) => findAccountHierarchyIssues(orderedRows)
+    .map((issue) => `${issue.accountId}:${issue.kind}`);
+  const expectedOrder = [
+    "10:type_mismatch",
+    "40:inactive_parent",
+    "50:missing_parent",
+    "60:invalid_parent",
+    "70:cycle",
+  ];
+
+  assert.deepEqual(issueOrder(rows), expectedOrder);
+  assert.deepEqual(issueOrder([...rows].reverse()), expectedOrder);
+});
+
 test("يعرض الحساب الذي يشير إلى نفسه كدورة واحدة قابلة للفصل", { timeout: 500 }, () => {
   const selfParentId = 2;
   const rows = [

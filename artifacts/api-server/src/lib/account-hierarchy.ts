@@ -48,6 +48,14 @@ export type AccountHierarchyIssue =
     cycleAccounts: Array<{ accountId: number; accountCode: string; accountName: string }>;
   };
 
+const ACCOUNT_HIERARCHY_ISSUE_KIND_ORDER: Record<AccountHierarchyIssue["kind"], number> = {
+  invalid_parent: 0,
+  missing_parent: 1,
+  inactive_parent: 2,
+  type_mismatch: 3,
+  cycle: 4,
+};
+
 export function parseAccountParentId(parent: unknown): number | null | undefined {
   if (parent == null || parent === "") return null;
   if (typeof parent === "number") {
@@ -137,5 +145,8 @@ export function findAccountHierarchyIssues(rows: AccountHierarchyRow[]): Account
     }
     for (const accountId of path) resolvedAccounts.add(accountId);
   }
-  return issues;
+  return issues.sort((left, right) => (
+    left.accountId - right.accountId
+    || ACCOUNT_HIERARCHY_ISSUE_KIND_ORDER[left.kind] - ACCOUNT_HIERARCHY_ISSUE_KIND_ORDER[right.kind]
+  ));
 }
