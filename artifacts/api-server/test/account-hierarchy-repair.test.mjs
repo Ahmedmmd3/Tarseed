@@ -85,6 +85,59 @@ test("يكتشف دورة شديدة الطول مرة واحدة ويكسرها
     );
   }
 });
+
+test("لا يكرر بلاغ الدورة عند اتصال سلاسل طويلة كثيرة بها", { timeout: 1_500 }, () => {
+  const cycleAccountIds = [1, 2, 3];
+  const rows = cycleAccountIds.map((id, index) => ({
+    id,
+    data: {
+      code: `SHARED-CYCLE-${id}`,
+      name: `طرف الدورة المشتركة ${id}`,
+      type: "asset",
+      status: "active",
+      parent: String(cycleAccountIds[(index + 1) % cycleAccountIds.length]),
+    },
+  }));
+  const branchCount = 200;
+  const branchLength = 50;
+  const branchAccountIds = [];
+  let nextId = cycleAccountIds.length + 1;
+
+  for (let branchIndex = 0; branchIndex < branchCount; branchIndex += 1) {
+    let parentId = cycleAccountIds[branchIndex % cycleAccountIds.length];
+    const branchRows = [];
+    for (let depth = 0; depth < branchLength; depth += 1) {
+      const id = nextId;
+      nextId += 1;
+      branchAccountIds.push(id);
+      branchRows.push({
+        id,
+        data: {
+          code: `SHARED-BRANCH-${branchIndex + 1}-${depth + 1}`,
+          name: `حساب خارج الدورة ${branchIndex + 1}-${depth + 1}`,
+          type: "asset",
+          status: "active",
+          parent: String(parentId),
+        },
+      });
+      parentId = id;
+    }
+    rows.unshift(...branchRows.reverse());
+  }
+
+  const cycleIssues = findAccountHierarchyIssues(rows).filter((issue) => issue.kind === "cycle");
+
+  assert.equal(cycleIssues.length, 1, "يجب الإبلاغ عن الدورة المشتركة مرة واحدة فقط");
+  assert.deepEqual(
+    [...cycleIssues[0].cycleAccountIds].sort((left, right) => left - right),
+    cycleAccountIds,
+  );
+  assert.ok(
+    cycleIssues[0].cycleAccountIds.every((accountId) => !branchAccountIds.includes(accountId)),
+    "يجب ألا تُحسب حسابات السلاسل المؤدية إلى الدورة ضمن أعضاء الدورة",
+  );
+});
+
 let invalidAncestorParent;
 let cycleA;
 let cycleB;
