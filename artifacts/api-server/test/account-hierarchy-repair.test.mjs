@@ -138,6 +138,69 @@ test("لا يكرر بلاغ الدورة عند اتصال سلاسل طويل�
   );
 });
 
+test("يفصل بلاغات عدة دورات مع سلاسل تتجه إلى كل دورة", { timeout: 1_500 }, () => {
+  const expectedCycles = [
+    [1, 2],
+    [3, 4, 5],
+    [6, 7, 8, 9],
+  ];
+  const rows = expectedCycles.flatMap((cycleAccountIds, cycleIndex) => (
+    cycleAccountIds.map((id, accountIndex) => ({
+      id,
+      data: {
+        code: `SEPARATE-CYCLE-${cycleIndex + 1}-${accountIndex + 1}`,
+        name: `طرف الدورة المنفصلة ${cycleIndex + 1}-${accountIndex + 1}`,
+        type: "asset",
+        status: "active",
+        parent: String(cycleAccountIds[(accountIndex + 1) % cycleAccountIds.length]),
+      },
+    }))
+  ));
+  const chainAccountIds = new Set();
+  let nextId = 10;
+
+  for (let cycleIndex = 0; cycleIndex < expectedCycles.length; cycleIndex += 1) {
+    for (let chainIndex = 0; chainIndex < 80; chainIndex += 1) {
+      let parentId = expectedCycles[cycleIndex][chainIndex % expectedCycles[cycleIndex].length];
+      const chainRows = [];
+      for (let depth = 0; depth < 30; depth += 1) {
+        const id = nextId;
+        nextId += 1;
+        chainAccountIds.add(id);
+        chainRows.push({
+          id,
+          data: {
+            code: `SEPARATE-CHAIN-${cycleIndex + 1}-${chainIndex + 1}-${depth + 1}`,
+            name: `حساب سلسلة الدورة ${cycleIndex + 1}-${chainIndex + 1}-${depth + 1}`,
+            type: "asset",
+            status: "active",
+            parent: String(parentId),
+          },
+        });
+        parentId = id;
+      }
+      rows.unshift(...chainRows.reverse());
+    }
+  }
+
+  const cycleIssues = findAccountHierarchyIssues(rows).filter((issue) => issue.kind === "cycle");
+  const actualCycleKeys = cycleIssues.map((issue) => (
+    [...issue.cycleAccountIds].sort((left, right) => left - right).join(",")
+  )).sort();
+  const expectedCycleKeys = expectedCycles.map((cycle) => [...cycle].sort(
+    (left, right) => left - right,
+  ).join(",")).sort();
+
+  assert.equal(cycleIssues.length, expectedCycles.length, "يجب إرجاع بلاغ واحد لكل دورة منفصلة");
+  assert.deepEqual(actualCycleKeys, expectedCycleKeys, "يجب ألا تندمج أعضاء الدورات أو تسقط دورة");
+  assert.ok(
+    cycleIssues.every((issue) => issue.cycleAccountIds.every(
+      (accountId) => !chainAccountIds.has(accountId),
+    )),
+    "يجب ألا تدخل حسابات السلاسل ضمن أعضاء أي دورة",
+  );
+});
+
 let invalidAncestorParent;
 let cycleA;
 let cycleB;
