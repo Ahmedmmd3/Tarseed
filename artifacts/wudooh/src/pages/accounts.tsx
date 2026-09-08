@@ -46,6 +46,7 @@ export default function Accounts() {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [type, setType] = useState<AccountType>('asset');
+  const [accountLevel, setAccountLevel] = useState<'primary' | 'subaccount'>('primary');
   const [parent, setParent] = useState<string>('');
   const [openingAmount, setOpeningAmount] = useState('');
   const [openingSide, setOpeningSide] = useState<'debit' | 'credit'>('debit');
@@ -95,10 +96,33 @@ export default function Accounts() {
     return [account.id, Number(account.openingBalance ?? 0) + journalMovement];
   })), [accounts, journals]);
 
+  const excludedParentIds = useMemo(() => {
+    if (!editingAccount) return new Set<string>();
+    const excluded = new Set<string>([editingAccount.id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const account of accounts) {
+        if (account.parent && excluded.has(account.parent) && !excluded.has(account.id)) {
+          excluded.add(account.id);
+          changed = true;
+        }
+      }
+    }
+    return excluded;
+  }, [accounts, editingAccount]);
+
+  const availableParents = useMemo(() => accounts
+    .filter((account) => account.status === 'active'
+      && account.type === type
+      && !excludedParentIds.has(account.id))
+    .sort((left, right) => left.code.localeCompare(right.code, 'en')), [accounts, excludedParentIds, type]);
+
   const resetForm = () => {
     setCode('');
     setName('');
     setType('asset');
+    setAccountLevel('primary');
     setParent('');
     setOpeningAmount('');
     setOpeningSide('debit');
@@ -116,6 +140,7 @@ export default function Accounts() {
     setCode(account.code);
     setName(account.name);
     setType(account.type);
+    setAccountLevel(account.parent ? 'subaccount' : 'primary');
     setParent(account.parent ?? '');
     setIsDialogOpen(true);
   };
@@ -132,6 +157,10 @@ export default function Accounts() {
       toast({ title: 'اسم الحساب مطلوب', description: 'أدخل اسماً واضحاً للحساب.', variant: 'destructive' });
       return;
     }
+    if (accountLevel === 'subaccount' && !parent) {
+      toast({ title: 'اختر الحساب الأساسي', description: 'الحساب الفرعي يجب أن يكون تابعاً لحساب أساسي أو فرعي موجود.', variant: 'destructive' });
+      return;
+    }
     const duplicate = accounts.some((account) => account.code === normalizedCode && account.id !== editingAccount?.id);
     if (duplicate) {
       toast({ title: 'رقم الحساب مستخدم', description: 'اختر رقماً مختلفاً لتجنب تكرار الحسابات.', variant: 'destructive' });
@@ -140,14 +169,14 @@ export default function Accounts() {
 
     try {
       if (editingAccount) {
-        await updateAccount(editingAccount.id, { code: normalizedCode, name: normalizedName, type, parent: parent || null });
+        await updateAccount(editingAccount.id, { code: normalizedCode, name: normalizedName, type, parent: accountLevel === 'subaccount' ? parent : null });
         const amount = Number(openingAmount);
         if (amount > 0) {
           await addOpeningBalance({ accountId: editingAccount.id, counterAccountId, amount, side: openingSide, date: openingDate, mode: 'correction' });
         }
         toast({ title: 'تم تحديث الحساب', description: `تم حفظ التعديلات على ${normalizedName}.` });
       } else {
-        const created = await addAccount({ code: normalizedCode, name: normalizedName, type, parent: parent || null, openingBalance: 0, balance: 0, status: 'active' });
+        const created = await addAccount({ code: normalizedCode, name: normalizedName, type, parent: accountLevel === 'subaccount' ? parent : null, openingBalance: 0, balance: 0, status: 'active' });
         const amount = Number(openingAmount);
         if (amount > 0) {
           await addOpeningBalance({ accountId: created.id, counterAccountId, amount, side: openingSide, date: openingDate });
@@ -195,7 +224,7 @@ export default function Accounts() {
               حساب جديد
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="text-xl">{editingAccount ? 'تعديل الحساب' : 'إضافة حساب جديد'}</DialogTitle>
             </DialogHeader>
@@ -205,43 +234,66 @@ export default function Accounts() {
                 <Input id="code" className="font-mono text-left" dir="ltr" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="1001" required data-testid="input-account-code" />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="parent" className="text-sm font-semibold">الحساب الأب</Label>
-                <select id="parent" value={parent} onChange={(event) => setParent(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm" data-testid="select-account-parent">
-                  <option value="">حساب رئيسي</option>
-                  {accounts.filter((account) => account.id !== editingAccount?.id && account.status === 'active' && account.type === type).sort((a, b) => a.code.localeCompare(b.code, 'en')).map((account) => (
-                    <option key={account.id} value={account.id}>{account.code} — {account.name}</option>
-                  ))}
-                </select>
-              </div>
-              {(
-                <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <Label className="font-semibold">{editingAccount ? 'تصحيح الرصيد الافتتاحي اختياري' : 'رصيد افتتاحي اختياري'}</Label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Input type="number" min="0" step="0.01" value={openingAmount} onChange={(event) => setOpeningAmount(event.target.value)} placeholder="المبلغ" data-testid="input-opening-amount" />
-                    <select value={openingSide} onChange={(event) => setOpeningSide(event.target.value as 'debit' | 'credit')} className="h-10 rounded-md border border-input bg-white px-3 text-sm" data-testid="select-opening-side">
-                      <option value="debit">مدين</option><option value="credit">دائن</option>
-                    </select>
-                  </div>
-                  <Input type="date" value={openingDate} onChange={(event) => setOpeningDate(event.target.value)} data-testid="input-opening-date" />
-                  <select value={counterAccountId} onChange={(event) => setCounterAccountId(event.target.value)} required={Number(openingAmount) > 0} className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm" data-testid="select-opening-counter-account">
-                    <option value="">اختر الحساب المقابل</option>
-                    {accounts.filter((account) => account.status === 'active').map((account) => <option key={account.id} value={account.id}>{account.code} — {account.name}</option>)}
-                  </select>
-                  <p className="text-xs text-slate-500">{editingAccount ? 'أدخل الرصيد النهائي المطلوب؛ سيُرحّل قيد بالفرق فقط.' : 'يُنشأ قيد افتتاحي مرحّل ومتوازن. أي تغيير لاحق يتم بقيد تصحيح مستقل.'}</p>
-                </div>
-              )}
-              <div className="space-y-2">
                 <Label htmlFor="name" className="text-sm font-semibold">اسم الحساب</Label>
-                <Input id="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="مثال: صندوق الرياض" required data-testid="input-account-name" />
+                <Input id="name" value={name} onChange={(event) => setName(event.target.value)} placeholder="مثال: بنك الراجحي" required data-testid="input-account-name" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="type" className="text-sm font-semibold">تصنيف الحساب</Label>
                 <div className="relative">
-                  <select id="type" value={type} onChange={(event) => setType(event.target.value as AccountType)} className="flex h-10 w-full appearance-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" data-testid="select-account-type">
+                  <select id="type" value={type} onChange={(event) => {
+                    setType(event.target.value as AccountType);
+                    setParent('');
+                  }} className="flex h-10 w-full appearance-none rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50" data-testid="select-account-type">
                     {TYPE_ORDER.map((key) => <option key={key} value={key}>{TYPE_LABELS[key]}</option>)}
                   </select>
                   <LayoutGrid className="absolute left-3 top-3 h-4 w-4 text-slate-400 pointer-events-none" />
                 </div>
+              </div>
+              <fieldset className="space-y-2">
+                <legend className="text-sm font-semibold">مستوى الحساب</legend>
+                <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1" data-testid="account-level-options">
+                  <Button type="button" variant={accountLevel === 'primary' ? 'default' : 'ghost'} onClick={() => {
+                    setAccountLevel('primary');
+                    setParent('');
+                  }} data-testid="button-account-primary">
+                    حساب أساسي
+                  </Button>
+                  <Button type="button" variant={accountLevel === 'subaccount' ? 'default' : 'ghost'} onClick={() => setAccountLevel('subaccount')} data-testid="button-account-subaccount">
+                    حساب فرعي
+                  </Button>
+                </div>
+                <p className="text-xs text-slate-500">
+                  {accountLevel === 'primary'
+                    ? 'يظهر الحساب في المستوى الأعلى من دليل الحسابات.'
+                    : 'يظهر الحساب تحت حساب آخر، مثل بنك الراجحي تحت حساب البنك.'}
+                </p>
+              </fieldset>
+              {accountLevel === 'subaccount' && (
+                <div className="space-y-2">
+                  <Label htmlFor="parent" className="text-sm font-semibold">الحساب التابع له</Label>
+                  <select id="parent" value={parent} onChange={(event) => setParent(event.target.value)} required className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm" data-testid="select-account-parent">
+                    <option value="">اختر الحساب الأساسي</option>
+                    {availableParents.map((account) => (
+                      <option key={account.id} value={account.id}>{account.code} — {account.name}</option>
+                    ))}
+                  </select>
+                  {availableParents.length === 0 && <p className="text-xs text-amber-700">أنشئ أولاً حساباً أساسياً نشطاً من التصنيف نفسه.</p>}
+                </div>
+              )}
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <Label className="font-semibold">{editingAccount ? 'تصحيح الرصيد الافتتاحي اختياري' : 'رصيد افتتاحي اختياري'}</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input type="number" min="0" step="0.01" value={openingAmount} onChange={(event) => setOpeningAmount(event.target.value)} placeholder="المبلغ" data-testid="input-opening-amount" />
+                  <select value={openingSide} onChange={(event) => setOpeningSide(event.target.value as 'debit' | 'credit')} className="h-10 rounded-md border border-input bg-white px-3 text-sm" data-testid="select-opening-side">
+                    <option value="debit">مدين</option><option value="credit">دائن</option>
+                  </select>
+                </div>
+                <Input type="date" value={openingDate} onChange={(event) => setOpeningDate(event.target.value)} data-testid="input-opening-date" />
+                <select value={counterAccountId} onChange={(event) => setCounterAccountId(event.target.value)} required={Number(openingAmount) > 0} className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm" data-testid="select-opening-counter-account">
+                  <option value="">اختر الحساب المقابل</option>
+                  {accounts.filter((account) => account.status === 'active').map((account) => <option key={account.id} value={account.id}>{account.code} — {account.name}</option>)}
+                </select>
+                <p className="text-xs text-slate-500">{editingAccount ? 'أدخل الرصيد النهائي المطلوب؛ سيُرحّل قيد بالفرق فقط.' : 'يُنشأ قيد افتتاحي مرحّل ومتوازن. أي تغيير لاحق يتم بقيد تصحيح مستقل.'}</p>
               </div>
               <DialogFooter className="pt-2">
                 <DialogClose asChild><Button type="button" variant="outline">إلغاء</Button></DialogClose>
@@ -310,7 +362,10 @@ export default function Accounts() {
                                   {collapsed.has(account.id) ? <ChevronLeft className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                                 </Button>
                               ) : <span className="inline-block w-7 shrink-0" />}
-                              <h4 className="min-w-0 break-words text-base font-bold leading-6 text-slate-900">{account.name}</h4>
+                              <div className="min-w-0">
+                                <h4 className="break-words text-base font-bold leading-6 text-slate-900">{account.name}</h4>
+                                <span className="text-[11px] text-slate-400">{account.parent ? 'حساب فرعي' : 'حساب أساسي'}</span>
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -360,6 +415,9 @@ export default function Accounts() {
                                   </Button>
                                 ) : <span className="inline-block w-7" />}
                                 <span>{account.name}</span>
+                                <Badge variant="outline" className="mr-2 px-1.5 py-0 text-[10px] font-normal text-slate-500">
+                                  {account.parent ? 'فرعي' : 'أساسي'}
+                                </Badge>
                               </div>
                             </TableCell>
                             <TableCell className="text-left">
