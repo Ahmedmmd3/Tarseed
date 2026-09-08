@@ -49,6 +49,7 @@ const actionLabels: Record<string, string> = {
   accounts_created: 'إنشاء حساب',
   accounts_updated: 'تعديل حساب',
   accounts_deleted: 'حذف حساب',
+  account_hierarchy_repaired: 'إصلاح شجرة الحسابات',
   receivables_created: 'إنشاء ذمة',
   receivables_updated: 'تحديث ذمة',
   receivables_deleted: 'حذف ذمة',
@@ -124,6 +125,56 @@ function parseJournalAdjustmentAudit(log: AuditLog): JournalAdjustmentAudit | nu
   }
 }
 
+type AccountHierarchyRepairAudit = {
+  issueKind: 'missing_parent' | 'invalid_parent' | 'cycle' | 'type_mismatch';
+  repairType: 'detach' | 'reparent' | 'match_parent_type';
+  oldParentId: number | null;
+  newParentId: number | null;
+};
+
+function parseAccountHierarchyRepairAudit(log: AuditLog): AccountHierarchyRepairAudit | null {
+  if (log.action !== 'account_hierarchy_repaired' || !log.details) return null;
+  try {
+    const parsed = JSON.parse(log.details) as Record<string, unknown>;
+    const issueKinds = ['missing_parent', 'invalid_parent', 'cycle', 'type_mismatch'];
+    const repairTypes = ['detach', 'reparent', 'match_parent_type'];
+    const validId = (value: unknown) => value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
+    if (
+      !parsed
+      || typeof parsed !== 'object'
+      || !issueKinds.includes(String(parsed.issueKind))
+      || !repairTypes.includes(String(parsed.repairType))
+      || !validId(parsed.oldParentId)
+      || !validId(parsed.newParentId)
+    ) return null;
+    return parsed as AccountHierarchyRepairAudit;
+  } catch {
+    return null;
+  }
+}
+
+function accountHierarchyRepairDescription(log: AuditLog): string | null {
+  if (log.action !== 'account_hierarchy_repaired') return null;
+  const accountId = /^\d+$/.test(log.entity) ? log.entity : null;
+  const repair = parseAccountHierarchyRepairAudit(log);
+  const account = accountId ? `الحساب رقم ${accountId}` : 'الحساب';
+  if (!repair) return `تم إصلاح ارتباط ${account} في شجرة الحسابات.`;
+  if (repair.repairType === 'match_parent_type') {
+    return repair.newParentId === null
+      ? `تم تصحيح تصنيف ${account} ليتوافق مع موقعه في شجرة الحسابات.`
+      : `تم تصحيح تصنيف ${account} ليتوافق مع الحساب الأب رقم ${repair.newParentId}.`;
+  }
+  if (repair.repairType === 'detach') {
+    return repair.oldParentId === null
+      ? `تم فصل ${account} عن ارتباط أب غير صالح.`
+      : `تم فصل ${account} عن الحساب الأب السابق رقم ${repair.oldParentId}.`;
+  }
+  const previousParent = repair.oldParentId === null ? 'دون حساب أب سابق' : `من الحساب الأب رقم ${repair.oldParentId}`;
+  return repair.newParentId === null
+    ? `تم نقل ${account} ${previousParent}.`
+    : `تم نقل ${account} ${previousParent} إلى الحساب الأب رقم ${repair.newParentId}.`;
+}
+
 function iconForCategory(category: Exclude<LogCategory, 'all'>) {
   if (category === 'sales') return ShoppingCart;
   if (category === 'accounting') return BookOpen;
@@ -172,7 +223,8 @@ export default function ActivityLog() {
     return logs.filter((log) => {
       const logCategory = categoryForAction(log.action);
       const matchesCategory = category === 'all' || logCategory === category;
-      const haystack = `${labelForAction(log.action)} ${log.actorName} ${log.entity} ${log.details}`.toLocaleLowerCase('ar');
+      const visibleDetails = accountHierarchyRepairDescription(log) ?? log.details;
+      const haystack = `${labelForAction(log.action)} ${log.actorName} ${log.entity} ${visibleDetails}`.toLocaleLowerCase('ar');
       return matchesCategory && (!query || haystack.includes(query));
     });
   }, [category, logs, search]);
@@ -263,6 +315,7 @@ function ActivityRow({ log }: { log: AuditLog }) {
   const Icon = iconForCategory(category);
   const date = new Date(log.createdAt);
   const adjustment = parseJournalAdjustmentAudit(log);
+  const hierarchyRepairDescription = accountHierarchyRepairDescription(log);
   return (
     <div className="flex flex-col gap-4 px-5 py-4 transition hover:bg-slate-50 sm:flex-row sm:items-center" data-testid={`activity-row-${log.id}`}>
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600"><Icon className="h-5 w-5" aria-hidden="true" /></span>
@@ -272,9 +325,10 @@ function ActivityRow({ log }: { log: AuditLog }) {
           <Badge variant="outline">{categoryLabels[category]}</Badge>
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          {adjustment
+          {hierarchyRepairDescription
+            ?? (adjustment
             ? `القيد الأصلي ${adjustment.original?.number ?? log.entity} — السبب: ${adjustment.reason ?? 'غير محدد'}`
-            : log.details || (log.entity ? `المرجع: ${log.entity}` : 'تم تسجيل العملية بنجاح.')}
+            : log.details || (log.entity ? `المرجع: ${log.entity}` : 'تم تسجيل العملية بنجاح.'))}
         </p>
         {adjustment && (
           <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600" data-testid={`journal-audit-details-${log.id}`}>
