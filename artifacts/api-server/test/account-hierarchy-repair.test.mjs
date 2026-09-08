@@ -264,6 +264,50 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${auditFailureFunction}()`));
   }
 
+  const reparentAuditFailureFunction = `fail_hierarchy_reparent_audit_${randomUUID().replaceAll("-", "")}`;
+  const reparentAuditFailureTrigger = `${reparentAuditFailureFunction}_trigger`;
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${reparentAuditFailureFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.organization_id = ${organizationId}
+          AND NEW.action = 'account_hierarchy_repaired'
+          AND NEW.entity = '${orphan.id}' THEN
+          RAISE EXCEPTION 'تعذر سجل تدقيق نقل الحساب عمداً';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${reparentAuditFailureTrigger}
+      BEFORE INSERT ON team_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION ${reparentAuditFailureFunction}();
+    `));
+
+    const failedReparent = await request("/accounting/account-hierarchy/repair", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: { accountId: orphan.id, parentId: parent.id, confirmation: "REPARENT_ACCOUNT" },
+    });
+    assert.equal(failedReparent.response.status, 500);
+
+    const [accountAfterReparentAuditFailure] = await db.select().from(erpRecordsTable)
+      .where(eq(erpRecordsTable.id, orphan.id));
+    assert.equal(
+      accountAfterReparentAuditFailure.data.parent,
+      "999999999",
+      "يجب أن يبقى رابط الأب القديم عند فشل سجل تدقيق النقل",
+    );
+    assert.equal(
+      (await repairAuditLogs()).filter((log) => log.entity === String(orphan.id)).length,
+      0,
+      "لا يجب حفظ سجل إصلاح جزئي عند فشل نقل الحساب",
+    );
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${reparentAuditFailureTrigger} ON team_audit_logs`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${reparentAuditFailureFunction}()`));
+  }
+
   const memberIssues = await request("/accounting/account-hierarchy/issues", { cookie: memberCookie });
   assert.equal(memberIssues.response.status, 403);
   assert.match(memberIssues.payload.error, /مالك/);
