@@ -45,6 +45,46 @@ test("يفحص المنطق المشترك الأب النشط والتصنيف 
   assert.ok(issues.some((issue) => issue.kind === "cycle"
     && [...issue.cycleAccountIds].sort((left, right) => left - right).join(",") === "4,5"));
 });
+
+test("يكتشف دورة شديدة الطول مرة واحدة ويكسرها دون تغيير بقية الروابط", { timeout: 1_500 }, () => {
+  const cycleSize = 5_000;
+  const rows = Array.from({ length: cycleSize }, (_, index) => ({
+    id: index + 1,
+    data: {
+      code: `LONG-${index + 1}`,
+      name: `حساب الدورة الطويلة ${index + 1}`,
+      type: "asset",
+      status: "active",
+      parent: String(index === cycleSize - 1 ? 1 : index + 2),
+    },
+  }));
+  const originalParents = new Map(rows.map((row) => [row.id, row.data.parent]));
+
+  const issuesBeforeRepair = findAccountHierarchyIssues(rows);
+  const cycleIssues = issuesBeforeRepair.filter((issue) => issue.kind === "cycle");
+  assert.equal(cycleIssues.length, 1, "يجب الإبلاغ عن الدورة الطويلة مرة واحدة فقط");
+  assert.equal(cycleIssues[0].cycleAccountIds.length, cycleSize);
+  assert.equal(new Set(cycleIssues[0].cycleAccountIds).size, cycleSize);
+  assert.deepEqual(
+    [...cycleIssues[0].cycleAccountIds].sort((left, right) => left - right),
+    Array.from({ length: cycleSize }, (_, index) => index + 1),
+  );
+
+  rows[cycleSize - 1] = {
+    ...rows[cycleSize - 1],
+    data: { ...rows[cycleSize - 1].data, parent: null },
+  };
+
+  assert.ok(!findAccountHierarchyIssues(rows).some((issue) => issue.kind === "cycle"));
+  assert.equal(rows[cycleSize - 1].data.parent, null);
+  for (const row of rows.slice(0, -1)) {
+    assert.equal(
+      row.data.parent,
+      originalParents.get(row.id),
+      `يجب ألا يتغير رابط الحساب ${row.id} عند كسر طرف واحد`,
+    );
+  }
+});
 let invalidAncestorParent;
 let cycleA;
 let cycleB;

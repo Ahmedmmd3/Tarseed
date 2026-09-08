@@ -95,11 +95,14 @@ export function findAccountHierarchyIssues(rows: AccountHierarchyRow[]): Account
   }
 
   const reportedCycles = new Set<string>();
+  const resolvedAccounts = new Set<number>();
   for (const row of rows) {
+    if (resolvedAccounts.has(row.id)) continue;
     const path: number[] = [];
     const pathIndex = new Map<number, number>();
     let cursor: number | null = row.id;
     while (cursor !== null && accounts.has(cursor)) {
+      if (resolvedAccounts.has(cursor)) break;
       const existingIndex = pathIndex.get(cursor);
       if (existingIndex !== undefined) {
         const cycleAccountIds = path.slice(existingIndex);
@@ -132,6 +135,7 @@ export function findAccountHierarchyIssues(rows: AccountHierarchyRow[]): Account
       const parentId = parseAccountParentId(accounts.get(cursor)?.parent);
       cursor = parentId === undefined ? null : parentId;
     }
+    for (const accountId of path) resolvedAccounts.add(accountId);
   }
   return issues;
 }
