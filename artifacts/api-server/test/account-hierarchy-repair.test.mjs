@@ -300,7 +300,7 @@ test("يفصل بلاغات عدة دورات مع سلاسل تتجه إلى ك
   );
 });
 
-test("يطابق مرجعاً مستقلاً في رسوم أبوة صغيرة مولدة ببذرة ثابتة", { timeout: 1_000 }, () => {
+test("يطابق مرجعاً مستقلاً مهما تغير ترتيب صفوف رسوم الأبوة", { timeout: 1_000 }, () => {
   const random = createSeededRandom(0x20_08_20_26);
 
   for (let caseIndex = 0; caseIndex < 80; caseIndex += 1) {
@@ -330,33 +330,46 @@ test("يطابق مرجعاً مستقلاً في رسوم أبوة صغيرة �
         parent: parentId === null ? null : String(parentId),
       },
     }));
-    shuffleWithRandom(rows, random);
-
     const expectedCycleKeys = referenceCycleKeys(rows);
-    const cycleIssues = findAccountHierarchyIssues(rows).filter((issue) => issue.kind === "cycle");
-    const actualCycleKeys = cycleIssues.map((issue) => (
-      [...issue.cycleAccountIds].sort((left, right) => left - right).join(",")
-    )).sort();
-
-    assert.deepEqual(
-      actualCycleKeys,
-      expectedCycleKeys,
-      `يجب مطابقة دورات المرجع في الحالة المولدة ${caseIndex}`,
-    );
-    assert.equal(
-      new Set(actualCycleKeys).size,
-      cycleIssues.length,
-      `يجب إرجاع بلاغ واحد فقط لكل دورة في الحالة ${caseIndex}`,
-    );
     const expectedCycleMembers = new Set(expectedCycleKeys.flatMap(
       (cycleKey) => cycleKey.split(",").map(Number),
     ));
-    assert.ok(
-      cycleIssues.every((issue) => issue.cycleAccountIds.every(
-        (accountId) => expectedCycleMembers.has(accountId),
-      )),
-      `يجب ألا تدخل السلاسل المؤدية إلى الدورات في الحالة ${caseIndex}`,
-    );
+    const shuffledOnce = [...rows];
+    const shuffledTwice = [...rows];
+    shuffleWithRandom(shuffledOnce, createSeededRandom(0xA11C_E000 + caseIndex));
+    shuffleWithRandom(shuffledTwice, createSeededRandom(0xC1C1_E000 + caseIndex));
+    const orderings = [rows, [...rows].reverse(), shuffledOnce, shuffledTwice];
+
+    for (const [orderingIndex, orderedRows] of orderings.entries()) {
+      const cycleIssues = findAccountHierarchyIssues(orderedRows)
+        .filter((issue) => issue.kind === "cycle");
+      const actualCycleKeys = cycleIssues.map((issue) => (
+        [...issue.cycleAccountIds].sort((left, right) => left - right).join(",")
+      )).sort();
+      const context = `الحالة ${caseIndex} والترتيب ${orderingIndex}`;
+
+      assert.deepEqual(
+        actualCycleKeys,
+        expectedCycleKeys,
+        `يجب ثبات أعضاء دورات المرجع في ${context}`,
+      );
+      assert.equal(
+        cycleIssues.length,
+        expectedCycleKeys.length,
+        `يجب ثبات عدد بلاغات الدورات في ${context}`,
+      );
+      assert.equal(
+        new Set(actualCycleKeys).size,
+        cycleIssues.length,
+        `يجب إرجاع بلاغ واحد فقط لكل دورة في ${context}`,
+      );
+      assert.ok(
+        cycleIssues.every((issue) => issue.cycleAccountIds.every(
+          (accountId) => expectedCycleMembers.has(accountId),
+        )),
+        `يجب ألا تدخل السلاسل المؤدية إلى الدورات في ${context}`,
+      );
+    }
   }
 });
 
