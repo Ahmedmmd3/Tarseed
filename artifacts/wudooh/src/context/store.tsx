@@ -19,6 +19,8 @@ export type JournalLine = {
   accountId: string;
   debit: number;
   credit: number;
+  branchId?: number | null;
+  projectId?: number | null;
 };
 
 export type Journal = {
@@ -121,6 +123,7 @@ export type SharedUser = {
   warehouseIds: number[];
   status: string;
   isTeamMember: boolean;
+  defaultBranchId?: number | null;
   subscription: {
     planId: string;
     status: 'trialing' | 'active' | 'expired' | 'inactive';

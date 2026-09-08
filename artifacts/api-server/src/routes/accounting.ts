@@ -150,6 +150,32 @@ function normalizeLines(value: unknown): Array<{ accountId: string; debit: numbe
     }));
 }
 
+function dimensionFilter(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function filterJournalDimensions(
+  journals: AnyRecord[],
+  branchId: number | null,
+  projectId: number | null,
+): AnyRecord[] {
+  if (branchId === null && projectId === null) return journals;
+  return journals.map((journal) => ({
+    ...journal,
+    lines: (Array.isArray(journal.lines) ? journal.lines : []).filter((line) => {
+      if (!line || typeof line !== "object") return false;
+      const item = line as Record<string, unknown>;
+      // Header fallback supports journals written before line-level dimensions.
+      const lineBranch = item.branchId ?? journal.branchId;
+      const lineProject = item.projectId ?? journal.projectId;
+      return (branchId === null || Number(lineBranch) === branchId)
+        && (projectId === null || Number(lineProject) === projectId);
+    }),
+  })).filter((journal) => Array.isArray(journal.lines) && journal.lines.length > 0);
+}
+
 function sourceTable(value: unknown): SourceTable | null {
   return value === "invoices" || value === "purchaseOrders" || value === "expenses" ? value : null;
 }
@@ -530,6 +556,14 @@ router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requir
   const now = new Date();
   const from = typeof request.query.from === "string" ? request.query.from : `${now.getFullYear()}-01-01`;
   const to = typeof request.query.to === "string" ? request.query.to : now.toISOString().slice(0, 10);
+  const rawBranchId = typeof request.query.branchId === "string" ? request.query.branchId : undefined;
+  const rawProjectId = typeof request.query.projectId === "string" ? request.query.projectId : undefined;
+  const branchId = dimensionFilter(rawBranchId);
+  const projectId = dimensionFilter(rawProjectId);
+  if ((rawBranchId && branchId === null) || (rawProjectId && projectId === null)) {
+    response.status(400).json({ error: "معرّف الفرع أو المشروع غير صالح." });
+    return;
+  }
   const [accounts, journals, receivables, invoices, expenses, purchases] = await Promise.all([
     recordsFor(auth, "accounts"),
     recordsFor(auth, "journalEntries"),
@@ -538,7 +572,7 @@ router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requir
     recordsFor(auth, "expenses"),
     recordsFor(auth, "purchaseOrders"),
   ]);
-  const report = calculateReport(accounts, journals, from, to);
+  const report = calculateReport(accounts, filterJournalDimensions(journals, branchId, projectId), from, to);
   const sourceReceivables = receivables.length ? receivables : invoices;
   const sourcePayables = receivables.filter((r) => r.type === "payable").length ? receivables : purchases;
   const items = [

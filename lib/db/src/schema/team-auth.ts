@@ -64,6 +64,7 @@ export const teamUsersTable = pgTable(
     permissions: jsonb("permissions").$type<Record<string, boolean>>().notNull().default({}),
     locationScope: text("location_scope").notNull().default("all"),
     warehouseIds: jsonb("warehouse_ids").$type<number[]>().notNull().default([]),
+    defaultBranchId: integer("default_branch_id"),
     status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

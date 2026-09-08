@@ -100,9 +100,11 @@ function parseJournalSuggestion(rawSuggestion: string, accounts: Array<{ id: str
 }
 
 export default function Journals() {
-  const { journals, accounts, addJournal, updateJournal, postJournal, adjustJournal, connectionMode } = useStore();
+  const { journals, accounts, addJournal, updateJournal, postJournal, adjustJournal, connectionMode, currentUser } = useStore();
   const customersCrud = useCrud<Party>('customers');
   const suppliersCrud = useCrud<Party>('suppliers');
+  const branchesCrud = useCrud<{id: number|string, name: string, status?: string}>('branches');
+  const projectsCrud = useCrud<{id: number|string, name: string, status?: string}>('projects');
   const { toast } = useToast();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingJournal, setEditingJournal] = useState<Journal | null>(null);
@@ -114,6 +116,8 @@ export default function Journals() {
   const [description, setDescription] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [supplierId, setSupplierId] = useState('');
+  const [branchId, setBranchId] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [lines, setLines] = useState<Omit<JournalLine, 'id'>[]>([
     { accountId: '', debit: 0, credit: 0 },
     { accountId: '', debit: 0, credit: 0 },
@@ -128,6 +132,9 @@ export default function Journals() {
   const [isAdjusting, setIsAdjusting] = useState(false);
   const [adjustmentOperationId, setAdjustmentOperationId] = useState('');
   const [attachmentJournal, setAttachmentJournal] = useState<Journal | null>(null);
+  const canOverrideBranch = currentUser?.roleId === 'owner'
+    || currentUser?.roleId === 'accountant'
+    || currentUser?.permissions.accounting === true;
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.status === 'active').sort((left, right) => String(left.code ?? '').localeCompare(String(right.code ?? ''), 'en')), [accounts]);
   const filteredJournals = useMemo(() => journals
@@ -154,6 +161,8 @@ export default function Journals() {
     setDescription('');
     setCustomerId('');
     setSupplierId('');
+    setBranchId(currentUser?.defaultBranchId ? String(currentUser.defaultBranchId) : '');
+    setProjectId('');
     setLines([{ accountId: '', debit: 0, credit: 0 }, { accountId: '', debit: 0, credit: 0 }]);
     setIsAiSuggested(false);
   };
@@ -164,7 +173,9 @@ export default function Journals() {
     setDescription(journal.description);
     setCustomerId(journal.customerId ? String(journal.customerId) : '');
     setSupplierId(journal.supplierId ? String(journal.supplierId) : '');
-    setLines(journal.lines.map(({ accountId, debit, credit }) => ({ accountId: String(accountId), debit: Number(debit) || 0, credit: Number(credit) || 0 })));
+    setBranchId(journal.lines[0]?.branchId ? String(journal.lines[0].branchId) : '');
+    setProjectId(journal.lines[0]?.projectId ? String(journal.lines[0].projectId) : '');
+    setLines(journal.lines.map(({ accountId, debit, credit, branchId, projectId }) => ({ accountId: String(accountId), debit: Number(debit) || 0, credit: Number(credit) || 0, branchId, projectId })));
     setIsAiSuggested(false);
     setIsAddOpen(true);
   };
@@ -221,7 +232,12 @@ export default function Journals() {
       const journalData = {
         date,
         description: description.trim(),
-        lines: lines.map((line, index) => ({ ...line, id: `temp-${index}` })),
+        lines: lines.map((line, index) => ({
+          ...line,
+          id: `temp-${index}`,
+          branchId: branchId ? Number(branchId) : null,
+          projectId: projectId ? Number(projectId) : null
+        })),
         customerId: customer ? String(customer.id) : '',
         customerName: customer?.name ?? '',
         supplierId: supplier ? String(supplier.id) : '',
@@ -364,7 +380,21 @@ export default function Journals() {
                      {suppliersCrud.data.map((party) => <option key={party.id} value={party.id}>{party.name}</option>)}
                    </select>
                  </div>
-                 <p className="sm:col-span-2 text-xs text-blue-800">يمكن اختيار طرف واحد فقط. المستند المرتبط مسودة معلوماتية قابلة للاستكمال؛ يبقى هذا القيد هو القيد المحاسبي المعتمد ولا يؤثر الإنشاء في المخزون.</p>
+                 <div className="space-y-2">
+                    <Label htmlFor="journal-branch" className="text-sm font-semibold">الفرع</Label>
+                    <select id="journal-branch" value={branchId} disabled={!canOverrideBranch} onChange={(event) => setBranchId(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 text-sm disabled:cursor-not-allowed disabled:bg-slate-100" data-testid="select-journal-branch">
+                     <option value="">بدون فرع</option>
+                      {branchesCrud.data.filter((b) => b.status !== 'inactive').map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                   </select>
+                 </div>
+                 <div className="space-y-2">
+                   <Label htmlFor="journal-project" className="text-sm font-semibold">المشروع (اختياري)</Label>
+                   <select id="journal-project" value={projectId} onChange={(event) => setProjectId(event.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 text-sm" data-testid="select-journal-project">
+                     <option value="">بدون مشروع</option>
+                      {projectsCrud.data.filter((p) => p.status === 'active' || !p.status).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                   </select>
+                 </div>
+                 <p className="sm:col-span-2 text-xs text-blue-800">تُطبق مراكز التكلفة والمشاريع على جميع أسطر هذا القيد المباشر. المستند المرتبط مسودة معلوماتية.</p>
                </div>
                 <div className="space-y-2">
                   <Label htmlFor="desc" className="text-sm font-semibold">البيان / الشرح</Label>

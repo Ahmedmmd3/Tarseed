@@ -13,6 +13,8 @@ import { todayLocalDate } from '@/lib/date';
 
 type Product = { id: number | string; name: string; barcode?: string | number; sku?: string; salePrice?: number | string; price?: number | string; sellPrice?: number | string; stock?: number | string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
+type Branch = { id: number | string; name: string; status?: string };
+type Project = { id: number | string; name: string; status?: string };
 type InventoryBalance = { productId: number | string; warehouseId: number | string; quantity: number | string };
 type CartItem = { product: Product; quantity: number };
 type RecordsPayload<T> = { records?: T[]; error?: string };
@@ -190,11 +192,15 @@ export default function POS() {
 
   const [products, setProducts] = useState<Product[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [balances, setBalances] = useState<InventoryBalance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   const [selectedWarehouse, setSelectedWarehouse] = useState<string | number>('');
+  const [selectedBranch, setSelectedBranch] = useState<string | number>('');
+  const [selectedProject, setSelectedProject] = useState<string | number>('');
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credit'>('card');
@@ -223,15 +229,19 @@ export default function POS() {
       setLoading(true);
       setError('');
       const headers = { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) };
-      const [prodRes, whRes, balRes, billingRes] = await Promise.all([
+      const [prodRes, whRes, branchesRes, projectsRes, balRes, billingRes] = await Promise.all([
         fetch('/api/data/products', { credentials: 'include', headers }),
         fetch('/api/data/warehouses', { credentials: 'include', headers }),
+        fetch('/api/data/branches', { credentials: 'include', headers }),
+        fetch('/api/data/projects', { credentials: 'include', headers }),
         fetch('/api/data/inventoryBalances', { credentials: 'include', headers }),
         fetch('/api/inventory/settings', { credentials: 'include', headers }).catch(() => null),
       ]);
-      const [prodData, whData, balData] = await Promise.all([
+      const [prodData, whData, branchesData, projectsData, balData] = await Promise.all([
         prodRes.json() as Promise<RecordsPayload<Product>>,
         whRes.json() as Promise<RecordsPayload<Warehouse>>,
+        branchesRes.json() as Promise<RecordsPayload<Branch>>,
+        projectsRes.json() as Promise<RecordsPayload<Project>>,
         balRes.json() as Promise<RecordsPayload<InventoryBalance>>,
       ]);
       if (!prodRes.ok) throw new Error(prodData.error ?? 'تعذر تحميل المنتجات.');
@@ -246,12 +256,17 @@ export default function POS() {
 
       const productsList = prodData.records ?? [];
       const warehousesList = (whData.records ?? []).filter((warehouse) => warehouse.status !== 'inactive');
+      const branchesList = (branchesData.records ?? []).filter((b) => b.status !== 'inactive');
+      const projectsList = (projectsData.records ?? []).filter((p) => p.status === 'active' || !p.status);
       setProducts(productsList);
       setWarehouses(warehousesList);
+      setBranches(branchesList);
+      setProjects(projectsList);
       setBalances(balData.records ?? []);
       setSelectedWarehouse((current) => warehousesList.some((warehouse) => String(warehouse.id) === String(current))
         ? current
         : (warehousesList[0]?.id ?? ''));
+      setSelectedBranch(currentUser.defaultBranchId || '');
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'تعذر تحميل بيانات نقطة البيع. أعد المحاولة.');
     } finally {
@@ -379,6 +394,8 @@ export default function POS() {
         customerName: customerName.trim() || undefined,
         customerVatNumber: customerVatNumber.trim() || undefined,
         customerAddress: customerAddress.trim() || undefined,
+        branchId: selectedBranch ? Number(selectedBranch) : undefined,
+        projectId: selectedProject ? Number(selectedProject) : undefined,
         clientOperationId: clientOpId,
         items: cart.map(item => ({
           productId: Number(item.product.id),
@@ -490,6 +507,8 @@ export default function POS() {
     );
   }
 
+  const isAccountingOrOwner = currentUser?.roleId === 'owner' || currentUser?.permissions?.accounting === true;
+
   const renderCartContent = (isMobileView: boolean) => (
     <div className={`flex w-full flex-col bg-white ${isMobileView ? 'h-full' : 'overflow-hidden rounded-[28px] border border-slate-200 shadow-xl shadow-slate-950/5 lg:w-[400px] sticky top-6'}`}>
       <div className={`border-b border-slate-100 bg-slate-50/50 ${isMobileView ? 'p-4 pt-2 shrink-0' : 'p-5'}`}>
@@ -522,6 +541,37 @@ export default function POS() {
             ))}
             {warehouses.length === 0 && <option value="">لا يوجد مستودعات</option>}
           </select>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <div>
+            <label className="mb-1.5 block text-xs font-bold text-slate-500">الفرع</label>
+            {isAccountingOrOwner ? (
+              <select
+                className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium shadow-sm focus:border-teal-500 focus:outline-none"
+                value={selectedBranch}
+                onChange={e => setSelectedBranch(e.target.value)}
+              >
+                <option value="">بدون فرع</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            ) : (
+              <div className="flex h-10 w-full items-center rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-500 truncate shadow-sm">
+                {branches.find(b => String(b.id) === String(selectedBranch))?.name || 'بدون فرع'}
+              </div>
+            )}
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-bold text-slate-500">المشروع</label>
+            <select
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium shadow-sm focus:border-teal-500 focus:outline-none"
+              value={selectedProject}
+              onChange={e => setSelectedProject(e.target.value)}
+            >
+              <option value="">بدون مشروع</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
         </div>
          <div className="mt-4">
            <label htmlFor="invoice-print-format" className="mb-1.5 block text-xs font-bold text-slate-500">إعداد الفاتورة المطبوعة</label>

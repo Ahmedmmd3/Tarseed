@@ -17,6 +17,8 @@ export type FieldDef = {
   type?: 'text' | 'number' | 'date' | 'select';
   options?: { label: string; value: string | number }[];
   required?: boolean;
+  defaultValue?: string | number;
+  disabled?: boolean;
 };
 
 interface CrudTableProps {
@@ -243,7 +245,7 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
       setFormData(Object.fromEntries(fields.map((field) => [field.key, item[field.key] ?? ''])));
     } else {
       setEditingId(null);
-      setFormData(Object.fromEntries(fields.map((field) => [field.key, field.key === 'vatRate' ? 15 : ''])));
+      setFormData(Object.fromEntries(fields.map((field) => [field.key, field.defaultValue !== undefined ? field.defaultValue : (field.key === 'vatRate' ? 15 : '')])));
     }
     setOpen(true);
   };
@@ -338,7 +340,8 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
                         <select
                           id={f.key}
                           required={f.required}
-                          className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                          disabled={f.disabled}
+                          className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-slate-50"
                           value={formData[f.key] ?? ''}
                           onChange={(e) => setFormData({ ...formData, [f.key]: f.options?.some((option) => typeof option.value === 'number') ? Number(e.target.value) : e.target.value })}
                         >
@@ -354,7 +357,9 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
                           id={f.key}
                           type={f.type || 'text'}
                           required={f.required}
+                          disabled={f.disabled}
                           value={formData[f.key] || ''}
+                          className="disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-slate-50"
                           onChange={(e) =>
                             setFormData({
                               ...formData,

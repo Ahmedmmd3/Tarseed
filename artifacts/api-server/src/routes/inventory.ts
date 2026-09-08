@@ -5,6 +5,7 @@ import { db, eInvoiceDocumentsTable, eInvoiceUnitsTable, erpRecordsTable, teamAu
 import { configurationIsComplete, decryptEInvoiceSecret, generateInvoiceDocument, type SellerProfile } from "../lib/e-invoicing";
 import { savePrivateInvoiceXml } from "../lib/private-object-store";
 import { EInvoiceAdjustmentError, issueEInvoiceAdjustment } from "../lib/e-invoice-adjustments";
+import { resolveTransactionDimensions, TransactionDimensionError } from "../lib/transaction-dimensions";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -183,11 +184,12 @@ async function accountsByCode(tx: Transaction, organizationId: number): Promise<
   return result;
 }
 
-async function postJournal(tx: Transaction, organizationId: number, sourceType: "sale" | "purchase", sourceId: number, date: string, description: string, lines: Array<{ accountId: string; debit: number; credit: number }>): Promise<ErpRecord> {
+async function postJournal(tx: Transaction, organizationId: number, sourceType: "sale" | "purchase", sourceId: number, date: string, description: string, lines: Array<{ accountId: string; debit: number; credit: number }>, dimensions: { branchId: number | null; projectId: number | null } = { branchId: null, projectId: null }): Promise<ErpRecord> {
   const debit = money(lines.reduce((sum, line) => sum + line.debit, 0));
   const credit = money(lines.reduce((sum, line) => sum + line.credit, 0));
   if (debit !== credit) throw new InventoryRouteError("القيد المحاسبي غير متزن.", 500);
-  const [journal] = await tx.insert(erpRecordsTable).values({ organizationId, tableName: "journalEntries", data: { date, description, status: "posted", sourceType, sourceId, lines } }).returning();
+  const dimensionedLines = lines.map((line) => ({ ...line, ...dimensions }));
+  const [journal] = await tx.insert(erpRecordsTable).values({ organizationId, tableName: "journalEntries", data: { date, description, status: "posted", sourceType, sourceId, ...dimensions, lines: dimensionedLines } }).returning();
   return journal;
 }
 
@@ -567,7 +569,24 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
       if (!currentAuth || (currentAuth.roleId !== "owner" && currentAuth.permissions.inventory !== true && currentAuth.permissions.sales !== true)) {
         throw new InventoryRouteError("تغيرت صلاحيات المستخدم أثناء تنفيذ البيع.", 403);
       }
-      const requestFingerprint = fingerprint({ warehouseId, issueDate, paymentMethod, dueDate, customerName, customerVatNumber, customerAddress, items: rawItems });
+      let dimensions: { branchId: number | null; projectId: number | null };
+      try {
+        dimensions = await resolveTransactionDimensions(tx, currentAuth, body, true);
+      } catch (error) {
+        if (error instanceof TransactionDimensionError) throw new InventoryRouteError(error.message, error.status);
+        throw error;
+      }
+      const requestFingerprint = fingerprint({
+        warehouseId,
+        issueDate,
+        paymentMethod,
+        dueDate,
+        customerName,
+        customerVatNumber,
+        customerAddress,
+        ...dimensions,
+        items: rawItems,
+      });
       if (clientOperationId) {
         const [existing] = await tx.select().from(erpRecordsTable).where(and(
           eq(erpRecordsTable.organizationId, auth.organizationId),
@@ -663,6 +682,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
           requestFingerprint,
           paid: paymentMethod === "credit" ? 0 : total,
           createdAt: new Date().toISOString(),
+          ...dimensions,
         },
       }).onConflictDoNothing({
         target: [erpRecordsTable.organizationId, erpRecordsTable.tableName, erpRecordsTable.clientOperationId],
@@ -768,6 +788,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
             paid: 0,
             status: "unpaid",
             createdAt: new Date().toISOString(),
+            ...dimensions,
           },
         });
       }
@@ -807,7 +828,7 @@ router.post("/inventory/checkout", requireAuth, requireSubscriptionAccess, requi
         { accountId: String(accounts.get("2100")!.id), debit: 0, credit: tax },
         { accountId: String(accounts.get("5500")!.id), debit: cogsTotal, credit: 0 },
         { accountId: String(accounts.get("1300")!.id), debit: 0, credit: cogsTotal },
-      ]);
+      ], dimensions);
       await audit(tx, auth, "automatic_accounting", `${invoice.id}:${journal.id}`);
       await audit(tx, auth, "pos_checkout_completed", String(invoice.id));
       await audit(tx, auth, "einvoice_issued", String(eInvoice.id));

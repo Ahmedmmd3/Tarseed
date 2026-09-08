@@ -24,6 +24,7 @@ type MemberStatus = 'active' | 'inactive';
 
 type TeamMember = SharedUser;
 type Warehouse = { id: number; name: string; type?: string; status?: string };
+type Branch = { id: number; name: string; status?: string };
 type AuditLog = {
   id: number;
   action: string;
@@ -41,6 +42,7 @@ type MemberForm = {
   permissions: Record<PermissionKey, boolean>;
   locationScope: LocationScope;
   warehouseIds: number[];
+  defaultBranchId: string;
 };
 
 const PERMISSIONS: Array<{ key: PermissionKey; label: string; description: string }> = [
@@ -82,6 +84,7 @@ const createEmptyForm = (): MemberForm => ({
   permissions: { ...emptyPermissions(), dashboard: true, sales: true },
   locationScope: 'all',
   warehouseIds: [],
+  defaultBranchId: '',
 });
 
 export default function Team() {
@@ -89,6 +92,7 @@ export default function Team() {
   const { toast } = useToast();
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [pageError, setPageError] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -109,9 +113,10 @@ export default function Team() {
     setIsLoading(true);
     setPageError('');
     try {
-      const [membersResponse, warehousesResponse, resetStatusResponse, auditLogsResponse] = await Promise.all([
+      const [membersResponse, warehousesResponse, branchesResponse, resetStatusResponse, auditLogsResponse] = await Promise.all([
         fetch('/api/team/members', { credentials: 'include' }),
         fetch('/api/data/warehouses', { credentials: 'include' }),
+        fetch('/api/data/branches', { credentials: 'include' }),
         fetch('/api/auth/password-reset/status', { credentials: 'include' }),
         fetch('/api/audit-logs', { credentials: 'include' }),
       ]);
@@ -123,6 +128,10 @@ export default function Team() {
       if (warehousesResponse.ok) {
         const warehousesPayload = await readPayload<{ records?: Warehouse[] }>(warehousesResponse);
         setWarehouses((warehousesPayload.records ?? []).filter((warehouse) => warehouse.status !== 'inactive'));
+      }
+      if (branchesResponse.ok) {
+        const branchesPayload = await readPayload<{ records?: Branch[] }>(branchesResponse);
+        setBranches((branchesPayload.records ?? []).filter((branch) => branch.status !== 'inactive'));
       }
       if (resetStatusResponse.ok) {
         const resetStatusPayload = await readPayload<{ emailDeliveryConfigured?: boolean }>(resetStatusResponse);
@@ -163,6 +172,7 @@ export default function Team() {
       permissions: { ...emptyPermissions(), ...member.permissions },
       locationScope: (['all', 'selected', 'none'].includes(member.locationScope) ? member.locationScope : 'selected') as LocationScope,
       warehouseIds: member.warehouseIds.map(Number),
+      defaultBranchId: member.defaultBranchId ? String(member.defaultBranchId) : '',
     });
     setFormError('');
     setIsDialogOpen(true);
@@ -241,6 +251,7 @@ export default function Team() {
           permissions: form.permissions,
           locationScope: form.locationScope,
           warehouseIds: form.locationScope === 'selected' ? form.warehouseIds : [],
+          defaultBranchId: form.defaultBranchId ? Number(form.defaultBranchId) : null,
         }),
       });
       const payload = await readPayload<{ member?: TeamMember; error?: string }>(response);
@@ -579,6 +590,22 @@ export default function Team() {
               </div>
             )}
 
+            <div className="space-y-2">
+              <Label htmlFor="team-member-default-branch">الفرع الافتراضي</Label>
+              <p className="text-xs text-slate-500">يُثبت هذا الفرع تلقائياً في نقطة البيع والفواتير والمصروفات والقيود، ولا يحتاج العضو لاختياره في كل مرة.</p>
+              <select
+                id="team-member-default-branch"
+                value={form.defaultBranchId}
+                onChange={(event) => updateForm('defaultBranchId', event.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                data-testid="select-team-member-default-branch"
+              >
+                <option value="">بدون فرع افتراضي</option>
+                {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              </select>
+              {branches.length === 0 && <p className="text-xs font-medium text-amber-700">أنشئ فرعاً أولاً من صفحة العمليات والمشاريع.</p>}
+            </div>
+
             <div className="space-y-3">
               <div>
                 <Label>صلاحيات الوحدات</Label>
@@ -600,7 +627,7 @@ export default function Team() {
             <div className="space-y-3">
               <div>
                 <Label htmlFor="team-member-location-scope">نطاق المواقع</Label>
-                <p className="mt-1 text-xs text-slate-500">حدد الفروع والمستودعات التي يستطيع العضو التعامل معها.</p>
+                <p className="mt-1 text-xs text-slate-500">حدد المواقع والمستودعات التشغيلية التي يستطيع العضو التعامل معها. هذا مستقل عن فرع مركز التكلفة أعلاه.</p>
               </div>
               <select id="team-member-location-scope" value={form.locationScope} onChange={(event) => updateForm('locationScope', event.target.value as LocationScope)} className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm" data-testid="select-team-member-location-scope">
                 <option value="all">كل المواقع</option>

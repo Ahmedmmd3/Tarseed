@@ -8,6 +8,7 @@ import {
   organizationsTable,
   passwordResetTokensTable,
   phoneVerificationCodesTable,
+  erpRecordsTable,
   platformAuditLogsTable,
   testWorkspaceInvitationsTable,
   teamAuditLogsTable,
@@ -79,6 +80,7 @@ function safeUser(user: TeamUser, organization: Pick<AuthContext, "projectName" 
     permissions: user.permissions,
     locationScope: user.locationScope,
     warehouseIds: user.warehouseIds,
+    defaultBranchId: user.defaultBranchId,
     status: user.status,
     isTeamMember: user.roleId !== "owner",
     subscription: {
@@ -459,13 +461,35 @@ function validateMemberBody(body: Record<string, unknown>, requiresPassword: boo
   const permissions = Object.fromEntries([...PERMISSION_KEYS].map(key => [key, rawPermissions[key] === true]));
   const rawWarehouseIds = Array.isArray(body.warehouseIds) ? body.warehouseIds : [];
   const warehouseIds = [...new Set(rawWarehouseIds.filter(id => Number.isInteger(id) && Number(id) > 0).map(Number))];
+  const defaultBranchId = body.defaultBranchId == null || body.defaultBranchId === ""
+    ? null
+    : Number(body.defaultBranchId);
   if (!name || !isEmail(email)) return { error: "أدخل الاسم والبريد الإلكتروني الصحيحين." };
   const passwordError = password ? validatePassword(password) : null;
   if ((requiresPassword && !password) || passwordError) return { error: passwordError ?? "أدخل كلمة مرور قوية." };
   if (!ROLE_IDS.has(roleId) || !LOCATION_SCOPES.has(locationScope)) return { error: "بيانات الدور أو نطاق المواقع غير صحيحة." };
   if (locationScope !== "selected" && warehouseIds.length) return { error: "حدّد المواقع فقط عند اختيار نطاق مواقع محددة." };
   if (locationScope === "selected" && warehouseIds.length === 0) return { error: "اختر موقعاً واحداً على الأقل أو استخدم نطاق «لا مواقع»." };
-  return { data: { name, email, password, roleId, status, permissions, locationScope, warehouseIds } };
+  if (defaultBranchId !== null && (!Number.isInteger(defaultBranchId) || defaultBranchId <= 0)) return { error: "الفرع الافتراضي غير صالح." };
+  return { data: { name, email, password, roleId, status, permissions, locationScope, warehouseIds, defaultBranchId } };
+}
+
+async function validateDefaultBranch(
+  executor: typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0],
+  organizationId: number,
+  branchId: number | null,
+): Promise<string | null> {
+  if (branchId === null) return null;
+  const [branch] = await executor.select({ id: erpRecordsTable.id, data: erpRecordsTable.data })
+    .from(erpRecordsTable)
+    .where(and(
+      eq(erpRecordsTable.id, branchId),
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "branches"),
+    ))
+    .limit(1);
+  if (!branch) return "الفرع الافتراضي غير موجود في هذه المنشأة.";
+  return branch.data.status === "active" ? null : "لا يمكن تعيين فرع افتراضي غير نشط.";
 }
 
 router.get("/auth/test-workspace-invitations/status", async (request: Request, response: Response): Promise<void> => {
@@ -1393,6 +1417,8 @@ router.post("/team/members", requireAuth, requireSubscriptionAccess, requireOwne
     const [existing] = await tx.select({ id: teamUsersTable.id }).from(teamUsersTable)
       .where(eq(teamUsersTable.email, memberData.email)).limit(1);
     if (existing) return { kind: "conflict" as const };
+    const branchError = await validateDefaultBranch(tx, auth.organizationId, memberData.defaultBranchId);
+    if (branchError) return { kind: "invalid-branch" as const, error: branchError };
     const [user] = await tx.insert(teamUsersTable).values({
       ...memberData,
       organizationId: auth.organizationId,
@@ -1411,6 +1437,10 @@ router.post("/team/members", requireAuth, requireSubscriptionAccess, requireOwne
   }
   if (result.kind === "conflict") {
     response.status(409).json({ error: "تعذر إنشاء الحساب بهذه البيانات." });
+    return;
+  }
+  if (result.kind === "invalid-branch") {
+    response.status(400).json({ error: result.error });
     return;
   }
   const user = result.user;
@@ -1436,6 +1466,8 @@ router.patch("/team/members/:id", requireAuth, requireSubscriptionAccess, requir
     if (!organization || !hasSubscriptionAccess(organization)) return { kind: "access" as const, organization };
     const [member] = await tx.select().from(teamUsersTable).where(and(eq(teamUsersTable.id, id), eq(teamUsersTable.organizationId, auth.organizationId))).for("update");
     if (!member || member.roleId === "owner") return { kind: "missing" as const };
+    const branchError = await validateDefaultBranch(tx, auth.organizationId, memberData.defaultBranchId);
+    if (branchError) return { kind: "invalid-branch" as const, error: branchError };
     const [updated] = await tx.update(teamUsersTable).set(update).where(eq(teamUsersTable.id, id)).returning();
     if (password || updated.status === "inactive") {
       await tx.update(authSessionsTable).set({ revokedAt: new Date() }).where(eq(authSessionsTable.userId, id));
@@ -1445,6 +1477,7 @@ router.patch("/team/members/:id", requireAuth, requireSubscriptionAccess, requir
   });
   if (result.kind === "access") { response.status(402).json(subscriptionWriteFailure(result.organization)); return; }
   if (result.kind === "missing") { response.status(404).json({ error: "لم يتم العثور على عضو الفريق." }); return; }
+  if (result.kind === "invalid-branch") { response.status(400).json({ error: result.error }); return; }
   const updated = result.updated;
   response.json({ member: safeUser(updated, auth) });
 });

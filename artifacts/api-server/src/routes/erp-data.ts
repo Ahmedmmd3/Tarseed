@@ -11,6 +11,7 @@ import {
   purchaseOrderShareUrl,
 } from "../lib/purchase-order-share";
 import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, SourceJournalError } from "../lib/source-journals";
+import { resolveTransactionDimensions, TransactionDimensionError } from "../lib/transaction-dimensions";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -22,6 +23,7 @@ const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], invoices: "sales", quotations: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
   employees: "hr", projects: "operations", inventoryBalances: ["inventory", "sales"], stockTransfers: "inventory",
+  branches: ["accounting", "operations"],
   stockAdjustments: "inventory",
   accounts: "accounting", journalEntries: "accounting", receivables: "accounting",
   financialClosures: "accounting", bankReconciliationSessions: "accounting", bankStatementLines: "accounting",
@@ -139,6 +141,14 @@ function normalizeProductData(data: Record<string, unknown>, fallbackRate = 15):
   if (![0, 5, 15].includes(vatRate)) return null;
   const barcode = typeof data.barcode === "string" ? data.barcode.trim() : "";
   return { ...data, barcode, vatRate };
+}
+
+function normalizeBranchData(data: Record<string, unknown>): Record<string, unknown> | null {
+  const code = typeof data.code === "string" ? data.code.trim() : "";
+  const name = typeof data.name === "string" ? data.name.trim() : "";
+  const status = data.status === "inactive" ? "inactive" : data.status === "active" ? "active" : "";
+  if (!code || !name || !status || code.length > 64 || name.length > 160) return null;
+  return { ...data, code, name, status };
 }
 
 async function ensureUniqueProductBarcode(
@@ -1543,7 +1553,14 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
     response.status(400).json({ error: "اختر ضريبة المنتج: بدون ضريبة أو 5٪ أو 15٪." });
     return;
   }
-  let recordData: Record<string, unknown> = initialRecordData;
+  const dimensionedInitialData = access.tableName === "branches"
+    ? normalizeBranchData(initialRecordData)
+    : initialRecordData;
+  if (!dimensionedInitialData) {
+    response.status(400).json({ error: "أدخل رمز الفرع واسمه وحالته بصورة صحيحة." });
+    return;
+  }
+  let recordData: Record<string, unknown> = dimensionedInitialData;
   if (access.tableName === "products" && Object.hasOwn(body, "stock") && Number((body as Record<string, unknown>).stock) !== 0) {
     response.status(409).json({ error: "الرصيد الافتتاحي للمنتج يُسجّل بتسوية مخزون بعد إنشاء المنتج." });
     return;
@@ -1613,11 +1630,30 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
           };
         }
       }
+      if (access.tableName === "expenses" || access.tableName === "invoices" || access.tableName === "journalEntries") {
+        const dimensions = await resolveTransactionDimensions(tx, currentAuth, recordData, true);
+        recordData = { ...recordData, ...dimensions };
+        if (access.tableName === "journalEntries" && Array.isArray(recordData.lines)) {
+          recordData = {
+            ...recordData,
+            lines: recordData.lines.map((line) => (
+              line && typeof line === "object" && !Array.isArray(line)
+                ? { ...(line as Record<string, unknown>), ...dimensions }
+                : line
+            )),
+          };
+        }
+      }
       if (access.tableName === "accounts") {
         await validateAccountHierarchy(tx, currentAuth.organizationId, null, recordData);
       }
       if (access.tableName === "products") {
         await ensureUniqueProductBarcode(tx, currentAuth.organizationId, recordData);
+      }
+      if (access.tableName === "branches") {
+        const normalized = normalizeBranchData(recordData);
+        if (!normalized) throw new MutationRejected(400, "أدخل رمز الفرع واسمه وحالته بصورة صحيحة.");
+        recordData = normalized;
       }
       if (access.tableName === "quotations") {
         const normalized = quotationData(recordData);
@@ -1675,6 +1711,10 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
       return { created: inserted, record: saved };
     }));
   } catch (error) {
+    if (error instanceof TransactionDimensionError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
     if (error instanceof MutationRejected) {
       response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;
@@ -1969,6 +2009,30 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         ? withoutManualJournalLinkFields(body as Record<string, unknown>)
         : body as Record<string, unknown>;
       let currentData = { ...current.data, ...currentPatch };
+      if (access.tableName === "branches") {
+        const normalized = normalizeBranchData(currentData);
+        if (!normalized) throw new MutationRejected(400, "أدخل رمز الفرع واسمه وحالته بصورة صحيحة.");
+        currentData = normalized;
+      }
+      if ((access.tableName === "expenses" || access.tableName === "invoices" || access.tableName === "journalEntries")
+        && (Object.hasOwn(currentPatch, "branchId") || Object.hasOwn(currentPatch, "projectId"))) {
+        const dimensions = await resolveTransactionDimensions(tx, currentAuth, currentData, false);
+        currentData = { ...currentData, ...dimensions };
+      }
+      if (access.tableName === "journalEntries" && Array.isArray(currentData.lines)) {
+        const dimensions = {
+          branchId: currentData.branchId == null ? null : Number(currentData.branchId),
+          projectId: currentData.projectId == null ? null : Number(currentData.projectId),
+        };
+        currentData = {
+          ...currentData,
+          lines: currentData.lines.map((line) => (
+            line && typeof line === "object" && !Array.isArray(line)
+              ? { ...(line as Record<string, unknown>), ...dimensions }
+              : line
+          )),
+        };
+      }
       if (access.tableName === "receivables" && currentData.type === "payable"
         && (currentData.purchaseOrderId || currentData.purchaseId || currentData.purchaseReceiptOperationId)) {
         throw new MutationRejected(409, "ذمم أوامر الشراء تُنشأ وتُحدّث من مسارات الاستلام والسداد المعتمدة فقط.");
@@ -2077,6 +2141,10 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
       return tx.update(erpRecordsTable).set({ data: currentData, updatedAt: new Date() }).where(eq(erpRecordsTable.id, id)).returning();
     });
   } catch (error) {
+    if (error instanceof TransactionDimensionError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
     if (error instanceof MutationRejected) {
       response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
       return;

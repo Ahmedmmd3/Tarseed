@@ -56,6 +56,10 @@ export default function Reports() {
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
   const [toDate, setToDate] = useState(todayLocalDate());
+  const [branchId, setBranchId] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const [branches, setBranches] = useState<Array<{ id: number; name: string }>>([]);
+  const [projects, setProjects] = useState<Array<{ id: number; name: string }>>([]);
   const [closedPeriod, setClosedPeriod] = useState<string | null>(null);
   const [closeError, setCloseError] = useState<string | null>(null);
   const [isClosing, setIsClosing] = useState(false);
@@ -135,10 +139,17 @@ export default function Reports() {
       setServerSummary(null);
       return;
     }
+    if (branchId === 'unclassified' || projectId === 'unclassified') {
+      setServerSummary(null);
+      return;
+    }
     let active = true;
     void (async () => {
       try {
-        const response = await fetch(`/api/accounting/summary?from=${fromDate}&to=${toDate}`, { credentials: 'include' });
+        const query = new URLSearchParams({ from: fromDate, to: toDate });
+        if (branchId) query.append('branchId', branchId);
+        if (projectId) query.append('projectId', projectId);
+        const response = await fetch(`/api/accounting/summary?${query.toString()}`, { credentials: 'include' });
         if (!response.ok) return;
         const summary = await response.json() as ServerSummary;
         if (active) setServerSummary(summary);
@@ -147,7 +158,29 @@ export default function Reports() {
       }
     })();
     return () => { active = false; };
-  }, [connectionMode, fromDate, toDate]);
+  }, [branchId, connectionMode, fromDate, projectId, toDate]);
+
+  useEffect(() => {
+    const fetchDims = async () => {
+      if (!currentUser) return;
+      const headers = { 'X-Wudooh-Data-Generation': String(currentUser.dataGeneration) };
+      try {
+        const [bRes, pRes] = await Promise.all([
+          fetch('/api/data/branches', { credentials: 'include', headers }),
+          fetch('/api/data/projects', { credentials: 'include', headers })
+        ]);
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          setBranches(bData.records || []);
+        }
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          setProjects(pData.records || []);
+        }
+      } catch (e) {}
+    };
+    void fetchDims();
+  }, [currentUser]);
 
   useEffect(() => {
     if (connectionMode !== 'remote') { setClosures([]); return; }
@@ -205,6 +238,13 @@ export default function Reports() {
     const closingBalances = new Map(accounts.map((account) => [account.id, Number(account.openingBalance ?? 0)]));
     const periodBalances = new Map(accounts.map((account) => [account.id, 0]));
     const applyJournal = (balances: Map<string, number>, journal: (typeof journals)[number]) => journal.lines
+      .filter(line => {
+         if (branchId === 'unclassified') return line.branchId == null;
+         if (branchId && String(line.branchId) !== branchId) return false;
+         if (projectId === 'unclassified') return line.projectId == null;
+         if (projectId && String(line.projectId) !== projectId) return false;
+         return true;
+      })
       .forEach((line) => {
         const account = accounts.find((item) => item.id === line.accountId);
         if (!account) return;
@@ -371,12 +411,12 @@ export default function Reports() {
         <Card className="border-slate-200 shadow-sm">
           <CardContent className="py-5">
             <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-5">
-              <div className="flex-1 max-w-2xl bg-slate-50 p-4 rounded-lg border border-slate-100">
+              <div className="flex-1 max-w-4xl bg-slate-50 p-4 rounded-lg border border-slate-100">
                 <div className="flex items-center gap-2 mb-3">
                   <Calculator className="h-4 w-4 text-slate-500" />
                   <h3 className="text-sm font-bold text-slate-700">تحديد الفترة المالية</h3>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-slate-600">من تاريخ</label>
                     <Input type="date" value={fromDate} max={toDate} onChange={(event) => setFromDate(event.target.value)} className="bg-white" data-testid="input-report-from" />
@@ -384,6 +424,22 @@ export default function Reports() {
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-slate-600">إلى تاريخ</label>
                     <Input type="date" value={toDate} min={fromDate} onChange={(event) => setToDate(event.target.value)} className="bg-white" data-testid="input-report-to" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600">الفرع</label>
+                    <select value={branchId} onChange={e => setBranchId(e.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500">
+                      <option value="">كل الفروع</option>
+                      <option value="unclassified">حركات غير مصنفة (تاريخية)</option>
+                      {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-600">المشروع</label>
+                    <select value={projectId} onChange={e => setProjectId(e.target.value)} className="flex h-10 w-full rounded-md border border-input bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-teal-500">
+                      <option value="">كل المشاريع</option>
+                      <option value="unclassified">بدون مشروع</option>
+                      {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
                   </div>
                 </div>
               </div>
