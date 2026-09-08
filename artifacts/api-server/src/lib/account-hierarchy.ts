@@ -113,11 +113,16 @@ export function findAccountHierarchyIssues(rows: AccountHierarchyRow[]): Account
       if (resolvedAccounts.has(cursor)) break;
       const existingIndex = pathIndex.get(cursor);
       if (existingIndex !== undefined) {
-        const cycleAccountIds = path.slice(existingIndex);
+        const discoveredCycleAccountIds = path.slice(existingIndex);
+        const representativeId = Math.min(...discoveredCycleAccountIds);
+        const representativeIndex = discoveredCycleAccountIds.indexOf(representativeId);
+        const cycleAccountIds = [
+          ...discoveredCycleAccountIds.slice(representativeIndex),
+          ...discoveredCycleAccountIds.slice(0, representativeIndex),
+        ];
         const cycleKey = [...cycleAccountIds].sort((left, right) => left - right).join(":");
         if (!reportedCycles.has(cycleKey)) {
           reportedCycles.add(cycleKey);
-          const representativeId = Math.min(...cycleAccountIds);
           const representative = accounts.get(representativeId) ?? {};
           issues.push({
             kind: "cycle",

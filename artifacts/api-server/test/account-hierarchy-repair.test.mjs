@@ -112,6 +112,32 @@ test("يثبت ترتيب البلاغات عند تغير ترتيب صفوف �
   assert.deepEqual(issueOrder([...rows].reverse()), expectedOrder);
 });
 
+test("يثبت تفاصيل أعضاء الدورة مع الحفاظ على اتجاه روابط الأب", () => {
+  const rows = [
+    { id: 30, data: { code: "30", name: "الثالث", type: "asset", status: "active", parent: "20" } },
+    { id: 10, data: { code: "10", name: "الأول", type: "asset", status: "active", parent: "30" } },
+    { id: 20, data: { code: "20", name: "الثاني", type: "asset", status: "active", parent: "10" } },
+  ];
+  const cycleDetails = (orderedRows) => {
+    const issue = findAccountHierarchyIssues(orderedRows).find((candidate) => candidate.kind === "cycle");
+    return {
+      cycleAccountIds: issue.cycleAccountIds,
+      cycleAccounts: issue.cycleAccounts,
+    };
+  };
+  const expectedDetails = {
+    cycleAccountIds: [10, 30, 20],
+    cycleAccounts: [
+      { accountId: 10, accountCode: "10", accountName: "الأول" },
+      { accountId: 30, accountCode: "30", accountName: "الثالث" },
+      { accountId: 20, accountCode: "20", accountName: "الثاني" },
+    ],
+  };
+
+  assert.deepEqual(cycleDetails(rows), expectedDetails);
+  assert.deepEqual(cycleDetails([...rows].reverse()), expectedDetails);
+});
+
 test("يعرض الحساب الذي يشير إلى نفسه كدورة واحدة قابلة للفصل", { timeout: 500 }, () => {
   const selfParentId = 2;
   const rows = [
