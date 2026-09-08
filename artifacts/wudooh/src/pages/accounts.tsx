@@ -255,10 +255,10 @@ export default function Accounts() {
                   <Button type="button" variant={accountLevel === 'primary' ? 'default' : 'ghost'} onClick={() => {
                     setAccountLevel('primary');
                     setParent('');
-                  }} data-testid="button-account-primary">
+                  }} aria-pressed={accountLevel === 'primary'} data-testid="button-account-primary">
                     حساب أساسي
                   </Button>
-                  <Button type="button" variant={accountLevel === 'subaccount' ? 'default' : 'ghost'} onClick={() => setAccountLevel('subaccount')} data-testid="button-account-subaccount">
+                  <Button type="button" variant={accountLevel === 'subaccount' ? 'default' : 'ghost'} onClick={() => setAccountLevel('subaccount')} aria-pressed={accountLevel === 'subaccount'} data-testid="button-account-subaccount">
                     حساب فرعي
                   </Button>
                 </div>
@@ -341,7 +341,7 @@ export default function Accounts() {
 
                   <div className="grid gap-3 md:hidden">
                     {group.rows.map(({ account, depth, hasChildren }) => (
-                      <article key={account.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`card-account-${account.id}`}>
+                      <article key={account.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" data-account-depth={depth} data-testid={`card-account-${account.id}`}>
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1">
                             <div className="mb-2 flex items-center justify-between gap-3">
@@ -403,7 +403,7 @@ export default function Accounts() {
                       </TableHeader>
                       <TableBody>
                         {group.rows.map(({ account, depth, hasChildren }) => (
-                          <TableRow key={account.id} className="group transition-colors hover:bg-slate-50/50" data-testid={`row-account-${account.id}`}>
+                          <TableRow key={account.id} className="group transition-colors hover:bg-slate-50/50" data-account-depth={depth} data-testid={`row-account-${account.id}`}>
                             <TableCell className="font-mono text-sm font-medium text-slate-600">{account.code}</TableCell>
                             <TableCell className="font-medium text-slate-900">
                               <div className="flex items-center gap-1" style={{ paddingInlineStart: `${depth * 22}px` }}>

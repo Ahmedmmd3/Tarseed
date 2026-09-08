@@ -34,6 +34,8 @@ function seededJournals() {
 
 async function mockSharedAccounting(page, journals = seededJournals()) {
   const capturedJournalPosts = [];
+  const accountRecords = accounts.map((account) => ({ ...account }));
+  let nextAccountId = 100;
   await page.context().addCookies([{
     name: 'wudooh_remote_session',
     value: '1',
@@ -64,10 +66,27 @@ async function mockSharedAccounting(page, journals = seededJournals()) {
     });
   });
   await page.route('**/api/accounting/initialize', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ created: 0, accounts }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ created: 0, accounts: accountRecords }) });
   });
   await page.route('**/api/data/accounts', async (route) => {
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ records: accounts }) });
+    if (route.request().method() === 'POST') {
+      const record = { ...route.request().postDataJSON(), id: String(nextAccountId++) };
+      accountRecords.push(record);
+      await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ record }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ records: accountRecords }) });
+  });
+  await page.route('**/api/data/accounts/*', async (route) => {
+    if (route.request().method() !== 'PATCH') {
+      await route.fallback();
+      return;
+    }
+    const id = route.request().url().split('/').at(-1);
+    const index = accountRecords.findIndex((account) => account.id === id);
+    const record = { ...accountRecords[index], ...route.request().postDataJSON() };
+    accountRecords[index] = record;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ record }) });
   });
   await page.route('**/api/data/journalEntries', async (route) => {
     if (route.request().method() === 'POST') {
@@ -234,4 +253,69 @@ test('يعرض مجموعات الحسابات والتقارير الثلاثة
     await page.getByTestId('tab-report-trial').click();
     await expect(page.getByRole('heading', { name: 'ميزان المراجعة بالمجاميع والأرصدة' })).toBeVisible();
   }
+});
+
+test('يحفظ الحساب الفرعي تحت أبيه ويمنع اختيار نفسه أو فروعه كأب', async ({ page }) => {
+  await mockSharedAccounting(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/accounts', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  await page.getByTestId('button-add-account').click();
+  await page.getByTestId('input-account-code').fill('1900');
+  await page.getByTestId('input-account-name').fill('أصل اختباري أساسي');
+  await expect(page.getByTestId('button-account-primary')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('button-submit-account').click();
+  await expect(page.getByTestId('input-account-code')).toBeHidden();
+  await expect(page.getByTestId('row-account-100')).toBeVisible();
+
+  await page.getByTestId('button-add-account').click();
+  await expect(page.getByTestId('input-account-code')).toBeVisible();
+  await page.getByTestId('input-account-code').fill('1910');
+  await page.getByTestId('input-account-name').fill('أصل اختباري فرعي');
+  await page.getByTestId('button-account-subaccount').click();
+  await expect(page.getByTestId('button-account-subaccount')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByTestId('select-account-parent').selectOption('100');
+  await page.getByTestId('button-submit-account').click();
+
+  await expect(page.getByTestId('row-account-100')).toHaveAttribute('data-account-depth', '0');
+  await expect(page.getByTestId('row-account-101')).toHaveAttribute('data-account-depth', '1');
+  await expect(page.getByTestId('row-account-100')).toContainText('أساسي');
+  await expect(page.getByTestId('row-account-101')).toContainText('فرعي');
+  expect(await page.getByTestId('row-account-100').evaluate((parent, child) =>
+    Boolean(parent.compareDocumentPosition(document.querySelector(`[data-testid="${child}"]`)) & Node.DOCUMENT_POSITION_FOLLOWING),
+  'row-account-101')).toBe(true);
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('row-account-100')).toHaveAttribute('data-account-depth', '0');
+  await expect(page.getByTestId('row-account-101')).toHaveAttribute('data-account-depth', '1');
+
+  await page.getByTestId('button-edit-account-101').click();
+  await expect(page.getByTestId('button-account-subaccount')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('select-account-parent')).toHaveValue('100');
+  await page.getByTestId('input-account-name').fill('أصل اختباري فرعي معدل');
+  const updateRequestPromise = page.waitForRequest((request) =>
+    request.method() === 'PATCH' && request.url().endsWith('/api/data/accounts/101'));
+  await page.getByTestId('button-submit-account').click();
+  const updateRequest = await updateRequestPromise;
+  expect(updateRequest.postDataJSON()).toEqual(expect.objectContaining({
+    name: 'أصل اختباري فرعي معدل',
+    type: 'asset',
+    parent: '100',
+  }));
+  await expect(page.getByTestId('row-account-101')).toContainText('أصل اختباري فرعي معدل');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('row-account-100')).toHaveAttribute('data-account-depth', '0');
+  await expect(page.getByTestId('row-account-101')).toHaveAttribute('data-account-depth', '1');
+  await expect(page.getByTestId('row-account-101')).toContainText('أصل اختباري فرعي معدل');
+  expect(await page.getByTestId('row-account-100').evaluate((parent, child) =>
+    Boolean(parent.compareDocumentPosition(document.querySelector(`[data-testid="${child}"]`)) & Node.DOCUMENT_POSITION_FOLLOWING),
+  'row-account-101')).toBe(true);
+
+  await page.getByTestId('button-edit-account-100').click();
+  await page.getByTestId('button-account-subaccount').click();
+  const parentOptions = page.getByTestId('select-account-parent').locator('option');
+  await expect(parentOptions.filter({ hasText: '1900 — أصل اختباري أساسي' })).toHaveCount(0);
+  await expect(parentOptions.filter({ hasText: '1910 — أصل اختباري فرعي' })).toHaveCount(0);
 });
