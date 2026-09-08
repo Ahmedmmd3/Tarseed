@@ -12,6 +12,7 @@ import {
 } from "../lib/purchase-order-share";
 import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, SourceJournalError } from "../lib/source-journals";
 import { resolveTransactionDimensions, TransactionDimensionError } from "../lib/transaction-dimensions";
+import { findAccountHierarchyIssues, parseAccountParentId, type AccountHierarchyIssue } from "../lib/account-hierarchy";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 
 const router: IRouter = Router();
@@ -77,49 +78,47 @@ async function validateAccountHierarchy(
   accountId: number | null,
   candidate: Record<string, unknown>,
 ): Promise<void> {
-  const parentId = candidate.parent == null || candidate.parent === "" ? null : Number(candidate.parent);
-  if (parentId !== null && (!Number.isInteger(parentId) || parentId <= 0)) {
-    throw new MutationRejected(400, "الحساب الأب غير صالح.");
-  }
-  if (accountId !== null && parentId === accountId) {
-    throw new MutationRejected(409, "لا يمكن جعل الحساب أباً لنفسه.");
-  }
   const rows = await executor.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
     eq(erpRecordsTable.tableName, "accounts"),
   ));
-  const accounts = new Map(rows.map((row) => [row.id, row.data as Record<string, unknown>]));
-  if (accountId !== null) {
-    const mismatchedChild = rows.some((row) => Number((row.data as Record<string, unknown>).parent) === accountId
-      && (row.data as Record<string, unknown>).type !== candidate.type);
-    if (mismatchedChild) {
+  const candidateId = accountId ?? Math.max(0, ...rows.map((row) => row.id)) + 1;
+  const snapshot = accountId === null
+    ? [...rows.map((row) => ({ id: row.id, data: row.data as Record<string, unknown> })), { id: candidateId, data: candidate }]
+    : rows.map((row) => ({ id: row.id, data: row.id === accountId ? candidate : row.data as Record<string, unknown> }));
+  const candidateParentId = parseAccountParentId(candidate.parent);
+  if (accountId !== null && candidateParentId === accountId) {
+    throw new MutationRejected(409, "لا يمكن جعل الحساب أباً لنفسه.");
+  }
+  const candidateAncestry = new Set<number>([candidateId]);
+  const accounts = new Map(snapshot.map((row) => [row.id, row.data]));
+  let cursor = candidateParentId;
+  while (cursor !== null && cursor !== undefined && !candidateAncestry.has(cursor)) {
+    candidateAncestry.add(cursor);
+    cursor = parseAccountParentId(accounts.get(cursor)?.parent);
+  }
+  const issue = findAccountHierarchyIssues(snapshot).find((item) =>
+    item.accountId === candidateId
+    || ("parentId" in item && item.parentId === candidateId)
+    || (item.kind === "cycle" && item.cycleAccountIds.some((id) => candidateAncestry.has(id))));
+  if (!issue) return;
+  if (issue.kind === "invalid_parent") throw new MutationRejected(400, "الحساب الأب غير صالح.");
+  if (issue.kind === "missing_parent") throw new MutationRejected(404, "الحساب الأب غير موجود في هذه المنشأة.");
+  if (issue.kind === "inactive_parent") {
+    if (issue.accountId === candidateId) throw new MutationRejected(409, "لا يمكن الإضافة تحت حساب أب موقوف.");
+    throw new MutationRejected(409, "لا يمكن تعطيل حساب له حسابات فرعية نشطة.");
+  }
+  if (issue.kind === "type_mismatch") {
+    if (issue.accountId !== candidateId) {
       throw new MutationRejected(
         409,
         "لا يمكن تغيير تصنيف حساب له فروع. انقل الفروع أو غيّر تصنيفها أولاً.",
         "account_type_conflicts_with_children",
       );
     }
+    throw new MutationRejected(409, "يجب أن يكون الحساب الأب من التصنيف المحاسبي نفسه.");
   }
-  if (parentId !== null) {
-    const parent = accounts.get(parentId);
-    if (!parent) throw new MutationRejected(404, "الحساب الأب غير موجود في هذه المنشأة.");
-    if (parent.status !== "active") throw new MutationRejected(409, "لا يمكن الإضافة تحت حساب أب موقوف.");
-    if (parent.type !== candidate.type) throw new MutationRejected(409, "يجب أن يكون الحساب الأب من التصنيف المحاسبي نفسه.");
-    const visited = new Set<number>();
-    let cursor: number | null = parentId;
-    while (cursor !== null) {
-      if (cursor === accountId) throw new MutationRejected(409, "لا يمكن نقل الحساب تحت أحد حساباته الفرعية.");
-      if (visited.has(cursor)) throw new MutationRejected(409, "دليل الحسابات يحتوي دورة غير صالحة.");
-      visited.add(cursor);
-      const next: unknown = accounts.get(cursor)?.parent;
-      cursor = next == null || next === "" ? null : Number(next);
-    }
-  }
-  if (accountId !== null && candidate.status === "inactive") {
-    const activeChild = rows.some((row) => Number((row.data as Record<string, unknown>).parent) === accountId
-      && (row.data as Record<string, unknown>).status === "active");
-    if (activeChild) throw new MutationRejected(409, "لا يمكن تعطيل حساب له حسابات فرعية نشطة.");
-  }
+  throw new MutationRejected(409, "لا يمكن نقل الحساب تحت أحد حساباته الفرعية.");
 }
 
 async function lockAccountHierarchy(
@@ -127,144 +126,6 @@ async function lockAccountHierarchy(
   organizationId: number,
 ): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACCOUNT_HIERARCHY_LOCK_NAMESPACE}, ${organizationId})`);
-}
-
-type AccountTypeMismatchIssue = {
-  kind: "type_mismatch";
-  accountId: number;
-  accountCode: string;
-  accountName: string;
-  accountType: unknown;
-  parentId: number;
-  parentCode: string;
-  parentName: string;
-  parentType: unknown;
-};
-
-type MissingParentIssue = {
-  kind: "missing_parent";
-  accountId: number;
-  accountCode: string;
-  accountName: string;
-  accountType: unknown;
-  parentId: number;
-};
-
-type InvalidParentIssue = {
-  kind: "invalid_parent";
-  accountId: number;
-  accountCode: string;
-  accountName: string;
-  accountType: unknown;
-};
-
-type AccountCycleIssue = {
-  kind: "cycle";
-  accountId: number;
-  accountCode: string;
-  accountName: string;
-  accountType: unknown;
-  cycleAccountIds: number[];
-  cycleAccounts: Array<{ accountId: number; accountCode: string; accountName: string }>;
-};
-
-type AccountHierarchyIssue = AccountTypeMismatchIssue | MissingParentIssue | InvalidParentIssue | AccountCycleIssue;
-
-function parseAccountParentId(parent: unknown): number | null | undefined {
-  if (parent == null || parent === "") return null;
-  if (typeof parent === "number") {
-    return Number.isInteger(parent) && parent > 0 ? parent : undefined;
-  }
-  if (typeof parent !== "string" || !/^[1-9]\d*$/.test(parent)) return undefined;
-  const parentId = Number(parent);
-  return Number.isSafeInteger(parentId) ? parentId : undefined;
-}
-
-function findAccountHierarchyIssues(
-  rows: Array<{ id: number; data: Record<string, unknown> }>,
-): AccountHierarchyIssue[] {
-  const accounts = new Map(rows.map((row) => [row.id, row.data]));
-  const issues: AccountHierarchyIssue[] = [];
-  for (const row of rows) {
-    const parentId = parseAccountParentId(row.data.parent);
-    if (parentId === null) continue;
-    if (parentId === undefined) {
-      issues.push({
-        kind: "invalid_parent",
-        accountId: row.id,
-        accountCode: String(row.data.code ?? ""),
-        accountName: String(row.data.name ?? ""),
-        accountType: row.data.type,
-      });
-      continue;
-    }
-    const parent = accounts.get(parentId);
-    if (!parent) {
-      issues.push({
-        kind: "missing_parent",
-        accountId: row.id,
-        accountCode: String(row.data.code ?? ""),
-        accountName: String(row.data.name ?? ""),
-        accountType: row.data.type,
-        parentId,
-      });
-      continue;
-    }
-    if (parent.type === row.data.type) continue;
-    issues.push({
-      kind: "type_mismatch",
-      accountId: row.id,
-      accountCode: String(row.data.code ?? ""),
-      accountName: String(row.data.name ?? ""),
-      accountType: row.data.type,
-      parentId,
-      parentCode: String(parent.code ?? ""),
-      parentName: String(parent.name ?? ""),
-      parentType: parent.type,
-    });
-  }
-
-  const reportedCycles = new Set<string>();
-  for (const row of rows) {
-    const path: number[] = [];
-    const pathIndex = new Map<number, number>();
-    let cursor: number | null = row.id;
-    while (cursor !== null && accounts.has(cursor)) {
-      const existingIndex = pathIndex.get(cursor);
-      if (existingIndex !== undefined) {
-        const cycleAccountIds = path.slice(existingIndex);
-        const cycleKey = [...cycleAccountIds].sort((left, right) => left - right).join(":");
-        if (!reportedCycles.has(cycleKey)) {
-          reportedCycles.add(cycleKey);
-          const representativeId = Math.min(...cycleAccountIds);
-          const representative = accounts.get(representativeId) ?? {};
-          issues.push({
-            kind: "cycle",
-            accountId: representativeId,
-            accountCode: String(representative.code ?? ""),
-            accountName: String(representative.name ?? ""),
-            accountType: representative.type,
-            cycleAccountIds,
-            cycleAccounts: cycleAccountIds.map((accountId) => {
-              const account = accounts.get(accountId) ?? {};
-              return {
-                accountId,
-                accountCode: String(account.code ?? ""),
-                accountName: String(account.name ?? ""),
-              };
-            }),
-          });
-        }
-        break;
-      }
-      pathIndex.set(cursor, path.length);
-      path.push(cursor);
-      const parent: unknown = accounts.get(cursor)?.parent;
-      const parentId = parseAccountParentId(parent);
-      cursor = parentId === undefined ? null : parentId;
-    }
-  }
-  return issues;
 }
 
 function validateAccountParentRepair(
@@ -275,32 +136,35 @@ function validateAccountParentRepair(
 ): void {
   if (parentId === null) return;
   if (parentId === accountId) throw new MutationRejected(409, "لا يمكن جعل الحساب أباً لنفسه.");
-  const accounts = new Map(rows.map((row) => [row.id, row.data]));
-  const parent = accounts.get(parentId);
-  if (!parent) throw new MutationRejected(404, "الحساب الأب غير موجود في هذه المنشأة.");
-  if (parent.status !== "active") throw new MutationRejected(409, "لا يمكن النقل تحت حساب أب موقوف.");
-  if (parent.type !== account.type) {
+  const candidate = { ...account, parent: String(parentId) };
+  const snapshot = rows.map((row) => row.id === accountId ? { id: row.id, data: candidate } : row);
+  const accounts = new Map(snapshot.map((row) => [row.id, row.data]));
+  const ancestry = new Set<number>([accountId]);
+  let cursor: number | null | undefined = parentId;
+  while (cursor !== null && cursor !== undefined && !ancestry.has(cursor)) {
+    ancestry.add(cursor);
+    cursor = parseAccountParentId(accounts.get(cursor)?.parent);
+  }
+  const issue = findAccountHierarchyIssues(snapshot).find((item) =>
+    item.accountId === accountId
+    || ((item.kind === "missing_parent" || item.kind === "invalid_parent") && ancestry.has(item.accountId))
+    || (item.kind === "cycle" && item.cycleAccountIds.some((id) => ancestry.has(id))));
+  if (!issue) return;
+  if (issue.kind === "missing_parent") {
+    if (issue.accountId === accountId) throw new MutationRejected(404, "الحساب الأب غير موجود في هذه المنشأة.");
+    throw new MutationRejected(409, "مسار الحساب الأب المختار يحتوي رابطاً مفقوداً.");
+  }
+  if (issue.kind === "invalid_parent") {
+    throw new MutationRejected(409, "مسار الحساب الأب المختار يحتوي رابطاً غير صالح.");
+  }
+  if (issue.kind === "inactive_parent") throw new MutationRejected(409, "لا يمكن النقل تحت حساب أب موقوف.");
+  if (issue.kind === "type_mismatch") {
     throw new MutationRejected(409, "يجب أن يكون الحساب الأب من التصنيف المحاسبي نفسه.");
   }
-
-  const visited = new Set<number>();
-  let cursor: number | null = parentId;
-  while (cursor !== null) {
-    if (cursor === accountId) throw new MutationRejected(409, "لا يمكن نقل الحساب تحت أحد حساباته الفرعية.");
-    if (visited.has(cursor)) throw new MutationRejected(409, "الحساب الأب المختار يقع ضمن دورة غير صالحة.");
-    visited.add(cursor);
-    const current = accounts.get(cursor);
-    if (!current) throw new MutationRejected(409, "مسار الحساب الأب المختار يحتوي رابطاً مفقوداً.");
-    const nextId = parseAccountParentId(current.parent);
-    if (nextId === null) {
-      cursor = null;
-      continue;
-    }
-    if (nextId === undefined) {
-      throw new MutationRejected(409, "مسار الحساب الأب المختار يحتوي رابطاً غير صالح.");
-    }
-    cursor = nextId;
+  if (issue.cycleAccountIds.includes(accountId)) {
+    throw new MutationRejected(409, "لا يمكن نقل الحساب تحت أحد حساباته الفرعية.");
   }
+  throw new MutationRejected(409, "الحساب الأب المختار يقع ضمن دورة غير صالحة.");
 }
 
 function requireTableAccess(request: Request, response: Response): { auth: AuthContext; tableName: string } | null {
@@ -1149,7 +1013,9 @@ router.get("/accounting/account-hierarchy/issues", requireAuth, requireSubscript
     eq(erpRecordsTable.organizationId, auth.organizationId),
     eq(erpRecordsTable.tableName, "accounts"),
   ));
-  response.json({ issues: findAccountHierarchyIssues(rows) });
+  response.json({
+    issues: findAccountHierarchyIssues(rows).filter((issue) => issue.kind !== "inactive_parent"),
+  });
 });
 
 router.post("/accounting/account-hierarchy/repair", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {

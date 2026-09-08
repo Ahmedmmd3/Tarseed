@@ -12,6 +12,7 @@ import {
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
+import { findAccountHierarchyIssues } from "../src/lib/account-hierarchy.ts";
 import { hashPassword } from "../src/lib/team-auth.ts";
 
 let server;
@@ -28,6 +29,22 @@ let grandchild;
 let journal;
 let orphan;
 let invalidParent;
+
+test("يفحص المنطق المشترك الأب النشط والتصنيف والدورات من اللقطة نفسها", () => {
+  const rows = [
+    { id: 1, data: { code: "1000", name: "أب موقوف", type: "asset", status: "inactive", parent: null } },
+    { id: 2, data: { code: "1100", name: "فرع نشط", type: "asset", status: "active", parent: "1" } },
+    { id: 3, data: { code: "2000", name: "تصنيف مختلف", type: "liability", status: "active", parent: "2" } },
+    { id: 4, data: { code: "1200", name: "دورة أولى", type: "asset", status: "active", parent: "5" } },
+    { id: 5, data: { code: "1210", name: "دورة ثانية", type: "asset", status: "active", parent: "4" } },
+  ];
+
+  const issues = findAccountHierarchyIssues(rows);
+  assert.ok(issues.some((issue) => issue.kind === "inactive_parent" && issue.accountId === 2));
+  assert.ok(issues.some((issue) => issue.kind === "type_mismatch" && issue.accountId === 3));
+  assert.ok(issues.some((issue) => issue.kind === "cycle"
+    && [...issue.cycleAccountIds].sort((left, right) => left - right).join(",") === "4,5"));
+});
 let invalidAncestorParent;
 let cycleA;
 let cycleB;
@@ -156,6 +173,14 @@ before(async () => {
     code: `T-${suffix}-9`, name: "أب ذو مسار مشوه", type: "asset", parent: "01",
     openingBalance: 0, balance: 0, status: "active",
   });
+  const inactiveParent = await createRecord("accounts", {
+    code: `T-${suffix}-10`, name: "أب موقوف", type: "asset",
+    openingBalance: 0, balance: 0, status: "inactive",
+  });
+  await createRecord("accounts", {
+    code: `T-${suffix}-11`, name: "فرع نشط تحت أب موقوف", type: "asset", parent: String(inactiveParent.id),
+    openingBalance: 0, balance: 0, status: "active",
+  });
   cycleA = await createRecord("accounts", {
     code: `T-${suffix}-6`, name: "طرف الدورة الأول", type: "asset",
     openingBalance: 0, balance: 0, status: "active",
@@ -226,6 +251,7 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "missing_parent" && issue.accountId === orphan.id));
   assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "invalid_parent" && issue.accountId === invalidParent.id));
   assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "invalid_parent" && issue.accountId === invalidAncestorParent.id));
+  assert.ok(!issuesBefore.payload.issues.some((issue) => issue.kind === "inactive_parent"));
   const [invalidParentBeforeRepair] = await db.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, invalidParent.id));
   assert.equal(invalidParentBeforeRepair.data.parent, "legacy-parent");
   const cycleIssue = issuesBefore.payload.issues.find((issue) => issue.kind === "cycle");

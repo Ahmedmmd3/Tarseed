@@ -1,11 +1,25 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { createServer } from "node:http";
+import test, { after, before } from "node:test";
 import { eq } from "drizzle-orm";
-import { db, erpRecordsTable } from "@workspace/db";
+import { db, erpRecordsTable, pool } from "@workspace/db";
+import app from "../src/app.ts";
 
-const origin = process.env.BACKUP_TEST_ORIGIN ?? "http://127.0.0.1:80";
-const apiBase = `${origin}/api`;
+let server;
+let origin;
 const generationByCookie = new Map();
+
+before(async () => {
+  server = createServer(app);
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  origin = `http://127.0.0.1:${address.port}`;
+});
+
+after(async () => {
+  if (server) await new Promise((resolve) => server.close(resolve));
+  await pool.end();
+});
 
 function unique(value) {
   return `${value}-${crypto.randomUUID().slice(0, 8)}`;
@@ -13,7 +27,7 @@ function unique(value) {
 
 async function request(path, { method = "GET", body, cookie, dataGeneration, headers = {} } = {}) {
   const generation = dataGeneration ?? generationByCookie.get(cookie);
-  const response = await fetch(`${apiBase}${path}`, {
+  const response = await fetch(`${origin}/api${path}`, {
     method,
     headers: {
       Origin: origin,
@@ -281,6 +295,19 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   const wrongTypeParentRestore = await restoreWithParent(accountsByType.expense.id);
   assert.equal(wrongTypeParentRestore.response.status, 400, JSON.stringify(wrongTypeParentRestore.payload));
   assert.match(wrongTypeParentRestore.payload.error, /تصنيف محاسبي مختلف/);
+
+  const activeChildUnderInactiveParentRestore = await request("/backup/restore", {
+    method: "POST",
+    cookie,
+    body: {
+      ...exported.payload,
+      records: exported.payload.records.map((record) => record.id === inactiveChild.payload.record.id
+        ? { ...record, data: { ...record.data, status: "active" } }
+        : record),
+    },
+  });
+  assert.equal(activeChildUnderInactiveParentRestore.response.status, 400, JSON.stringify(activeChildUnderInactiveParentRestore.payload));
+  assert.match(activeChildUnderInactiveParentRestore.payload.error, /حساب أب موقوف/);
 
   const cyclicParentRestore = await request("/backup/restore", {
     method: "POST",

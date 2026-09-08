@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
 import { hasSubscriptionAccess, requireAuth, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isPrivateAttachmentPathForOrganization } from "../lib/private-object-store";
+import { findAccountHierarchyIssues } from "../lib/account-hierarchy";
 
 const router: IRouter = Router();
 const BACKUP_VERSION = 1;
@@ -275,48 +276,17 @@ function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set
 
 function validateAccountHierarchy(records: BackupRecord[]): string | null {
   const accountRecords = records.filter((record) => record.tableName === "accounts");
-  const accounts = new Map(accountRecords.map((record) => [record.id, record.data]));
-
-  for (const account of accountRecords) {
-    const rawParentId = account.data.parent;
-    if (rawParentId === null || rawParentId === undefined || rawParentId === "") continue;
-    const parentId = typeof rawParentId === "number"
-      ? rawParentId
-      : typeof rawParentId === "string" && /^[1-9]\d*$/.test(rawParentId)
-        ? Number(rawParentId)
-        : Number.NaN;
-    if (!Number.isSafeInteger(parentId) || parentId <= 0) {
-      return "يحتوي الملف على رابط حساب أب غير صالح. راجع دليل الحسابات في النسخة قبل الاستعادة.";
-    }
-    const parent = accounts.get(parentId);
-    if (!parent) {
-      return "يحتوي الملف على حساب يشير إلى حساب أب مفقود. راجع دليل الحسابات في النسخة قبل الاستعادة.";
-    }
-    if (parent.status !== "active" && account.data.status === "active") {
-      return "يحتوي الملف على حساب مرتبط بحساب أب موقوف.";
-    }
-    if (parent.type !== account.data.type) {
-      return "يحتوي الملف على حساب أب من تصنيف محاسبي مختلف.";
-    }
+  const issue = findAccountHierarchyIssues(accountRecords)[0];
+  if (!issue) return null;
+  if (issue.kind === "invalid_parent") {
+    return "يحتوي الملف على رابط حساب أب غير صالح. راجع دليل الحسابات في النسخة قبل الاستعادة.";
   }
-
-  for (const account of accountRecords) {
-    const visited = new Set<number>();
-    let cursor: number | null = account.id;
-    while (cursor !== null) {
-      if (visited.has(cursor)) {
-        return "يحتوي دليل الحسابات في الملف على دورة غير صالحة.";
-      }
-      visited.add(cursor);
-      const rawParentId: unknown = accounts.get(cursor)?.parent;
-      if (rawParentId === null || rawParentId === undefined || rawParentId === "") {
-        cursor = null;
-      } else {
-        cursor = typeof rawParentId === "number" ? rawParentId : Number(rawParentId);
-      }
-    }
+  if (issue.kind === "missing_parent") {
+    return "يحتوي الملف على حساب يشير إلى حساب أب مفقود. راجع دليل الحسابات في النسخة قبل الاستعادة.";
   }
-  return null;
+  if (issue.kind === "inactive_parent") return "يحتوي الملف على حساب مرتبط بحساب أب موقوف.";
+  if (issue.kind === "type_mismatch") return "يحتوي الملف على حساب أب من تصنيف محاسبي مختلف.";
+  return "يحتوي دليل الحسابات في الملف على دورة غير صالحة.";
 }
 
 function validateBackupRecords(records: BackupRecord[], organizationId: number): string | null {
