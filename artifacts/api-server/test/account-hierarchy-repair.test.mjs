@@ -612,6 +612,48 @@ after(async () => {
   await pool.end();
 });
 
+test("يحافظ مسار مشاكل شجرة الحسابات على ترتيب تفاصيل الدورة الثلاثية", async () => {
+  const issuesResponse = await request("/accounting/account-hierarchy/issues", { cookie: ownerCookie });
+  assert.equal(issuesResponse.response.status, 200, JSON.stringify(issuesResponse.payload));
+
+  const cycleIssue = issuesResponse.payload.issues.find((issue) => issue.kind === "cycle"
+    && issue.cycleAccountIds.includes(longCycleA.id));
+  assert.ok(cycleIssue, "يجب أن يعرض المسار الدورة الثلاثية");
+
+  const expectedCycleAccountIds = [longCycleA.id, longCycleC.id, longCycleB.id];
+  assert.equal(
+    cycleIssue.cycleAccountIds[0],
+    Math.min(longCycleA.id, longCycleB.id, longCycleC.id),
+    "يجب أن تبدأ الدورة بالحساب ذي المعرّف الأصغر",
+  );
+  assert.deepEqual(cycleIssue.cycleAccountIds, expectedCycleAccountIds);
+  assert.deepEqual(
+    cycleIssue.cycleAccounts,
+    [
+      {
+        accountId: longCycleA.id,
+        accountCode: longCycleA.data.code,
+        accountName: longCycleA.data.name,
+      },
+      {
+        accountId: longCycleC.id,
+        accountCode: longCycleC.data.code,
+        accountName: longCycleC.data.name,
+      },
+      {
+        accountId: longCycleB.id,
+        accountCode: longCycleB.data.code,
+        accountName: longCycleB.data.name,
+      },
+    ],
+  );
+  assert.deepEqual(
+    cycleIssue.cycleAccounts.map((account) => account.accountId),
+    cycleIssue.cycleAccountIds,
+    "يجب أن تبقى تفاصيل كل حساب في موضع معرّفه نفسه بعد تحويل الاستجابة إلى JSON",
+  );
+});
+
 test("يحصر الفحص والإصلاح بالمالك ويتطلب التأكيد ويحافظ على القيود والأرصدة", async () => {
   const repairAuditLogs = () => db.select().from(teamAuditLogsTable).where(and(
     eq(teamAuditLogsTable.organizationId, organizationId),
