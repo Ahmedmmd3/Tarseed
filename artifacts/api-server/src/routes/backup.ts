@@ -232,12 +232,15 @@ function matchesExpectedRecordsById(actual: unknown[], expected: Array<Record<st
   });
 }
 
-function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set<number>, expected: ClosureSnapshot): boolean {
+function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set<number>, expected: ClosureSnapshot | null): boolean {
   const totalKeys = ["revenue", "expense", "netIncome", "assets", "liabilities", "equity", "trialDebit", "trialCredit"];
   const totals = data.totals;
+  const fiscalClosure = data.kind === "fiscal_year";
+  const receivables = fiscalClosure && data.receivables === undefined ? [] : data.receivables;
+  const payables = fiscalClosure && data.payables === undefined ? [] : data.payables;
   if (!isFiniteNumber(data.netIncome) || !isPlainRecord(totals)
     || !totalKeys.every((key) => isFiniteNumber(totals[key])) || !Array.isArray(data.trialBalance)
-    || !Array.isArray(data.receivables) || !Array.isArray(data.payables)) {
+    || !Array.isArray(receivables) || !Array.isArray(payables)) {
     return false;
   }
   const numericTotals = totals as Record<string, number>;
@@ -261,11 +264,13 @@ function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set
     && Math.abs(numericTotals.trialDebit - trialDebit) < 0.00001
     && Math.abs(numericTotals.trialCredit - trialCredit) < 0.00001
     && Math.abs(numericTotals.trialDebit - numericTotals.trialCredit) < 0.00001
-    && totalKeys.every((key) => Math.abs(numericTotals[key as keyof ClosureTotals] - expected.totals[key as keyof ClosureTotals]) < 0.00001)
-    && matchesExpectedRecordsById(data.trialBalance, expected.trialBalance)
-    && data.receivables.every(hasValidPartyBalance) && data.payables.every(hasValidPartyBalance)
-    && matchesExpectedRecordsById(data.receivables, expected.receivables)
-    && matchesExpectedRecordsById(data.payables, expected.payables);
+    && receivables.every(hasValidPartyBalance) && payables.every(hasValidPartyBalance)
+    && (expected === null || (
+      totalKeys.every((key) => Math.abs(numericTotals[key as keyof ClosureTotals] - expected.totals[key as keyof ClosureTotals]) < 0.00001)
+      && matchesExpectedRecordsById(data.trialBalance, expected.trialBalance)
+      && matchesExpectedRecordsById(receivables, expected.receivables)
+      && matchesExpectedRecordsById(payables, expected.payables)
+    ));
 }
 
 function validateAccountHierarchy(records: BackupRecord[]): string | null {
@@ -413,11 +418,13 @@ function validateBackupRecords(records: BackupRecord[], organizationId: number):
       }
     }
     if (record.tableName === "financialClosures"
-      && (!isDate(data.from) || !isDate(data.to) || String(data.from) > String(data.to) || data.status !== "closed"
+      && (!isDate(data.from) || !isDate(data.to) || String(data.from) > String(data.to) || !["closed", "reopened"].includes(String(data.status))
         || !validateFinancialClosure(
           data,
           idsByTable.get("accounts") ?? new Set<number>(),
-          calculateClosureSnapshot(records, String(data.from), String(data.to)),
+          data.status === "closed" && data.kind !== "fiscal_year"
+            ? calculateClosureSnapshot(records, String(data.from), String(data.to))
+            : null,
         ))) {
       return "يحتوي الملف على إقفال مالي غير صالح.";
     }

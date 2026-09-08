@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
 import { Router, type IRouter, type NextFunction, type Request, type Response } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { db, eInvoiceDocumentsTable, erpRecordsTable, organizationsTable, teamAuditLogsTable } from "@workspace/db";
+import { ReplitConnectors } from "@replit/connectors-sdk";
+import { db, eInvoiceDocumentsTable, erpRecordsTable, financialClosureReopenCodesTable, organizationsTable, teamAuditLogsTable, teamUsersTable } from "@workspace/db";
 import { lockAndValidateDataGeneration, lockedWriteRejection, refreshAuthAfterOrganizationLock, requireAuth, requireCurrentDataGeneration, requireOwner, requireSubscriptionAccess, type AuthContext } from "../middleware/team-auth";
 import { isLocationAllowed } from "../lib/location-scope";
 import { buildLedgerReport } from "../lib/accounting-ledger";
@@ -11,6 +12,10 @@ import { journalLinesForSource, sourceTypeFor, sourceTypeVariants, type SourceTa
 import { convertManualJournalToSourceDraft, MutationRejected, synchronizeConvertedManualJournal } from "./erp-data";
 
 const router: IRouter = Router();
+const connectors = new ReplitConnectors();
+const REOPEN_CODE_MINUTES = 10;
+const REOPEN_CODE_RESEND_SECONDS = 60;
+const REOPEN_CODE_MAX_ATTEMPTS = 5;
 
 type AnyRecord = Record<string, unknown> & { id: number };
 type ErpRecord = typeof erpRecordsTable.$inferSelect;
@@ -63,6 +68,63 @@ function requireAccounting(_request: Request, response: Response, next: NextFunc
 
 function hasAccountingAccess(auth: AuthContext): boolean {
   return auth.roleId === "owner" || auth.permissions.accounting === true;
+}
+
+function hashReopenCode(auth: AuthContext, targetType: string, targetId: string, code: string): string {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error("SESSION_SECRET is required to protect financial reopening codes.");
+  return createHmac("sha256", secret)
+    .update(`financial-reopen:${auth.organizationId}:${auth.id}:${targetType}:${targetId}:${code}`)
+    .digest("hex");
+}
+
+function verifyReopenCode(auth: AuthContext, targetType: string, targetId: string, code: string, expectedHash: string): boolean {
+  const actual = Buffer.from(hashReopenCode(auth, targetType, targetId, code), "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function escapeEmailHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  }[character] ?? character));
+}
+
+async function sendFinancialReopenCode(email: string, name: string, code: string, label: string): Promise<void> {
+  if (process.env.NODE_ENV === "test") return;
+  const configuredSender = process.env.RESEND_FROM_EMAIL?.trim();
+  if (!configuredSender && process.env.NODE_ENV === "production") throw new Error("Email delivery is not configured.");
+  const sender = configuredSender
+    ? configuredSender.includes("<") ? configuredSender : `ترصيد <${configuredSender}>`
+    : "ترصيد <onboarding@resend.dev>";
+  const providerResponse = await connectors.proxy("resend", "/emails", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: sender,
+      to: [email],
+      subject: "رمز فتح الإقفال المالي في ترصيد",
+      text: `مرحباً ${name}،\n\nرمز فتح ${label}: ${code}\n\nينتهي الرمز خلال ${REOPEN_CODE_MINUTES} دقائق ويستخدم مرة واحدة فقط. إذا لم تطلب ذلك فتجاهل الرسالة.`,
+      html: `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.8;color:#0f172a"><h1 style="font-size:22px">فتح الإقفال المالي</h1><p>مرحباً ${escapeEmailHtml(name)}،</p><p>رمز فتح ${escapeEmailHtml(label)} هو:</p><p dir="ltr" style="margin:24px 0;font-size:32px;font-weight:700;letter-spacing:10px;color:#b91c1c">${code}</p><p>ينتهي الرمز خلال ${REOPEN_CODE_MINUTES} دقائق ويستخدم مرة واحدة فقط.</p><p>إذا لم تطلب هذه العملية، تجاهل الرسالة وراجع سجل النشاط.</p></div>`,
+    }),
+  });
+  if (!providerResponse.ok) throw new Error(`Resend request failed with status ${providerResponse.status}`);
+}
+
+function reopenTarget(body: Record<string, unknown>): { targetType: "period" | "fiscal_year"; targetId: string } | null {
+  if (body.kind === "period") {
+    const id = Number(body.closureId);
+    return Number.isInteger(id) && id > 0 ? { targetType: "period", targetId: String(id) } : null;
+  }
+  if (body.kind === "fiscal_year") {
+    const year = Number(body.year);
+    return Number.isInteger(year) && year >= 1900 && year <= 9999 ? { targetType: "fiscal_year", targetId: String(year) } : null;
+  }
+  return null;
 }
 
 const inPeriod = (record: Record<string, unknown>, from: string, to: string): boolean => {
@@ -591,7 +653,8 @@ router.get("/accounting/summary", requireAuth, requireSubscriptionAccess, requir
 
 router.get("/accounting/closures", requireAuth, requireSubscriptionAccess, requireAccounting, async (_request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
-  const closures = await recordsFor(auth, "financialClosures");
+  const closures = (await recordsFor(auth, "financialClosures"))
+    .filter((closure) => closure.status === "closed" && closure.kind !== "fiscal_year");
   response.json({ closures: closures.sort((left, right) => String(right.to).localeCompare(String(left.to)) || right.id - left.id) });
 });
 
@@ -2629,6 +2692,198 @@ router.post("/accounting/close", requireAuth, requireSubscriptionAccess, require
   response.status(201).json({ closure: { ...closure.data, id: closure.id } });
 });
 
+router.post("/accounting/reopen/request-code", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireOwner, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const body = request.body && typeof request.body === "object" && !Array.isArray(request.body) ? request.body as Record<string, unknown> : {};
+  const target = reopenTarget(body);
+  if (!target) {
+    response.status(400).json({ error: "حدد الإقفال المالي المطلوب فتحه." });
+    return;
+  }
+  const [owner] = await db.select({
+    email: teamUsersTable.email,
+    name: teamUsersTable.name,
+    emailVerifiedAt: teamUsersTable.emailVerifiedAt,
+  }).from(teamUsersTable).where(and(eq(teamUsersTable.id, auth.id), eq(teamUsersTable.organizationId, auth.organizationId))).limit(1);
+  if (!owner?.emailVerifiedAt) {
+    response.status(409).json({ error: "يجب توثيق بريد مالك المنشأة قبل طلب رمز فتح الإقفال." });
+    return;
+  }
+  const code = process.env.NODE_ENV === "test" && /^\d{6}$/.test(process.env.FINANCIAL_REOPEN_TEST_CODE ?? "")
+    ? process.env.FINANCIAL_REOPEN_TEST_CODE!
+    : String(randomInt(100000, 1000000));
+  const codeHash = hashReopenCode(auth, target.targetType, target.targetId, code);
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + REOPEN_CODE_MINUTES * 60_000);
+  let label: string | null;
+  try {
+    label = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) return null;
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || currentAuth.roleId !== "owner") throw new AccountingMutationError(403, "فتح الإقفال متاح لمالك المنشأة فقط.");
+      const closures = await organizationRecordsFor(currentAuth, "financialClosures", tx);
+      const closure = target.targetType === "period"
+        ? closures.find((item) => String(item.id) === target.targetId && item.kind !== "fiscal_year" && item.status === "closed")
+        : closures.find((item) => item.kind === "fiscal_year" && String(item.fiscalYear) === target.targetId && item.status === "closed");
+      if (!closure) throw new AccountingMutationError(404, "الإقفال المحدد غير موجود أو مفتوح مسبقاً.");
+      const [existing] = await tx.select().from(financialClosureReopenCodesTable).where(and(
+        eq(financialClosureReopenCodesTable.organizationId, currentAuth.organizationId),
+        eq(financialClosureReopenCodesTable.ownerId, currentAuth.id),
+        eq(financialClosureReopenCodesTable.targetType, target.targetType),
+        eq(financialClosureReopenCodesTable.targetId, target.targetId),
+      )).for("update");
+      if (existing && existing.lastSentAt.getTime() + REOPEN_CODE_RESEND_SECONDS * 1000 > Date.now()) {
+        throw new AccountingMutationError(429, "انتظر دقيقة قبل طلب رمز جديد.");
+      }
+      await tx.insert(financialClosureReopenCodesTable).values({
+        organizationId: currentAuth.organizationId,
+        ownerId: currentAuth.id,
+        targetType: target.targetType,
+        targetId: target.targetId,
+        codeHash,
+        expiresAt,
+        usedAt: null,
+        attemptCount: 0,
+        lastSentAt: now,
+      }).onConflictDoUpdate({
+        target: [
+          financialClosureReopenCodesTable.organizationId,
+          financialClosureReopenCodesTable.ownerId,
+          financialClosureReopenCodesTable.targetType,
+          financialClosureReopenCodesTable.targetId,
+        ],
+        set: { codeHash, expiresAt, usedAt: null, attemptCount: 0, lastSentAt: now },
+      });
+      return target.targetType === "period"
+        ? `الفترة من ${String(closure.from)} إلى ${String(closure.to)}`
+        : `السنة المالية ${target.targetId}`;
+    });
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    throw error;
+  }
+  if (!label) {
+    const rejection = lockedWriteRejection(response);
+    response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+    return;
+  }
+  try {
+    await sendFinancialReopenCode(owner.email, owner.name, code, label);
+    response.json({ sent: true, expiresInMinutes: REOPEN_CODE_MINUTES, emailHint: owner.email.replace(/(^.).*(@.*$)/, "$1***$2") });
+  } catch (error) {
+    await db.update(financialClosureReopenCodesTable).set({ usedAt: new Date() }).where(and(
+      eq(financialClosureReopenCodesTable.organizationId, auth.organizationId),
+      eq(financialClosureReopenCodesTable.ownerId, auth.id),
+      eq(financialClosureReopenCodesTable.targetType, target.targetType),
+      eq(financialClosureReopenCodesTable.targetId, target.targetId),
+      eq(financialClosureReopenCodesTable.codeHash, codeHash),
+    )).catch(() => undefined);
+    response.status(503).json({ error: "تعذر إرسال رمز فتح الإقفال إلى بريد المالك." });
+  }
+});
+
+router.post("/accounting/reopen", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireOwner, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const body = request.body && typeof request.body === "object" && !Array.isArray(request.body) ? request.body as Record<string, unknown> : {};
+  const target = reopenTarget(body);
+  const code = typeof body.code === "string" ? body.code.trim() : "";
+  if (!target || !/^\d{6}$/.test(code)) {
+    response.status(400).json({ error: "أدخل رمز التحقق المكوّن من 6 أرقام." });
+    return;
+  }
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedAccountingMutationError(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || currentAuth.roleId !== "owner") throw new AccountingMutationError(403, "فتح الإقفال متاح لمالك المنشأة فقط.");
+      const [verification] = await tx.select().from(financialClosureReopenCodesTable).where(and(
+        eq(financialClosureReopenCodesTable.organizationId, currentAuth.organizationId),
+        eq(financialClosureReopenCodesTable.ownerId, currentAuth.id),
+        eq(financialClosureReopenCodesTable.targetType, target.targetType),
+        eq(financialClosureReopenCodesTable.targetId, target.targetId),
+      )).for("update");
+      if (!verification || verification.usedAt || verification.expiresAt <= new Date() || verification.attemptCount >= REOPEN_CODE_MAX_ATTEMPTS) {
+        throw new AccountingMutationError(400, "رمز فتح الإقفال غير صالح أو منتهي. اطلب رمزاً جديداً.");
+      }
+      if (!verifyReopenCode(currentAuth, target.targetType, target.targetId, code, verification.codeHash)) {
+        await tx.update(financialClosureReopenCodesTable).set({ attemptCount: verification.attemptCount + 1 }).where(eq(financialClosureReopenCodesTable.id, verification.id));
+        return { error: "رمز التحقق غير صحيح." } as const;
+      }
+      const closureRows = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "financialClosures"),
+      )).for("update");
+      const closure = target.targetType === "period"
+        ? closureRows.find((item) => String(item.id) === target.targetId && item.data.kind !== "fiscal_year" && item.data.status === "closed")
+        : closureRows.find((item) => item.data.kind === "fiscal_year" && String(item.data.fiscalYear) === target.targetId && item.data.status === "closed");
+      if (!closure) throw new AccountingMutationError(404, "الإقفال المحدد غير موجود أو مفتوح مسبقاً.");
+      const reopenedAt = new Date();
+      let reversalJournal: ErpRecord | null = null;
+      if (target.targetType === "fiscal_year") {
+        const closingJournalId = Number(closure.data.closingJournalId);
+        const [closingJournal] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, closingJournalId),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "journalEntries"),
+        )).for("update");
+        if (!closingJournal) throw new AccountingMutationError(409, "قيد إقفال السنة غير موجود؛ لا يمكن فتح السنة بأمان.");
+        const lines = Array.isArray(closingJournal.data.lines) ? closingJournal.data.lines : [];
+        const reversalLines = lines.map((line) => {
+          const item = line as Record<string, unknown>;
+          return { ...item, id: crypto.randomUUID(), debit: asNumber(item.credit), credit: asNumber(item.debit) };
+        });
+        [reversalJournal] = await tx.insert(erpRecordsTable).values({
+          organizationId: currentAuth.organizationId,
+          tableName: "journalEntries",
+          clientOperationId: `FISCAL-YEAR-REOPEN-${target.targetId}-${closure.id}`,
+          data: {
+            number: `FY-REOPEN-${target.targetId}`,
+            date: String(closure.data.to),
+            description: `عكس إقفال السنة المالية ${target.targetId}`,
+            status: "posted",
+            sourceType: "fiscal_year_reopen",
+            fiscalYear: Number(target.targetId),
+            reversesJournalId: closingJournal.id,
+            lines: reversalLines,
+          },
+        }).returning();
+        await tx.update(organizationsTable).set({ fiscalYearClosed: false, closedYear: null, closedAt: null, closedBy: null })
+          .where(eq(organizationsTable.id, currentAuth.organizationId));
+      }
+      await tx.update(erpRecordsTable).set({
+        data: { ...closure.data, status: "reopened", reopenedAt: reopenedAt.toISOString(), reopenedBy: currentAuth.id, ...(reversalJournal ? { reversalJournalId: reversalJournal.id } : {}) },
+        updatedAt: reopenedAt,
+      }).where(eq(erpRecordsTable.id, closure.id));
+      await tx.update(financialClosureReopenCodesTable).set({ usedAt: reopenedAt }).where(eq(financialClosureReopenCodesTable.id, verification.id));
+      await tx.insert(teamAuditLogsTable).values({
+        organizationId: currentAuth.organizationId,
+        actorId: currentAuth.id,
+        actorName: currentAuth.name || currentAuth.email,
+        action: target.targetType === "period" ? "financial_period_reopened" : "fiscal_year_reopened",
+        entity: target.targetType === "period" ? `financial-closure:${closure.id}` : `fiscal-year:${target.targetId}`,
+        details: target.targetType === "period"
+          ? `فتح الفترة المالية من ${String(closure.data.from)} إلى ${String(closure.data.to)} بعد التحقق من بريد المالك.`
+          : `فتح السنة المالية ${target.targetId} وإنشاء قيد عكسي لقيد الإقفال بعد التحقق من بريد المالك.`,
+      });
+      return { kind: target.targetType, closureId: closure.id, year: target.targetType === "fiscal_year" ? Number(target.targetId) : null };
+    });
+    if ("error" in result) {
+      response.status(400).json({ error: result.error });
+      return;
+    }
+    response.json({ reopened: true, ...result });
+  } catch (error) {
+    if (error instanceof AccountingMutationError) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
+});
+
 router.post("/accounting/fiscal-year/close", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireOwner, async (request: Request, response: Response): Promise<void> => {
   const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
     ? request.body as Record<string, unknown>
@@ -2712,10 +2967,13 @@ router.post("/accounting/fiscal-year/close", requireAuth, requireSubscriptionAcc
       }
 
       const closedAt = new Date();
+      const priorFiscalClosures = (await organizationRecordsFor(currentAuth, "financialClosures", tx))
+        .filter((item) => item.kind === "fiscal_year" && Number(item.fiscalYear) === year);
+      const closeCycle = priorFiscalClosures.length + 1;
       const [closingJournal] = await tx.insert(erpRecordsTable).values({
         organizationId: currentAuth.organizationId,
         tableName: "journalEntries",
-        clientOperationId: `FISCAL-YEAR-CLOSE-${year}`,
+        clientOperationId: `FISCAL-YEAR-CLOSE-${year}-${closeCycle}`,
         data: {
           number: `FY-CLOSE-${year}`,
           date: fiscalYearEnd,

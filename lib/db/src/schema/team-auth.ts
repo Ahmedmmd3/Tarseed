@@ -156,6 +156,36 @@ export const phoneVerificationCodesTable = pgTable(
   ],
 );
 
+export const financialClosureReopenCodesTable = pgTable(
+  "financial_closure_reopen_codes",
+  {
+    id: serial("id").primaryKey(),
+    organizationId: integer("organization_id")
+      .notNull()
+      .references(() => organizationsTable.id, { onDelete: "cascade" }),
+    ownerId: integer("owner_id")
+      .notNull()
+      .references(() => teamUsersTable.id, { onDelete: "cascade" }),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id").notNull(),
+    codeHash: text("code_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    lastSentAt: timestamp("last_sent_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("financial_closure_reopen_codes_target_unique").on(
+      table.organizationId,
+      table.ownerId,
+      table.targetType,
+      table.targetId,
+    ),
+    index("financial_closure_reopen_codes_expires_idx").on(table.expiresAt),
+  ],
+);
+
 export const teamAuditLogsTable = pgTable(
   "team_audit_logs",
   {

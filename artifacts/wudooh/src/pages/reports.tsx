@@ -80,6 +80,12 @@ export default function Reports() {
   const [fiscalYearCloseError, setFiscalYearCloseError] = useState('');
   const [isFiscalYearClosing, setIsFiscalYearClosing] = useState(false);
   const [fiscalYearConfirmOpen, setFiscalYearConfirmOpen] = useState(false);
+  const [reopenTarget, setReopenTarget] = useState<{ kind: 'period'; closureId: string; label: string } | { kind: 'fiscal_year'; year: number; label: string } | null>(null);
+  const [reopenCode, setReopenCode] = useState('');
+  const [reopenCodeSent, setReopenCodeSent] = useState(false);
+  const [reopenEmailHint, setReopenEmailHint] = useState('');
+  const [reopenError, setReopenError] = useState('');
+  const [isReopening, setIsReopening] = useState(false);
 
   const handleClose = async () => {
     setCloseError(null);
@@ -131,6 +137,60 @@ export default function Reports() {
       setFiscalYearCloseError(error instanceof Error ? error.message : 'تعذر إقفال السنة المالية.');
     } finally {
       setIsFiscalYearClosing(false);
+    }
+  };
+
+  const reopenPayload = () => reopenTarget?.kind === 'period'
+    ? { kind: 'period', closureId: Number(reopenTarget.closureId) }
+    : reopenTarget ? { kind: 'fiscal_year', year: reopenTarget.year } : null;
+
+  const requestReopenCode = async () => {
+    const target = reopenPayload();
+    if (!target) return;
+    setReopenError('');
+    setIsReopening(true);
+    try {
+      const response = await fetch('/api/accounting/reopen/request-code', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0) },
+        body: JSON.stringify(target),
+      });
+      const payload = await response.json().catch(() => ({})) as { sent?: boolean; emailHint?: string; error?: string };
+      if (!response.ok || !payload.sent) throw new Error(payload.error ?? 'تعذر إرسال رمز فتح الإقفال.');
+      setReopenCodeSent(true);
+      setReopenEmailHint(payload.emailHint ?? '');
+    } catch (error) {
+      setReopenError(error instanceof Error ? error.message : 'تعذر إرسال رمز فتح الإقفال.');
+    } finally {
+      setIsReopening(false);
+    }
+  };
+
+  const confirmReopen = async () => {
+    const target = reopenPayload();
+    if (!target || !/^\d{6}$/.test(reopenCode)) return;
+    setReopenError('');
+    setIsReopening(true);
+    try {
+      const response = await fetch('/api/accounting/reopen', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0) },
+        body: JSON.stringify({ ...target, code: reopenCode }),
+      });
+      const payload = await response.json().catch(() => ({})) as { reopened?: boolean; closureId?: number; kind?: string; error?: string };
+      if (!response.ok || !payload.reopened) throw new Error(payload.error ?? 'تعذر فتح الإقفال.');
+      if (payload.kind === 'period') setClosures((current) => current.filter((item) => String(item.id) !== String(payload.closureId)));
+      if (payload.kind === 'fiscal_year') setFiscalYearStatus((current) => ({ ...current, fiscalYearClosed: false, closedYear: null, closedAt: null, closedBy: null }));
+      setReopenTarget(null);
+      setReopenCode('');
+      setReopenCodeSent(false);
+      await refreshSession();
+    } catch (error) {
+      setReopenError(error instanceof Error ? error.message : 'تعذر فتح الإقفال.');
+    } finally {
+      setIsReopening(false);
     }
   };
 
@@ -480,7 +540,7 @@ export default function Reports() {
           {connectionMode !== 'remote' ? <p className="text-sm text-amber-700">اتصل بسجل المنشأة لعرض الفترات المقفلة وحماية القيود من التعديل.</p>
             : closureLoadError ? <p role="alert" className="text-sm text-rose-700">{closureLoadError}</p>
               : closures.length === 0 ? <p className="text-sm text-slate-500">لا توجد فترات مقفلة حتى الآن.</p>
-                : <div className="space-y-2">{closures.map(closure => <div key={closure.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><span className="font-medium">من {closure.from} إلى {closure.to}</span><span className="text-slate-500">هذه الفترة مقفلة؛ تُمنع الكتابة والتعديلات عليها.</span></div>)}</div>}
+                : <div className="space-y-2">{closures.map(closure => <div key={closure.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><div><span className="font-medium">من {closure.from} إلى {closure.to}</span><span className="mr-3 text-slate-500">هذه الفترة مقفلة؛ تُمنع الكتابة والتعديلات عليها.</span></div>{currentUser?.roleId === 'owner' && <Button type="button" variant="outline" size="sm" onClick={() => { setReopenTarget({ kind: 'period', closureId: String(closure.id), label: `الفترة من ${closure.from} إلى ${closure.to}` }); setReopenCode(''); setReopenCodeSent(false); setReopenError(''); }} data-testid={`button-reopen-period-${closure.id}`}>فتح الإقفال</Button>}</div>)}</div>}
         </CardContent>
       </Card>
       <Dialog open={confirmCloseOpen} onOpenChange={(open) => {
@@ -814,6 +874,18 @@ export default function Reports() {
                   إقفال السنة المالية {year}
                 </Button>
               )}
+              {fiscalYearStatus.fiscalYearClosed && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => { const closedYear = fiscalYearStatus.closedYear ?? year; setReopenTarget({ kind: 'fiscal_year', year: closedYear, label: `السنة المالية ${closedYear}` }); setReopenCode(''); setReopenCodeSent(false); setReopenError(''); }}
+                  disabled={isReopening || connectionMode !== 'remote'}
+                  className="w-full sm:w-auto border-red-200 text-red-700 hover:bg-red-50"
+                  data-testid="button-reopen-fiscal-year"
+                >
+                  فتح السنة المالية
+                </Button>
+              )}
             </div>
             {fiscalYearLoadError && <p className="mt-3 text-sm text-rose-700" role="alert">{fiscalYearLoadError}</p>}
             {fiscalYearCloseError && <p className="mt-3 text-sm text-rose-700" role="alert" data-testid="text-fiscal-year-close-error">{fiscalYearCloseError}</p>}
@@ -826,7 +898,7 @@ export default function Reports() {
           <DialogHeader>
             <DialogTitle>تأكيد إقفال السنة المالية {year}</DialogTitle>
             <DialogDescription>
-              هذا الإجراء لا يمكن التراجع عنه.
+              هذا الإجراء يقفل السنة ويمنع التعديل عليها. يستطيع صاحب المنشأة فتحها لاحقاً بعد التحقق برمز يُرسل إلى بريده.
               <br />
               سيتم إنشاء قيد إقفال تلقائي وترحيل
               <br />
@@ -847,6 +919,37 @@ export default function Reports() {
               {isFiscalYearClosing ? 'جارٍ الإقفال...' : 'تأكيد الإقفال'}
             </Button>
           </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(reopenTarget)} onOpenChange={(open) => { if (!open) { setReopenTarget(null); setReopenCode(''); setReopenCodeSent(false); setReopenError(''); } }}>
+        <DialogContent dir="rtl">
+          <DialogHeader>
+            <DialogTitle>فتح {reopenTarget?.label}</DialogTitle>
+            <DialogDescription>
+              هذه صلاحية حصرية لصاحب المنشأة. سنرسل رمزاً مؤقتاً إلى بريد المالك المسجل، وستُحفظ عملية الفتح في سجل النشاط.
+              {reopenTarget?.kind === 'fiscal_year' && ' سيُنشأ قيد عكسي لقيد إقفال السنة دون حذف السجل الأصلي.'}
+            </DialogDescription>
+          </DialogHeader>
+          {!reopenCodeSent ? (
+            <Button type="button" onClick={() => void requestReopenCode()} disabled={isReopening} data-testid="button-request-reopen-code">
+              {isReopening ? 'جارٍ الإرسال...' : 'إرسال الرمز إلى بريدي'}
+            </Button>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600">أُرسل الرمز إلى {reopenEmailHint || 'بريد المالك'}. ينتهي خلال 10 دقائق.</p>
+              <div className="space-y-2">
+                <label htmlFor="reopen-code" className="text-sm font-semibold">رمز التحقق</label>
+                <Input id="reopen-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={reopenCode} onChange={(event) => setReopenCode(event.target.value.replace(/\D/g, '').slice(0, 6))} placeholder="000000" dir="ltr" data-testid="input-reopen-code" />
+              </div>
+              <div className="flex justify-between gap-2">
+                <Button type="button" variant="ghost" onClick={() => void requestReopenCode()} disabled={isReopening}>إعادة إرسال الرمز</Button>
+                <Button type="button" className="bg-red-700 hover:bg-red-800" onClick={() => void confirmReopen()} disabled={isReopening || reopenCode.length !== 6} data-testid="button-confirm-reopen">
+                  {isReopening ? 'جارٍ الفتح...' : 'تأكيد فتح الإقفال'}
+                </Button>
+              </div>
+            </div>
+          )}
+          {reopenError && <p role="alert" className="text-sm text-rose-700" data-testid="text-reopen-error">{reopenError}</p>}
         </DialogContent>
       </Dialog>
     </div>
