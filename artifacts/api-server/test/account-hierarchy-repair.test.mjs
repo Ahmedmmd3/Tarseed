@@ -352,6 +352,64 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${detachAuditFailureFunction}()`));
   }
 
+  const cycleDetachAuditFailureFunction = `fail_hierarchy_cycle_detach_audit_${randomUUID().replaceAll("-", "")}`;
+  const cycleDetachAuditFailureTrigger = `${cycleDetachAuditFailureFunction}_trigger`;
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${cycleDetachAuditFailureFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.organization_id = ${organizationId}
+          AND NEW.action = 'account_hierarchy_repaired'
+          AND NEW.entity = '${cycleA.id}' THEN
+          RAISE EXCEPTION 'تعذر سجل تدقيق فصل طرف الدورة عمداً';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${cycleDetachAuditFailureTrigger}
+      BEFORE INSERT ON team_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION ${cycleDetachAuditFailureFunction}();
+    `));
+
+    const failedCycleDetach = await request("/accounting/account-hierarchy/repair", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: { accountId: cycleA.id, parentId: null, confirmation: "REPARENT_ACCOUNT" },
+    });
+    assert.equal(failedCycleDetach.response.status, 500);
+
+    const cycleAfterAuditFailure = await db.select().from(erpRecordsTable).where(inArray(
+      erpRecordsTable.id,
+      [cycleA.id, cycleB.id],
+    ));
+    const cycleAfterAuditFailureById = new Map(cycleAfterAuditFailure.map((row) => [row.id, row.data]));
+    assert.equal(
+      cycleAfterAuditFailureById.get(cycleA.id).parent,
+      String(cycleB.id),
+      "يجب أن يبقى رابط طرف الدورة الأول عند فشل سجل تدقيق الفصل",
+    );
+    assert.equal(
+      cycleAfterAuditFailureById.get(cycleB.id).parent,
+      String(cycleA.id),
+      "يجب أن يبقى رابط طرف الدورة الثاني عند فشل سجل تدقيق الفصل",
+    );
+    assert.ok(
+      findAccountHierarchyIssues(cycleAfterAuditFailure).some((issue) => issue.kind === "cycle"
+        && issue.cycleAccountIds.includes(cycleA.id)
+        && issue.cycleAccountIds.includes(cycleB.id)),
+      "يجب أن تبقى الدورة كما هي عند فشل سجل تدقيق الفصل",
+    );
+    assert.equal(
+      (await repairAuditLogs()).filter((log) => log.entity === String(cycleA.id)).length,
+      0,
+      "لا يجب حفظ سجل إصلاح جزئي عند فشل فصل طرف الدورة",
+    );
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${cycleDetachAuditFailureTrigger} ON team_audit_logs`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${cycleDetachAuditFailureFunction}()`));
+  }
+
   const memberIssues = await request("/accounting/account-hierarchy/issues", { cookie: memberCookie });
   assert.equal(memberIssues.response.status, 403);
   assert.match(memberIssues.payload.error, /مالك/);
