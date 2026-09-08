@@ -27,6 +27,8 @@ let child;
 let grandchild;
 let journal;
 let orphan;
+let invalidParent;
+let invalidAncestorParent;
 let cycleA;
 let cycleB;
 
@@ -146,6 +148,14 @@ before(async () => {
     code: `T-${suffix}-5`, name: "حساب بأب مفقود", type: "asset", parent: "999999999",
     openingBalance: 12, balance: 44, status: "active",
   });
+  invalidParent = await createRecord("accounts", {
+    code: `T-${suffix}-8`, name: "حساب برابط أب مشوه", type: "asset", parent: "legacy-parent",
+    openingBalance: 18, balance: 52, status: "active",
+  });
+  invalidAncestorParent = await createRecord("accounts", {
+    code: `T-${suffix}-9`, name: "أب ذو مسار مشوه", type: "asset", parent: "01",
+    openingBalance: 0, balance: 0, status: "active",
+  });
   cycleA = await createRecord("accounts", {
     code: `T-${suffix}-6`, name: "طرف الدورة الأول", type: "asset",
     openingBalance: 0, balance: 0, status: "active",
@@ -214,6 +224,10 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   assert.equal(issuesBefore.response.status, 200);
   assert.ok(issuesBefore.payload.issues.some((issue) => issue.accountId === branch.id));
   assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "missing_parent" && issue.accountId === orphan.id));
+  assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "invalid_parent" && issue.accountId === invalidParent.id));
+  assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "invalid_parent" && issue.accountId === invalidAncestorParent.id));
+  const [invalidParentBeforeRepair] = await db.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, invalidParent.id));
+  assert.equal(invalidParentBeforeRepair.data.parent, "legacy-parent");
   const cycleIssue = issuesBefore.payload.issues.find((issue) => issue.kind === "cycle");
   assert.deepEqual([...cycleIssue.cycleAccountIds].sort((a, b) => a - b), [cycleA.id, cycleB.id].sort((a, b) => a - b));
 
@@ -224,6 +238,32 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   });
   assert.equal(invalidMove.response.status, 409);
   assert.match(invalidMove.payload.error, /التصنيف/);
+
+  const invalidMalformedMove = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: invalidParent.id, parentId: branch.id, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(invalidMalformedMove.response.status, 409);
+  assert.match(invalidMalformedMove.payload.error, /التصنيف/);
+
+  const moveUnderMalformedAncestry = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: invalidParent.id, parentId: invalidAncestorParent.id, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(moveUnderMalformedAncestry.response.status, 409);
+  assert.match(moveUnderMalformedAncestry.payload.error, /غير صالح/);
+  const [invalidParentAfterRejectedMove] = await db.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, invalidParent.id));
+  assert.equal(invalidParentAfterRejectedMove.data.parent, "legacy-parent");
+
+  const detachedInvalidParent = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: invalidParent.id, parentId: null, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(detachedInvalidParent.response.status, 200, JSON.stringify(detachedInvalidParent.payload));
+  assert.equal(detachedInvalidParent.payload.parentId, null);
 
   const detachedOrphan = await request("/accounting/account-hierarchy/repair", {
     method: "POST",
@@ -306,6 +346,7 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     (issue) => [branch.id, child.id, grandchild.id].includes(issue.accountId),
   ));
   assert.ok(!issuesAfter.payload.issues.some((issue) => issue.kind === "missing_parent" && issue.accountId === orphan.id));
+  assert.ok(!issuesAfter.payload.issues.some((issue) => issue.kind === "invalid_parent" && issue.accountId === invalidParent.id));
   assert.ok(!issuesAfter.payload.issues.some((issue) => issue.kind === "cycle" && issue.cycleAccountIds.some(
     (accountId) => [cycleA.id, cycleB.id].includes(accountId),
   )));

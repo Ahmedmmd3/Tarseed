@@ -37,12 +37,12 @@ const TYPE_COLORS: Record<AccountType, 'default' | 'secondary' | 'destructive' |
 const TYPE_ORDER: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
 type AccountHierarchyIssue = {
-  kind: 'type_mismatch' | 'missing_parent' | 'cycle';
+  kind: 'type_mismatch' | 'missing_parent' | 'invalid_parent' | 'cycle';
   accountId: number;
   accountCode: string;
   accountName: string;
   accountType: AccountType;
-  parentId: number;
+  parentId?: number;
   parentCode?: string;
   parentName?: string;
   parentType?: AccountType;
@@ -435,6 +435,9 @@ export default function Accounts() {
                      {issue.kind === 'missing_parent' && (
                        <p className="mt-1 text-slate-600">يشير إلى حساب أب محذوف (المعرّف {issue.parentId}). اختر فصله أو نقله إلى أب صالح.</p>
                      )}
+                      {issue.kind === 'invalid_parent' && (
+                        <p className="mt-1 text-slate-600">يحتوي رابط أب قديم غير صالح. اختر فصله أو نقله إلى أب صالح.</p>
+                      )}
                      {issue.kind === 'cycle' && (
                        <p className="mt-1 text-slate-600">
                          توجد دورة بين: {issue.cycleAccounts?.map((account) => `${account.accountCode} — ${account.accountName}`).join('، ')}. افصل أحدها أو انقله لكسر الدورة.

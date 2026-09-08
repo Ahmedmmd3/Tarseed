@@ -150,6 +150,14 @@ type MissingParentIssue = {
   parentId: number;
 };
 
+type InvalidParentIssue = {
+  kind: "invalid_parent";
+  accountId: number;
+  accountCode: string;
+  accountName: string;
+  accountType: unknown;
+};
+
 type AccountCycleIssue = {
   kind: "cycle";
   accountId: number;
@@ -160,7 +168,17 @@ type AccountCycleIssue = {
   cycleAccounts: Array<{ accountId: number; accountCode: string; accountName: string }>;
 };
 
-type AccountHierarchyIssue = AccountTypeMismatchIssue | MissingParentIssue | AccountCycleIssue;
+type AccountHierarchyIssue = AccountTypeMismatchIssue | MissingParentIssue | InvalidParentIssue | AccountCycleIssue;
+
+function parseAccountParentId(parent: unknown): number | null | undefined {
+  if (parent == null || parent === "") return null;
+  if (typeof parent === "number") {
+    return Number.isInteger(parent) && parent > 0 ? parent : undefined;
+  }
+  if (typeof parent !== "string" || !/^[1-9]\d*$/.test(parent)) return undefined;
+  const parentId = Number(parent);
+  return Number.isSafeInteger(parentId) ? parentId : undefined;
+}
 
 function findAccountHierarchyIssues(
   rows: Array<{ id: number; data: Record<string, unknown> }>,
@@ -168,8 +186,18 @@ function findAccountHierarchyIssues(
   const accounts = new Map(rows.map((row) => [row.id, row.data]));
   const issues: AccountHierarchyIssue[] = [];
   for (const row of rows) {
-    const parentId = row.data.parent == null || row.data.parent === "" ? null : Number(row.data.parent);
-    if (parentId === null || !Number.isInteger(parentId)) continue;
+    const parentId = parseAccountParentId(row.data.parent);
+    if (parentId === null) continue;
+    if (parentId === undefined) {
+      issues.push({
+        kind: "invalid_parent",
+        accountId: row.id,
+        accountCode: String(row.data.code ?? ""),
+        accountName: String(row.data.name ?? ""),
+        accountType: row.data.type,
+      });
+      continue;
+    }
     const parent = accounts.get(parentId);
     if (!parent) {
       issues.push({
@@ -232,8 +260,8 @@ function findAccountHierarchyIssues(
       pathIndex.set(cursor, path.length);
       path.push(cursor);
       const parent: unknown = accounts.get(cursor)?.parent;
-      const parentId = parent == null || parent === "" ? null : Number(parent);
-      cursor = parentId !== null && Number.isInteger(parentId) ? parentId : null;
+      const parentId = parseAccountParentId(parent);
+      cursor = parentId === undefined ? null : parentId;
     }
   }
   return issues;
@@ -263,13 +291,12 @@ function validateAccountParentRepair(
     visited.add(cursor);
     const current = accounts.get(cursor);
     if (!current) throw new MutationRejected(409, "مسار الحساب الأب المختار يحتوي رابطاً مفقوداً.");
-    const next: unknown = current.parent;
-    if (next == null || next === "") {
+    const nextId = parseAccountParentId(current.parent);
+    if (nextId === null) {
       cursor = null;
       continue;
     }
-    const nextId = Number(next);
-    if (!Number.isInteger(nextId) || nextId <= 0) {
+    if (nextId === undefined) {
       throw new MutationRejected(409, "مسار الحساب الأب المختار يحتوي رابطاً غير صالح.");
     }
     cursor = nextId;
@@ -1163,12 +1190,12 @@ router.post("/accounting/account-hierarchy/repair", requireAuth, requireSubscrip
       if (isParentRepair) {
         const currentIssues = findAccountHierarchyIssues(rows);
         const repairableIssue = currentIssues.find((issue) => (
-          issue.kind === "missing_parent" && issue.accountId === accountId
+          (issue.kind === "missing_parent" || issue.kind === "invalid_parent") && issue.accountId === accountId
         ) || (
           issue.kind === "cycle" && issue.cycleAccountIds.includes(accountId)
         ));
         if (!repairableIssue) {
-          throw new MutationRejected(409, "لم يعد الحساب يحتوي أباً مفقوداً أو دورة تحتاج هذا الإصلاح.");
+          throw new MutationRejected(409, "لم يعد الحساب يحتوي رابط أب تالفاً أو دورة تحتاج هذا الإصلاح.");
         }
         const candidate = { ...account.data, parent: requestedParentId === null ? null : String(requestedParentId) };
         validateAccountParentRepair(rows, accountId, account.data, requestedParentId);
@@ -1178,8 +1205,8 @@ router.post("/accounting/account-hierarchy/repair", requireAuth, requireSubscrip
         }).where(eq(erpRecordsTable.id, accountId));
         const repairedRows = rows.map((row) => row.id === accountId ? { id: row.id, data: candidate } : row);
         const unresolved = findAccountHierarchyIssues(repairedRows).some((issue) => (
-          repairableIssue.kind === "missing_parent"
-            ? issue.kind === "missing_parent" && issue.accountId === accountId
+          repairableIssue.kind === "missing_parent" || repairableIssue.kind === "invalid_parent"
+            ? issue.kind === repairableIssue.kind && issue.accountId === accountId
             : issue.kind === "cycle" && issue.cycleAccountIds.includes(accountId)
         ));
         if (unresolved) throw new MutationRejected(409, "لم يؤدِ الاختيار إلى إزالة الخلل من شجرة الحسابات.");
