@@ -785,13 +785,93 @@ test("يقصر فتح الإقفال المالي على المالك بعد ر�
   assert.ok(codeRequest);
   assert.equal(codeRequest.payload.sent, true);
 
-  const wrongCode = await request("/accounting/reopen", {
+  const reopenAuditRows = async () => db.select().from(teamAuditLogsTable).where(and(
+    eq(teamAuditLogsTable.organizationId, owner.organizationId),
+    eq(teamAuditLogsTable.action, "financial_period_reopened"),
+  ));
+  const closureStatus = async () => {
+    const [row] = await db.select().from(erpRecordsTable).where(eq(erpRecordsTable.id, closureId));
+    return row.data.status;
+  };
+  const codeVerificationRow = async () => {
+    const [row] = await db.select().from(financialClosureReopenCodesTable).where(and(
+      eq(financialClosureReopenCodesTable.organizationId, owner.organizationId),
+      eq(financialClosureReopenCodesTable.ownerId, owner.id),
+      eq(financialClosureReopenCodesTable.targetType, "period"),
+      eq(financialClosureReopenCodesTable.targetId, String(closureId)),
+    ));
+    return row;
+  };
+  const auditCountBeforeRejections = (await reopenAuditRows()).length;
+
+  await db.update(financialClosureReopenCodesTable).set({
+    expiresAt: new Date(Date.now() - 1000),
+  }).where(and(
+    eq(financialClosureReopenCodesTable.organizationId, owner.organizationId),
+    eq(financialClosureReopenCodesTable.ownerId, owner.id),
+    eq(financialClosureReopenCodesTable.targetType, "period"),
+    eq(financialClosureReopenCodesTable.targetId, String(closureId)),
+  ));
+  const expiredCode = await request("/accounting/reopen", {
     method: "POST",
     cookie: ownerCookie,
     headers: { "X-Wudooh-Data-Generation": "1" },
-    body: { kind: "period", closureId, code: "111111" },
+    body: { kind: "period", closureId, code: "654321" },
   });
-  assert.equal(wrongCode.response.status, 400, JSON.stringify(wrongCode.payload));
+  assert.equal(expiredCode.response.status, 400, JSON.stringify(expiredCode.payload));
+  assert.equal(await closureStatus(), "closed");
+  assert.equal((await reopenAuditRows()).length, auditCountBeforeRejections);
+  assert.equal((await codeVerificationRow()).attemptCount, 0);
+
+  await db.update(financialClosureReopenCodesTable).set({
+    expiresAt: new Date(Date.now() + 60_000),
+    attemptCount: 0,
+  }).where(and(
+    eq(financialClosureReopenCodesTable.organizationId, owner.organizationId),
+    eq(financialClosureReopenCodesTable.ownerId, owner.id),
+    eq(financialClosureReopenCodesTable.targetType, "period"),
+    eq(financialClosureReopenCodesTable.targetId, String(closureId)),
+  ));
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const wrongCode = await request("/accounting/reopen", {
+      method: "POST",
+      cookie: ownerCookie,
+      headers: { "X-Wudooh-Data-Generation": "1" },
+      body: { kind: "period", closureId, code: "111111" },
+    });
+    assert.equal(wrongCode.response.status, 400, JSON.stringify(wrongCode.payload));
+    assert.equal((await codeVerificationRow()).attemptCount, attempt);
+  }
+  const exhaustedCode = await request("/accounting/reopen", {
+    method: "POST",
+    cookie: ownerCookie,
+    headers: { "X-Wudooh-Data-Generation": "1" },
+    body: { kind: "period", closureId, code: "654321" },
+  });
+  assert.equal(exhaustedCode.response.status, 400, JSON.stringify(exhaustedCode.payload));
+  assert.equal(await closureStatus(), "closed");
+  assert.equal((await reopenAuditRows()).length, auditCountBeforeRejections);
+  assert.equal((await codeVerificationRow()).attemptCount, 5);
+
+  await db.update(financialClosureReopenCodesTable).set({
+    lastSentAt: new Date(Date.now() - 61_000),
+  }).where(and(
+    eq(financialClosureReopenCodesTable.organizationId, owner.organizationId),
+    eq(financialClosureReopenCodesTable.ownerId, owner.id),
+    eq(financialClosureReopenCodesTable.targetType, "period"),
+    eq(financialClosureReopenCodesTable.targetId, String(closureId)),
+  ));
+  const replacementCodeRequest = await request("/accounting/reopen/request-code", {
+    method: "POST",
+    cookie: ownerCookie,
+    headers: { "X-Wudooh-Data-Generation": "1" },
+    body: { kind: "period", closureId },
+  });
+  assert.equal(replacementCodeRequest.response.status, 200, JSON.stringify(replacementCodeRequest.payload));
+  const replacementCodeRow = await codeVerificationRow();
+  assert.equal(replacementCodeRow.attemptCount, 0);
+  assert.equal(replacementCodeRow.usedAt, null);
+  assert.ok(replacementCodeRow.expiresAt > new Date());
 
   const reopened = await request("/accounting/reopen", {
     method: "POST",
@@ -818,7 +898,7 @@ test("يقصر فتح الإقفال المالي على المالك بعد ر�
     eq(financialClosureReopenCodesTable.targetId, String(closureId)),
   ));
   assert.ok(codeRow.usedAt);
-  assert.equal(codeRow.attemptCount, 1);
+  assert.equal(codeRow.attemptCount, 0);
   const auditRows = await db.select().from(teamAuditLogsTable).where(and(
     eq(teamAuditLogsTable.organizationId, owner.organizationId),
     eq(teamAuditLogsTable.action, "financial_period_reopened"),
