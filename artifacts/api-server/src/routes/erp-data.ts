@@ -88,6 +88,17 @@ async function validateAccountHierarchy(
     eq(erpRecordsTable.tableName, "accounts"),
   ));
   const accounts = new Map(rows.map((row) => [row.id, row.data as Record<string, unknown>]));
+  if (accountId !== null) {
+    const mismatchedChild = rows.some((row) => Number((row.data as Record<string, unknown>).parent) === accountId
+      && (row.data as Record<string, unknown>).type !== candidate.type);
+    if (mismatchedChild) {
+      throw new MutationRejected(
+        409,
+        "لا يمكن تغيير تصنيف حساب له فروع. انقل الفروع أو غيّر تصنيفها أولاً.",
+        "account_type_conflicts_with_children",
+      );
+    }
+  }
   if (parentId !== null) {
     const parent = accounts.get(parentId);
     if (!parent) throw new MutationRejected(404, "الحساب الأب غير موجود في هذه المنشأة.");

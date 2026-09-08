@@ -133,8 +133,8 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
   ]);
   assert.equal(customers.payload.records.filter((record) => record.isDemoData).length, 3);
   assert.deepEqual(
-    products.payload.records.filter((record) => record.isDemoData).map((record) => [record.sku, record.sellPrice, record.stock]),
-    [["QH001", 45, 100], ["TM001", 120, 50], ["AS001", 200, 30], ["ZF001", 350, 20], ["MA001", 25, 200]],
+    products.payload.records.filter((record) => record.isDemoData).map((record) => [record.sku, record.sellPrice, record.stock]).sort(),
+    [["QH001", 45, 100], ["TM001", 120, 50], ["AS001", 200, 30], ["ZF001", 350, 20], ["MA001", 25, 200]].sort(),
   );
   assert.deepEqual(
     invoices.payload.records.filter((record) => record.isDemoData).map((record) => record.total),
@@ -192,6 +192,19 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
     method: "PATCH", cookie: owner.cookie, body: { status: "inactive" },
   });
   assert.equal(disableParent.response.status, 409, JSON.stringify(disableParent.payload));
+  const changeParentType = await request(`/data/accounts/${parentId}`, {
+    method: "PATCH", cookie: owner.cookie, body: { type: "liability" },
+  });
+  assert.equal(changeParentType.response.status, 409, JSON.stringify(changeParentType.payload));
+  assert.equal(changeParentType.payload.code, "account_type_conflicts_with_children");
+  assert.match(changeParentType.payload.error, /لا يمكن تغيير تصنيف حساب له فروع/);
+
+  const accountsAfterRejectedTypeChange = await request("/data/accounts", { cookie: owner.cookie });
+  const persistedParent = accountsAfterRejectedTypeChange.payload.records.find((account) => account.id === parentId);
+  const persistedChild = accountsAfterRejectedTypeChange.payload.records.find((account) => account.id === childId);
+  assert.equal(persistedParent.type, "asset");
+  assert.equal(persistedChild.type, "asset");
+  assert.equal(String(persistedChild.parent), String(parentId));
 
   const allAccounts = await request("/data/accounts", { cookie: owner.cookie });
   const capital = allAccounts.payload.records.find((account) => account.code === "3000");

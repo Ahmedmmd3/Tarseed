@@ -53,6 +53,7 @@ export default function Accounts() {
   const [openingDate, setOpeningDate] = useState(`${new Date().getFullYear()}-01-01`);
   const [counterAccountId, setCounterAccountId] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [hierarchyError, setHierarchyError] = useState('');
 
   const filteredAccounts = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('ar');
@@ -118,6 +119,10 @@ export default function Accounts() {
       && !excludedParentIds.has(account.id))
     .sort((left, right) => left.code.localeCompare(right.code, 'en')), [accounts, excludedParentIds, type]);
 
+  const editingAccountHasChildren = useMemo(() => editingAccount
+    ? accounts.some((account) => account.parent === editingAccount.id)
+    : false, [accounts, editingAccount]);
+
   const resetForm = () => {
     setCode('');
     setName('');
@@ -128,6 +133,7 @@ export default function Accounts() {
     setOpeningSide('debit');
     setCounterAccountId('');
     setEditingAccount(null);
+    setHierarchyError('');
   };
 
   const openAddDialog = () => {
@@ -164,6 +170,15 @@ export default function Accounts() {
     const duplicate = accounts.some((account) => account.code === normalizedCode && account.id !== editingAccount?.id);
     if (duplicate) {
       toast({ title: 'رقم الحساب مستخدم', description: 'اختر رقماً مختلفاً لتجنب تكرار الحسابات.', variant: 'destructive' });
+      return;
+    }
+    if (editingAccount && editingAccountHasChildren && type !== editingAccount.type) {
+      setHierarchyError('لا يمكن تغيير تصنيف الحساب الأب. انقل الحسابات الفرعية أو غيّر تصنيفها أولاً حتى تبقى شجرة الحسابات متسقة.');
+      toast({
+        title: 'لا يمكن تغيير تصنيف الحساب الأب',
+        description: 'انقل الحسابات الفرعية أو غيّر تصنيفها أولاً حتى تبقى شجرة الحسابات متسقة.',
+        variant: 'destructive',
+      });
       return;
     }
 
@@ -248,6 +263,16 @@ export default function Accounts() {
                   </select>
                   <LayoutGrid className="absolute left-3 top-3 h-4 w-4 text-slate-400 pointer-events-none" />
                 </div>
+                {editingAccountHasChildren && (
+                  <p className="text-xs text-amber-700">
+                    لا يمكن تغيير التصنيف ما دام للحساب فروع. انقل الفروع أو غيّر تصنيفها أولاً.
+                  </p>
+                )}
+                {hierarchyError && (
+                  <p role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    {hierarchyError}
+                  </p>
+                )}
               </div>
               <fieldset className="space-y-2">
                 <legend className="text-sm font-semibold">مستوى الحساب</legend>

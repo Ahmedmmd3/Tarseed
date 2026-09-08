@@ -314,6 +314,26 @@ test('يحفظ الحساب الفرعي تحت أبيه ويمنع اختيار
   'row-account-101')).toBe(true);
 
   await page.getByTestId('button-edit-account-100').click();
+  await expect(page.getByText('لا يمكن تغيير التصنيف ما دام للحساب فروع')).toBeVisible();
+  await page.getByTestId('select-account-type').selectOption('liability');
+  const parentTypePatchRequests = [];
+  page.on('request', (request) => {
+    if (request.method() === 'PATCH' && request.url().endsWith('/api/data/accounts/100')) {
+      parentTypePatchRequests.push(request);
+    }
+  });
+  await page.getByTestId('button-submit-account').click();
+  await expect(page.getByRole('alert')).toContainText('لا يمكن تغيير تصنيف الحساب الأب');
+  await expect(page.getByTestId('input-account-code')).toBeVisible();
+  expect(parentTypePatchRequests).toHaveLength(0);
+  await page.keyboard.press('Escape');
+
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('row-account-100')).toHaveAttribute('data-account-depth', '0');
+  await expect(page.getByTestId('row-account-101')).toHaveAttribute('data-account-depth', '1');
+
+  await page.getByTestId('button-edit-account-100').click();
+  await expect(page.getByTestId('select-account-type')).toHaveValue('asset');
   await page.getByTestId('button-account-subaccount').click();
   const parentOptions = page.getByTestId('select-account-parent').locator('option');
   await expect(parentOptions.filter({ hasText: '1900 — أصل اختباري أساسي' })).toHaveCount(0);
