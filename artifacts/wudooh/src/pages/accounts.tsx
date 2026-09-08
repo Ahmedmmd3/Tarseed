@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useStore, Account, AccountType } from '@/context/store';
 import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent } from '@/components/ui/card';
@@ -16,7 +16,7 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Pencil, Plus, Power, Search, LayoutGrid, CheckCircle2, XCircle, ChevronDown, ChevronLeft } from 'lucide-react';
+import { Pencil, Plus, Power, Search, LayoutGrid, CheckCircle2, XCircle, ChevronDown, ChevronLeft, AlertTriangle, Wrench } from 'lucide-react';
 
 const TYPE_LABELS: Record<AccountType, string> = {
   asset: 'الأصول',
@@ -36,8 +36,19 @@ const TYPE_COLORS: Record<AccountType, 'default' | 'secondary' | 'destructive' |
 
 const TYPE_ORDER: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
+type AccountHierarchyIssue = {
+  accountId: number;
+  accountCode: string;
+  accountName: string;
+  accountType: AccountType;
+  parentId: number;
+  parentCode: string;
+  parentName: string;
+  parentType: AccountType;
+};
+
 export default function Accounts() {
-  const { accounts, journals, addAccount, updateAccount, addOpeningBalance } = useStore();
+  const { accounts, journals, addAccount, updateAccount, addOpeningBalance, currentUser, connectionMode, refreshSession } = useStore();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<AccountType | 'all'>('all');
@@ -54,6 +65,31 @@ export default function Accounts() {
   const [counterAccountId, setCounterAccountId] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [hierarchyError, setHierarchyError] = useState('');
+  const [hierarchyIssues, setHierarchyIssues] = useState<AccountHierarchyIssue[]>([]);
+  const [repairingIssue, setRepairingIssue] = useState<AccountHierarchyIssue | null>(null);
+  const [isRepairing, setIsRepairing] = useState(false);
+
+  useEffect(() => {
+    if (connectionMode !== 'remote' || currentUser?.roleId !== 'owner') {
+      setHierarchyIssues([]);
+      return;
+    }
+    let cancelled = false;
+    void fetch('/api/accounting/account-hierarchy/issues', { credentials: 'include' })
+      .then(async (response) => {
+        const payload = await response.json() as { issues?: AccountHierarchyIssue[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? 'تعذر فحص دليل الحسابات.');
+        if (!cancelled) setHierarchyIssues(payload.issues ?? []);
+      })
+      .catch((error) => {
+        if (!cancelled) toast({
+          title: 'تعذر فحص سلامة دليل الحسابات',
+          description: error instanceof Error ? error.message : 'أعد المحاولة بعد التحقق من الاتصال.',
+          variant: 'destructive',
+        });
+      });
+    return () => { cancelled = true; };
+  }, [connectionMode, currentUser?.organizationId, currentUser?.roleId, toast]);
 
   const filteredAccounts = useMemo(() => {
     const query = search.trim().toLocaleLowerCase('ar');
@@ -225,6 +261,39 @@ export default function Accounts() {
     }
   };
 
+  const repairHierarchyIssue = async () => {
+    if (!repairingIssue || !currentUser || isRepairing) return;
+    setIsRepairing(true);
+    try {
+      const response = await fetch('/api/accounting/account-hierarchy/repair', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
+        },
+        body: JSON.stringify({ accountId: repairingIssue.accountId, confirmation: 'MATCH_PARENT_TYPE' }),
+      });
+      const payload = await response.json() as { repairedAccountIds?: number[]; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر إصلاح تصنيف الفرع.');
+      await refreshSession();
+      setHierarchyIssues((current) => current.filter((issue) => !payload.repairedAccountIds?.includes(issue.accountId)));
+      toast({
+        title: 'تم إصلاح تصنيف الفرع',
+        description: `طابق الخادم تصنيف ${repairingIssue.accountName} وفروعه مع ${repairingIssue.parentName}.`,
+      });
+      setRepairingIssue(null);
+    } catch (error) {
+      toast({
+        title: 'تعذر إصلاح تصنيف الفرع',
+        description: error instanceof Error ? error.message : 'أعد المحاولة بعد تحديث الصفحة.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsRepairing(false);
+    }
+  };
+
   return (
     <div className="space-y-6" data-testid="page-accounts">
       <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
@@ -328,6 +397,56 @@ export default function Accounts() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {currentUser?.roleId === 'owner' && hierarchyIssues.length > 0 && (
+        <Card className="border-amber-300 bg-amber-50 shadow-sm" data-testid="account-hierarchy-issues">
+          <CardContent className="space-y-4 p-4 sm:p-5">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+              <div>
+                <h3 className="font-bold text-amber-950">تحتاج شجرة الحسابات إلى مراجعة</h3>
+                <p className="mt-1 text-sm text-amber-900">وجدنا {hierarchyIssues.length} حساباً قديماً تصنيفه مختلف عن حسابه الأب. لن نغيّر أي حساب دون اختيارك.</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              {hierarchyIssues.map((issue) => (
+                <div key={issue.accountId} className="flex flex-col justify-between gap-3 rounded-lg border border-amber-200 bg-white p-3 sm:flex-row sm:items-center" data-testid={`account-hierarchy-issue-${issue.accountId}`}>
+                  <div className="text-sm">
+                    <p className="font-semibold text-slate-900">{issue.accountCode} — {issue.accountName}</p>
+                    <p className="mt-1 text-slate-600">
+                      تصنيفه {TYPE_LABELS[issue.accountType]}، بينما الأب {issue.parentCode} — {issue.parentName} ضمن {TYPE_LABELS[issue.parentType]}.
+                    </p>
+                  </div>
+                  <Button type="button" variant="outline" className="shrink-0 border-amber-300 text-amber-900" onClick={() => setRepairingIssue(issue)} data-testid={`button-repair-account-hierarchy-${issue.accountId}`}>
+                    <Wrench className="ml-2 h-4 w-4" />
+                    مراجعة الإصلاح
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={Boolean(repairingIssue)} onOpenChange={(open) => { if (!open && !isRepairing) setRepairingIssue(null); }}>
+        <DialogContent className="sm:max-w-md" data-testid="dialog-repair-account-hierarchy">
+          <DialogHeader>
+            <DialogTitle>تأكيد إصلاح تصنيف الفرع</DialogTitle>
+          </DialogHeader>
+          {repairingIssue && (
+            <div className="space-y-3 text-sm text-slate-700">
+              <p>سيُغيّر تصنيف <strong>{repairingIssue.accountName}</strong> وكل حساباته الفرعية إلى <strong>{TYPE_LABELS[repairingIssue.parentType]}</strong> ليطابق الحساب الأب.</p>
+              <p className="rounded-md bg-slate-100 p-3">قد تنتقل أرصدة هذا الفرع إلى قسم مختلف في التقارير المحاسبية. لن تتغير القيود أو الأرصدة نفسها.</p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button type="button" variant="outline" disabled={isRepairing} onClick={() => setRepairingIssue(null)}>إلغاء</Button>
+            <Button type="button" disabled={isRepairing} onClick={() => { void repairHierarchyIssue(); }} data-testid="button-confirm-account-hierarchy-repair">
+              {isRepairing ? 'جارٍ الإصلاح...' : 'تأكيد ومطابقة التصنيف'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         <div className="flex flex-col items-center gap-3 border-b border-slate-100 bg-slate-50/50 p-4 sm:flex-row">

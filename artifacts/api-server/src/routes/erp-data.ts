@@ -121,6 +121,39 @@ async function validateAccountHierarchy(
   }
 }
 
+type AccountHierarchyIssue = {
+  accountId: number;
+  accountCode: string;
+  accountName: string;
+  accountType: unknown;
+  parentId: number;
+  parentCode: string;
+  parentName: string;
+  parentType: unknown;
+};
+
+function findAccountHierarchyIssues(
+  rows: Array<{ id: number; data: Record<string, unknown> }>,
+): AccountHierarchyIssue[] {
+  const accounts = new Map(rows.map((row) => [row.id, row.data]));
+  return rows.flatMap((row) => {
+    const parentId = row.data.parent == null || row.data.parent === "" ? null : Number(row.data.parent);
+    if (parentId === null || !Number.isInteger(parentId)) return [];
+    const parent = accounts.get(parentId);
+    if (!parent || parent.type === row.data.type) return [];
+    return [{
+      accountId: row.id,
+      accountCode: String(row.data.code ?? ""),
+      accountName: String(row.data.name ?? ""),
+      accountType: row.data.type,
+      parentId,
+      parentCode: String(parent.code ?? ""),
+      parentName: String(parent.name ?? ""),
+      parentType: parent.type,
+    }];
+  });
+}
+
 function requireTableAccess(request: Request, response: Response): { auth: AuthContext; tableName: string } | null {
   const auth = response.locals.auth as AuthContext;
   const raw = Array.isArray(request.params.table) ? request.params.table[0] : request.params.table;
@@ -955,6 +988,95 @@ router.post("/accounting/initialize", requireAuth, requireSubscriptionAccess, re
     created: result.created,
     accounts: result.records.map((record) => ({ ...record.data, id: record.id, userId: result.auth.organizationId })),
   });
+});
+
+router.get("/accounting/account-hierarchy/issues", requireAuth, requireSubscriptionAccess, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner") {
+    response.status(403).json({ error: "فحص سلامة دليل الحسابات متاح لمالك المنشأة فقط." });
+    return;
+  }
+  const rows = await db.select().from(erpRecordsTable).where(and(
+    eq(erpRecordsTable.organizationId, auth.organizationId),
+    eq(erpRecordsTable.tableName, "accounts"),
+  ));
+  response.json({ issues: findAccountHierarchyIssues(rows) });
+});
+
+router.post("/accounting/account-hierarchy/repair", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, async (request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  if (auth.roleId !== "owner") {
+    response.status(403).json({ error: "إصلاح دليل الحسابات متاح لمالك المنشأة فقط." });
+    return;
+  }
+  const accountId = Number(request.body?.accountId);
+  if (!Number.isInteger(accountId) || accountId <= 0 || request.body?.confirmation !== "MATCH_PARENT_TYPE") {
+    response.status(400).json({ error: "اختر الحساب وأكد مطابقة تصنيفه مع الحساب الأب." });
+    return;
+  }
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      if (!await lockAndValidateDataGeneration(tx, response)) throw lockedMutationRejected(response);
+      const currentAuth = await refreshAuthAfterOrganizationLock(tx, response);
+      if (!currentAuth || currentAuth.roleId !== "owner") {
+        response.locals.writeAccessFailure = "authorization_changed";
+        throw lockedMutationRejected(response);
+      }
+      const rows = await tx.select().from(erpRecordsTable).where(and(
+        eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+        eq(erpRecordsTable.tableName, "accounts"),
+      )).for("update");
+      const byId = new Map(rows.map((row) => [row.id, row]));
+      const account = byId.get(accountId);
+      const parentId = account?.data.parent == null || account.data.parent === "" ? null : Number(account.data.parent);
+      const parent = parentId === null ? undefined : byId.get(parentId);
+      if (!account || !parent) throw new MutationRejected(404, "الحساب أو حسابه الأب لم يعد متاحاً.");
+      if (account.data.type === parent.data.type) {
+        return { auth: currentAuth, repaired: [] as number[], targetType: parent.data.type };
+      }
+
+      const descendants = new Set<number>([accountId]);
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const row of rows) {
+          const rowParent = row.data.parent == null || row.data.parent === "" ? null : Number(row.data.parent);
+          if (rowParent !== null && descendants.has(rowParent) && !descendants.has(row.id)) {
+            descendants.add(row.id);
+            changed = true;
+          }
+        }
+      }
+      const targetType = parent.data.type;
+      for (const id of descendants) {
+        const row = byId.get(id);
+        if (!row) continue;
+        await tx.update(erpRecordsTable).set({
+          data: { ...row.data, type: targetType },
+          updatedAt: new Date(),
+        }).where(eq(erpRecordsTable.id, id));
+      }
+      const repairedRows = rows.map((row) => ({
+        id: row.id,
+        data: descendants.has(row.id) ? { ...row.data, type: targetType } : row.data,
+      }));
+      if (findAccountHierarchyIssues(repairedRows).some((issue) => descendants.has(issue.accountId))) {
+        throw new MutationRejected(409, "تعذر إصلاح الفرع دون إبقاء تعارض داخله.");
+      }
+      return { auth: currentAuth, repaired: [...descendants], targetType };
+    });
+    if (result.repaired.length > 0) {
+      await audit(result.auth, response, "account_hierarchy_repaired", String(accountId));
+    }
+    response.json({ repairedAccountIds: result.repaired, targetType: result.targetType });
+  } catch (error) {
+    if (error instanceof MutationRejected) {
+      response.status(error.status).json({ error: error.message, ...(error.code ? { code: error.code } : {}) });
+      return;
+    }
+    throw error;
+  }
 });
 
 router.get("/demo-data", requireAuth, requireSubscriptionAccess, async (_request: Request, response: Response): Promise<void> => {
