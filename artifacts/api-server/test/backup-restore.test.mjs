@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { eq } from "drizzle-orm";
+import { db, erpRecordsTable } from "@workspace/db";
 
 const origin = process.env.BACKUP_TEST_ORIGIN ?? "http://127.0.0.1:80";
 const apiBase = `${origin}/api`;
@@ -180,6 +182,23 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   assert.equal(exported.response.status, 200, JSON.stringify(exported.payload));
   assert.equal(exported.payload.version, 1);
   assert.ok(Array.isArray(exported.payload.records));
+
+  const childBeforeCorruption = childAccount.payload.record;
+  await db.update(erpRecordsTable)
+    .set({ data: { ...childBeforeCorruption, parent: "legacy-parent" } })
+    .where(eq(erpRecordsTable.id, childBeforeCorruption.id));
+  const rejectedExport = await request("/backup/export", { cookie });
+  assert.equal(rejectedExport.response.status, 409, JSON.stringify(rejectedExport.payload));
+  assert.equal(rejectedExport.payload.code, "invalid_account_hierarchy");
+  assert.match(rejectedExport.payload.error, /دليل الحسابات يحتاج مراجعة/);
+  assert.match(rejectedExport.payload.error, /رابط حساب أب غير صالح/);
+  const [unchangedCorruptAccount] = await db.select()
+    .from(erpRecordsTable)
+    .where(eq(erpRecordsTable.id, childBeforeCorruption.id));
+  assert.equal(unchangedCorruptAccount.data.parent, "legacy-parent");
+  await db.update(erpRecordsTable)
+    .set({ data: childBeforeCorruption })
+    .where(eq(erpRecordsTable.id, childBeforeCorruption.id));
 
   const laterAccount = await request("/data/accounts", {
     method: "POST",

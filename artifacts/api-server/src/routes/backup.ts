@@ -268,19 +268,7 @@ function validateFinancialClosure(data: Record<string, unknown>, accountIds: Set
     && matchesExpectedRecordsById(data.payables, expected.payables);
 }
 
-function validateBackupRecords(records: BackupRecord[], organizationId: number): string | null {
-  const idsByTable = new Map<string, Set<number>>();
-  for (const record of records) {
-    const ids = idsByTable.get(record.tableName) ?? new Set<number>();
-    ids.add(record.id);
-    idsByTable.set(record.tableName, ids);
-    if (Object.keys(record.data).length === 0 || !isJsonValue(record.data)) {
-      return "يحتوي الملف على بيانات سجل فارغة أو غير قابلة للقراءة.";
-    }
-  }
-  const hasReference = (tableName: string, value: unknown): boolean =>
-    isPositiveId(value) && (idsByTable.get(tableName)?.has(Number(value)) ?? false);
-  const productBalances = new Map<number, number>();
+function validateAccountHierarchy(records: BackupRecord[]): string | null {
   const accountRecords = records.filter((record) => record.tableName === "accounts");
   const accounts = new Map(accountRecords.map((record) => [record.id, record.data]));
 
@@ -323,6 +311,24 @@ function validateBackupRecords(records: BackupRecord[], organizationId: number):
       }
     }
   }
+  return null;
+}
+
+function validateBackupRecords(records: BackupRecord[], organizationId: number): string | null {
+  const idsByTable = new Map<string, Set<number>>();
+  for (const record of records) {
+    const ids = idsByTable.get(record.tableName) ?? new Set<number>();
+    ids.add(record.id);
+    idsByTable.set(record.tableName, ids);
+    if (Object.keys(record.data).length === 0 || !isJsonValue(record.data)) {
+      return "يحتوي الملف على بيانات سجل فارغة أو غير قابلة للقراءة.";
+    }
+  }
+  const hierarchyError = validateAccountHierarchy(records);
+  if (hierarchyError) return hierarchyError;
+  const hasReference = (tableName: string, value: unknown): boolean =>
+    isPositiveId(value) && (idsByTable.get(tableName)?.has(Number(value)) ?? false);
+  const productBalances = new Map<number, number>();
 
   for (const record of records) {
     const data = record.data;
@@ -507,6 +513,15 @@ router.get("/backup/export", requireAuth, requireSubscriptionAccess, requireOwne
     eq(erpRecordsTable.organizationId, auth.organizationId),
     inArray(erpRecordsTable.tableName, BACKUP_TABLE_NAMES),
   ));
+
+  const hierarchyError = validateAccountHierarchy(records);
+  if (hierarchyError) {
+    response.status(409).json({
+      error: `تعذر إنشاء النسخة الاحتياطية لأن دليل الحسابات يحتاج مراجعة. ${hierarchyError}`,
+      code: "invalid_account_hierarchy",
+    });
+    return;
+  }
 
   response.setHeader("Cache-Control", "no-store");
   response.setHeader(
