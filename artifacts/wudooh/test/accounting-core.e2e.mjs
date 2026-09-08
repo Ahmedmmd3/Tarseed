@@ -172,10 +172,11 @@ async function mockAccountHierarchyRepair(page) {
       accountName: 'حساب داخل دورة',
       accountType: 'asset',
       parentId: 903,
-      cycleAccountIds: [902, 903],
+      cycleAccountIds: [902, 904, 903],
       cycleAccounts: [
         { accountId: 902, accountCode: '1920', accountName: 'حساب داخل دورة' },
-        { accountId: 903, accountCode: '1930', accountName: 'الحساب الآخر في الدورة' },
+        { accountId: 904, accountCode: '1940', accountName: 'الطرف الثاني للمعرّف 904' },
+        { accountId: 903, accountCode: '1930', accountName: 'الطرف الثالث للمعرّف 903' },
       ],
     },
   ];
@@ -400,7 +401,7 @@ test('يعرض مشاكل شجرة الحسابات ويصلح الأب المف
   const cycleIssue = page.getByTestId('account-hierarchy-issue-cycle-902');
   await expect(issuesCard).toContainText('تحتاج شجرة الحسابات إلى مراجعة');
   await expect(missingParentIssue).toContainText('يشير إلى حساب أب محذوف (المعرّف 9999). اختر فصله أو نقله إلى أب صالح.');
-  await expect(cycleIssue).toContainText('توجد دورة بين: 1920 — حساب داخل دورة، 1930 — الحساب الآخر في الدورة. افصل أحدها أو انقله لكسر الدورة.');
+  await expect(cycleIssue).toContainText('توجد دورة بين: 1920 — حساب داخل دورة، 1940 — الطرف الثاني للمعرّف 904، 1930 — الطرف الثالث للمعرّف 903. افصل أحدها أو انقله لكسر الدورة.');
 
   await page.getByTestId('button-repair-account-hierarchy-901').click();
   await expect(page.getByTestId('dialog-repair-account-hierarchy')).toBeVisible();
