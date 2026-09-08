@@ -15,6 +15,48 @@ import app from "../src/app.ts";
 import { findAccountHierarchyIssues } from "../src/lib/account-hierarchy.ts";
 import { hashPassword } from "../src/lib/team-auth.ts";
 
+function createSeededRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+}
+
+function shuffleWithRandom(items, random) {
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
+  }
+}
+
+function referenceCycleKeys(rows) {
+  const parents = new Map(rows.map((row) => [
+    row.id,
+    typeof row.data.parent === "string" && /^[1-9]\d*$/.test(row.data.parent)
+      ? Number(row.data.parent)
+      : null,
+  ]));
+  const cycles = new Set();
+
+  for (const startId of parents.keys()) {
+    const visitedAt = new Map();
+    const path = [];
+    let cursor = startId;
+    while (cursor !== null && parents.has(cursor) && !visitedAt.has(cursor)) {
+      visitedAt.set(cursor, path.length);
+      path.push(cursor);
+      cursor = parents.get(cursor);
+    }
+    if (cursor !== null && visitedAt.has(cursor)) {
+      const cycle = path.slice(visitedAt.get(cursor)).sort((left, right) => left - right);
+      cycles.add(cycle.join(","));
+    }
+  }
+
+  return [...cycles].sort();
+}
+
 let server;
 let origin;
 let organizationId;
@@ -256,6 +298,66 @@ test("يفصل بلاغات عدة دورات مع سلاسل تتجه إلى ك
     )),
     "يجب ألا تدخل حسابات السلاسل ضمن أعضاء أي دورة",
   );
+});
+
+test("يطابق مرجعاً مستقلاً في رسوم أبوة صغيرة مولدة ببذرة ثابتة", { timeout: 1_000 }, () => {
+  const random = createSeededRandom(0x20_08_20_26);
+
+  for (let caseIndex = 0; caseIndex < 80; caseIndex += 1) {
+    const accountCount = 12 + Math.floor(random() * 29);
+    const parentById = new Map([
+      [1, null],
+      [2, 2],
+      [3, 4],
+      [4, 3],
+      [5, 3],
+      [6, 5],
+      [7, 8],
+      [8, 9],
+      [9, 7],
+    ]);
+    for (let id = 10; id <= accountCount; id += 1) {
+      parentById.set(id, random() < 0.22 ? null : 1 + Math.floor(random() * accountCount));
+    }
+
+    const rows = [...parentById].map(([id, parentId]) => ({
+      id,
+      data: {
+        code: `GENERATED-${caseIndex}-${id}`,
+        name: `حساب مولد ${caseIndex}-${id}`,
+        type: "asset",
+        status: "active",
+        parent: parentId === null ? null : String(parentId),
+      },
+    }));
+    shuffleWithRandom(rows, random);
+
+    const expectedCycleKeys = referenceCycleKeys(rows);
+    const cycleIssues = findAccountHierarchyIssues(rows).filter((issue) => issue.kind === "cycle");
+    const actualCycleKeys = cycleIssues.map((issue) => (
+      [...issue.cycleAccountIds].sort((left, right) => left - right).join(",")
+    )).sort();
+
+    assert.deepEqual(
+      actualCycleKeys,
+      expectedCycleKeys,
+      `يجب مطابقة دورات المرجع في الحالة المولدة ${caseIndex}`,
+    );
+    assert.equal(
+      new Set(actualCycleKeys).size,
+      cycleIssues.length,
+      `يجب إرجاع بلاغ واحد فقط لكل دورة في الحالة ${caseIndex}`,
+    );
+    const expectedCycleMembers = new Set(expectedCycleKeys.flatMap(
+      (cycleKey) => cycleKey.split(",").map(Number),
+    ));
+    assert.ok(
+      cycleIssues.every((issue) => issue.cycleAccountIds.every(
+        (accountId) => expectedCycleMembers.has(accountId),
+      )),
+      `يجب ألا تدخل السلاسل المؤدية إلى الدورات في الحالة ${caseIndex}`,
+    );
+  }
 });
 
 let invalidAncestorParent;
