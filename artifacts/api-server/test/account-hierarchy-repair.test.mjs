@@ -308,6 +308,50 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${reparentAuditFailureFunction}()`));
   }
 
+  const detachAuditFailureFunction = `fail_hierarchy_detach_audit_${randomUUID().replaceAll("-", "")}`;
+  const detachAuditFailureTrigger = `${detachAuditFailureFunction}_trigger`;
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${detachAuditFailureFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.organization_id = ${organizationId}
+          AND NEW.action = 'account_hierarchy_repaired'
+          AND NEW.entity = '${invalidParent.id}' THEN
+          RAISE EXCEPTION 'تعذر سجل تدقيق فصل الحساب عمداً';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${detachAuditFailureTrigger}
+      BEFORE INSERT ON team_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION ${detachAuditFailureFunction}();
+    `));
+
+    const failedDetach = await request("/accounting/account-hierarchy/repair", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: { accountId: invalidParent.id, parentId: null, confirmation: "REPARENT_ACCOUNT" },
+    });
+    assert.equal(failedDetach.response.status, 500);
+
+    const [accountAfterDetachAuditFailure] = await db.select().from(erpRecordsTable)
+      .where(eq(erpRecordsTable.id, invalidParent.id));
+    assert.equal(
+      accountAfterDetachAuditFailure.data.parent,
+      "legacy-parent",
+      "يجب أن يبقى رابط الأب التالف القديم عند فشل سجل تدقيق الفصل",
+    );
+    assert.equal(
+      (await repairAuditLogs()).filter((log) => log.entity === String(invalidParent.id)).length,
+      0,
+      "لا يجب حفظ سجل إصلاح جزئي عند فشل فصل الحساب",
+    );
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${detachAuditFailureTrigger} ON team_audit_logs`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${detachAuditFailureFunction}()`));
+  }
+
   const memberIssues = await request("/accounting/account-hierarchy/issues", { cookie: memberCookie });
   assert.equal(memberIssues.response.status, 403);
   assert.match(memberIssues.payload.error, /مالك/);
