@@ -8,6 +8,7 @@ import {
   erpRecordsTable,
   organizationsTable,
   pool,
+  teamAuditLogsTable,
   teamUsersTable,
 } from "@workspace/db";
 import app from "../src/app.ts";
@@ -16,6 +17,7 @@ import { hashPassword } from "../src/lib/team-auth.ts";
 let server;
 let origin;
 let organizationId;
+let ownerId;
 let ownerCookie;
 let memberCookie;
 let dataGeneration;
@@ -91,6 +93,7 @@ before(async () => {
   ownerCookie = cookieFrom(verified.response);
   assert.ok(ownerCookie);
   organizationId = Number(verified.payload.user.organizationId);
+  ownerId = Number(verified.payload.user.id);
   dataGeneration = Number(verified.payload.user.dataGeneration);
 
   const memberPassword = "Hierarchy-member-test-123";
@@ -167,6 +170,11 @@ after(async () => {
 });
 
 test("يحصر الفحص والإصلاح بالمالك ويتطلب التأكيد ويحافظ على القيود والأرصدة", async () => {
+  const repairAuditLogs = () => db.select().from(teamAuditLogsTable).where(and(
+    eq(teamAuditLogsTable.organizationId, organizationId),
+    eq(teamAuditLogsTable.action, "account_hierarchy_repaired"),
+  ));
+
   const memberIssues = await request("/accounting/account-hierarchy/issues", { cookie: memberCookie });
   assert.equal(memberIssues.response.status, 403);
   assert.match(memberIssues.payload.error, /مالك/);
@@ -178,6 +186,7 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   });
   assert.equal(memberRepair.response.status, 403);
   assert.match(memberRepair.payload.error, /مالك/);
+  assert.equal((await repairAuditLogs()).length, 0);
 
   const beforeRows = await db.select().from(erpRecordsTable).where(inArray(
     erpRecordsTable.id,
@@ -191,6 +200,7 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     body: { accountId: branch.id },
   });
   assert.equal(missingConfirmation.response.status, 400);
+  assert.equal((await repairAuditLogs()).length, 0);
 
   const unchangedAfterRejection = await db.select().from(erpRecordsTable).where(inArray(
     erpRecordsTable.id,
@@ -258,6 +268,24 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     [branch.id, child.id, grandchild.id].sort((a, b) => a - b),
   );
   assert.equal(repaired.payload.targetType, "asset");
+
+  const branchRepairAuditLogs = (await repairAuditLogs()).filter((log) => log.entity === String(branch.id));
+  assert.equal(branchRepairAuditLogs.length, 1);
+  assert.equal(branchRepairAuditLogs[0].organizationId, organizationId);
+  assert.equal(branchRepairAuditLogs[0].actorId, ownerId);
+  assert.equal(branchRepairAuditLogs[0].action, "account_hierarchy_repaired");
+
+  const replayedRepair = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: branch.id, confirmation: "MATCH_PARENT_TYPE" },
+  });
+  assert.equal(replayedRepair.response.status, 200, JSON.stringify(replayedRepair.payload));
+  assert.deepEqual(replayedRepair.payload.repairedAccountIds, []);
+  assert.equal(
+    (await repairAuditLogs()).filter((log) => log.entity === String(branch.id)).length,
+    1,
+  );
 
   const repairedRows = await db.select().from(erpRecordsTable).where(and(
     eq(erpRecordsTable.organizationId, organizationId),
