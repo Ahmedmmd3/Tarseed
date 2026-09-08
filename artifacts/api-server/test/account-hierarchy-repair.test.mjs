@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import test, { after, before } from "node:test";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   db,
   erpRecordsTable,
@@ -209,6 +209,60 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     eq(teamAuditLogsTable.organizationId, organizationId),
     eq(teamAuditLogsTable.action, "account_hierarchy_repaired"),
   ));
+
+  const rollbackParent = await createRecord("accounts", {
+    code: `ROLLBACK-${randomUUID().slice(0, 8)}-1`,
+    name: "أب اختبار ذرية سجل الإصلاح",
+    type: "asset",
+    status: "active",
+  });
+  const rollbackAccount = await createRecord("accounts", {
+    code: `ROLLBACK-${randomUUID().slice(0, 8)}-2`,
+    name: "حساب اختبار ذرية سجل الإصلاح",
+    type: "expense",
+    parent: String(rollbackParent.id),
+    status: "active",
+  });
+  const auditFailureFunction = `fail_hierarchy_repair_audit_${randomUUID().replaceAll("-", "")}`;
+  const auditFailureTrigger = `${auditFailureFunction}_trigger`;
+  try {
+    await db.execute(sql.raw(`
+      CREATE FUNCTION ${auditFailureFunction}() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.organization_id = ${organizationId}
+          AND NEW.action = 'account_hierarchy_repaired'
+          AND NEW.entity = '${rollbackAccount.id}' THEN
+          RAISE EXCEPTION 'تعذر سجل تدقيق الإصلاح عمداً';
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${auditFailureTrigger}
+      BEFORE INSERT ON team_audit_logs
+      FOR EACH ROW EXECUTE FUNCTION ${auditFailureFunction}();
+    `));
+
+    const failedRepair = await request("/accounting/account-hierarchy/repair", {
+      method: "POST",
+      cookie: ownerCookie,
+      body: { accountId: rollbackAccount.id, confirmation: "MATCH_PARENT_TYPE" },
+    });
+    assert.equal(failedRepair.response.status, 500);
+
+    const [accountAfterAuditFailure] = await db.select().from(erpRecordsTable)
+      .where(eq(erpRecordsTable.id, rollbackAccount.id));
+    assert.equal(accountAfterAuditFailure.data.parent, String(rollbackParent.id));
+    assert.equal(accountAfterAuditFailure.data.type, "expense");
+    assert.equal(
+      (await repairAuditLogs()).filter((log) => log.entity === String(rollbackAccount.id)).length,
+      0,
+      "لا يجب حفظ سجل إصلاح جزئي عند فشل المعاملة",
+    );
+  } finally {
+    await db.execute(sql.raw(`DROP TRIGGER IF EXISTS ${auditFailureTrigger} ON team_audit_logs`));
+    await db.execute(sql.raw(`DROP FUNCTION IF EXISTS ${auditFailureFunction}()`));
+  }
 
   const memberIssues = await request("/accounting/account-hierarchy/issues", { cookie: memberCookie });
   assert.equal(memberIssues.response.status, 403);
