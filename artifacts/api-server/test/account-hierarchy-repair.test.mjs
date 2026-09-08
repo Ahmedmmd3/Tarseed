@@ -24,6 +24,9 @@ let branch;
 let child;
 let grandchild;
 let journal;
+let orphan;
+let cycleA;
+let cycleB;
 
 async function request(path, { method = "GET", body, cookie } = {}) {
   const response = await fetch(`${origin}/api${path}`, {
@@ -136,6 +139,21 @@ before(async () => {
       { accountId: String(parent.id), debit: 0, credit: 315 },
     ],
   });
+  orphan = await createRecord("accounts", {
+    code: `T-${suffix}-5`, name: "حساب بأب مفقود", type: "asset", parent: "999999999",
+    openingBalance: 12, balance: 44, status: "active",
+  });
+  cycleA = await createRecord("accounts", {
+    code: `T-${suffix}-6`, name: "طرف الدورة الأول", type: "asset",
+    openingBalance: 0, balance: 0, status: "active",
+  });
+  cycleB = await createRecord("accounts", {
+    code: `T-${suffix}-7`, name: "طرف الدورة الثاني", type: "liability", parent: String(cycleA.id),
+    openingBalance: 0, balance: 0, status: "active",
+  });
+  await db.update(erpRecordsTable).set({
+    data: { ...cycleA.data, parent: String(cycleB.id) },
+  }).where(eq(erpRecordsTable.id, cycleA.id));
 });
 
 after(async () => {
@@ -185,6 +203,49 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   const issuesBefore = await request("/accounting/account-hierarchy/issues", { cookie: ownerCookie });
   assert.equal(issuesBefore.response.status, 200);
   assert.ok(issuesBefore.payload.issues.some((issue) => issue.accountId === branch.id));
+  assert.ok(issuesBefore.payload.issues.some((issue) => issue.kind === "missing_parent" && issue.accountId === orphan.id));
+  const cycleIssue = issuesBefore.payload.issues.find((issue) => issue.kind === "cycle");
+  assert.deepEqual([...cycleIssue.cycleAccountIds].sort((a, b) => a - b), [cycleA.id, cycleB.id].sort((a, b) => a - b));
+
+  const invalidMove = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: orphan.id, parentId: branch.id, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(invalidMove.response.status, 409);
+  assert.match(invalidMove.payload.error, /التصنيف/);
+
+  const detachedOrphan = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: orphan.id, parentId: null, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(detachedOrphan.response.status, 200, JSON.stringify(detachedOrphan.payload));
+  assert.equal(detachedOrphan.payload.parentId, null);
+
+  const movedCycleAccount = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: cycleA.id, parentId: parent.id, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(movedCycleAccount.response.status, 200, JSON.stringify(movedCycleAccount.payload));
+  assert.equal(movedCycleAccount.payload.parentId, parent.id);
+
+  const issuesAfterBreakingCycle = await request("/accounting/account-hierarchy/issues", { cookie: ownerCookie });
+  assert.ok(!issuesAfterBreakingCycle.payload.issues.some((issue) => issue.kind === "cycle" && issue.cycleAccountIds.some(
+    (accountId) => [cycleA.id, cycleB.id].includes(accountId),
+  )));
+  assert.ok(issuesAfterBreakingCycle.payload.issues.some(
+    (issue) => issue.kind === "type_mismatch" && issue.accountId === cycleB.id,
+  ));
+
+  const repairedCycleMismatch = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: cycleB.id, confirmation: "MATCH_PARENT_TYPE" },
+  });
+  assert.equal(repairedCycleMismatch.response.status, 200, JSON.stringify(repairedCycleMismatch.payload));
+  assert.equal(repairedCycleMismatch.payload.targetType, "asset");
 
   const repaired = await request("/accounting/account-hierarchy/repair", {
     method: "POST",
@@ -215,5 +276,12 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
   assert.equal(issuesAfter.response.status, 200);
   assert.ok(!issuesAfter.payload.issues.some(
     (issue) => [branch.id, child.id, grandchild.id].includes(issue.accountId),
+  ));
+  assert.ok(!issuesAfter.payload.issues.some((issue) => issue.kind === "missing_parent" && issue.accountId === orphan.id));
+  assert.ok(!issuesAfter.payload.issues.some((issue) => issue.kind === "cycle" && issue.cycleAccountIds.some(
+    (accountId) => [cycleA.id, cycleB.id].includes(accountId),
+  )));
+  assert.ok(!issuesAfter.payload.issues.some(
+    (issue) => issue.kind === "type_mismatch" && [cycleA.id, cycleB.id].includes(issue.accountId),
   ));
 });

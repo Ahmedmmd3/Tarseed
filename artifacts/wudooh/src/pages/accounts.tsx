@@ -37,14 +37,17 @@ const TYPE_COLORS: Record<AccountType, 'default' | 'secondary' | 'destructive' |
 const TYPE_ORDER: AccountType[] = ['asset', 'liability', 'equity', 'revenue', 'expense'];
 
 type AccountHierarchyIssue = {
+  kind: 'type_mismatch' | 'missing_parent' | 'cycle';
   accountId: number;
   accountCode: string;
   accountName: string;
   accountType: AccountType;
   parentId: number;
-  parentCode: string;
-  parentName: string;
-  parentType: AccountType;
+  parentCode?: string;
+  parentName?: string;
+  parentType?: AccountType;
+  cycleAccountIds?: number[];
+  cycleAccounts?: Array<{ accountId: number; accountCode: string; accountName: string }>;
 };
 
 export default function Accounts() {
@@ -67,6 +70,7 @@ export default function Accounts() {
   const [hierarchyError, setHierarchyError] = useState('');
   const [hierarchyIssues, setHierarchyIssues] = useState<AccountHierarchyIssue[]>([]);
   const [repairingIssue, setRepairingIssue] = useState<AccountHierarchyIssue | null>(null);
+  const [repairParentId, setRepairParentId] = useState('');
   const [isRepairing, setIsRepairing] = useState(false);
 
   useEffect(() => {
@@ -272,20 +276,30 @@ export default function Accounts() {
           'Content-Type': 'application/json',
           'X-Wudooh-Data-Generation': String(currentUser.dataGeneration),
         },
-        body: JSON.stringify({ accountId: repairingIssue.accountId, confirmation: 'MATCH_PARENT_TYPE' }),
+        body: JSON.stringify(repairingIssue.kind === 'type_mismatch'
+          ? { accountId: repairingIssue.accountId, confirmation: 'MATCH_PARENT_TYPE' }
+          : {
+              accountId: repairingIssue.accountId,
+              parentId: repairParentId === '' ? null : Number(repairParentId),
+              confirmation: 'REPARENT_ACCOUNT',
+            }),
       });
       const payload = await response.json() as { repairedAccountIds?: number[]; error?: string };
-      if (!response.ok) throw new Error(payload.error ?? 'تعذر إصلاح تصنيف الفرع.');
+      if (!response.ok) throw new Error(payload.error ?? 'تعذر إصلاح شجرة الحسابات.');
       await refreshSession();
       setHierarchyIssues((current) => current.filter((issue) => !payload.repairedAccountIds?.includes(issue.accountId)));
       toast({
-        title: 'تم إصلاح تصنيف الفرع',
-        description: `طابق الخادم تصنيف ${repairingIssue.accountName} وفروعه مع ${repairingIssue.parentName}.`,
+        title: 'تم إصلاح شجرة الحسابات',
+        description: repairingIssue.kind === 'type_mismatch'
+          ? `طابق الخادم تصنيف ${repairingIssue.accountName} وفروعه مع ${repairingIssue.parentName}.`
+          : repairParentId === ''
+            ? `تم فصل ${repairingIssue.accountName} ليصبح حساباً رئيسياً.`
+            : `تم نقل ${repairingIssue.accountName} إلى الحساب الأب المختار.`,
       });
       setRepairingIssue(null);
     } catch (error) {
       toast({
-        title: 'تعذر إصلاح تصنيف الفرع',
+        title: 'تعذر إصلاح شجرة الحسابات',
         description: error instanceof Error ? error.message : 'أعد المحاولة بعد تحديث الصفحة.',
         variant: 'destructive',
       });
@@ -405,19 +419,29 @@ export default function Accounts() {
               <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
               <div>
                 <h3 className="font-bold text-amber-950">تحتاج شجرة الحسابات إلى مراجعة</h3>
-                <p className="mt-1 text-sm text-amber-900">وجدنا {hierarchyIssues.length} حساباً قديماً تصنيفه مختلف عن حسابه الأب. لن نغيّر أي حساب دون اختيارك.</p>
+                <p className="mt-1 text-sm text-amber-900">وجدنا {hierarchyIssues.length} مشكلة قديمة في روابط أو تصنيفات الحسابات. لن نغيّر أي حساب دون اختيارك.</p>
               </div>
             </div>
             <div className="space-y-2">
               {hierarchyIssues.map((issue) => (
-                <div key={issue.accountId} className="flex flex-col justify-between gap-3 rounded-lg border border-amber-200 bg-white p-3 sm:flex-row sm:items-center" data-testid={`account-hierarchy-issue-${issue.accountId}`}>
+                 <div key={`${issue.kind}-${issue.accountId}`} className="flex flex-col justify-between gap-3 rounded-lg border border-amber-200 bg-white p-3 sm:flex-row sm:items-center" data-testid={`account-hierarchy-issue-${issue.kind}-${issue.accountId}`}>
                   <div className="text-sm">
                     <p className="font-semibold text-slate-900">{issue.accountCode} — {issue.accountName}</p>
-                    <p className="mt-1 text-slate-600">
-                      تصنيفه {TYPE_LABELS[issue.accountType]}، بينما الأب {issue.parentCode} — {issue.parentName} ضمن {TYPE_LABELS[issue.parentType]}.
-                    </p>
+                     {issue.kind === 'type_mismatch' && issue.parentType && (
+                       <p className="mt-1 text-slate-600">
+                         تصنيفه {TYPE_LABELS[issue.accountType]}، بينما الأب {issue.parentCode} — {issue.parentName} ضمن {TYPE_LABELS[issue.parentType]}.
+                       </p>
+                     )}
+                     {issue.kind === 'missing_parent' && (
+                       <p className="mt-1 text-slate-600">يشير إلى حساب أب محذوف (المعرّف {issue.parentId}). اختر فصله أو نقله إلى أب صالح.</p>
+                     )}
+                     {issue.kind === 'cycle' && (
+                       <p className="mt-1 text-slate-600">
+                         توجد دورة بين: {issue.cycleAccounts?.map((account) => `${account.accountCode} — ${account.accountName}`).join('، ')}. افصل أحدها أو انقله لكسر الدورة.
+                       </p>
+                     )}
                   </div>
-                  <Button type="button" variant="outline" className="shrink-0 border-amber-300 text-amber-900" onClick={() => setRepairingIssue(issue)} data-testid={`button-repair-account-hierarchy-${issue.accountId}`}>
+                   <Button type="button" variant="outline" className="shrink-0 border-amber-300 text-amber-900" onClick={() => { setRepairParentId(''); setRepairingIssue(issue); }} data-testid={`button-repair-account-hierarchy-${issue.accountId}`}>
                     <Wrench className="ml-2 h-4 w-4" />
                     مراجعة الإصلاح
                   </Button>
@@ -431,18 +455,40 @@ export default function Accounts() {
       <Dialog open={Boolean(repairingIssue)} onOpenChange={(open) => { if (!open && !isRepairing) setRepairingIssue(null); }}>
         <DialogContent className="sm:max-w-md" data-testid="dialog-repair-account-hierarchy">
           <DialogHeader>
-            <DialogTitle>تأكيد إصلاح تصنيف الفرع</DialogTitle>
+             <DialogTitle>{repairingIssue?.kind === 'type_mismatch' ? 'تأكيد إصلاح تصنيف الفرع' : 'إصلاح رابط الحساب'}</DialogTitle>
           </DialogHeader>
           {repairingIssue && (
             <div className="space-y-3 text-sm text-slate-700">
-              <p>سيُغيّر تصنيف <strong>{repairingIssue.accountName}</strong> وكل حساباته الفرعية إلى <strong>{TYPE_LABELS[repairingIssue.parentType]}</strong> ليطابق الحساب الأب.</p>
-              <p className="rounded-md bg-slate-100 p-3">قد تنتقل أرصدة هذا الفرع إلى قسم مختلف في التقارير المحاسبية. لن تتغير القيود أو الأرصدة نفسها.</p>
+               {repairingIssue.kind === 'type_mismatch' && repairingIssue.parentType ? (
+                 <>
+                   <p>سيُغيّر تصنيف <strong>{repairingIssue.accountName}</strong> وكل حساباته الفرعية إلى <strong>{TYPE_LABELS[repairingIssue.parentType]}</strong> ليطابق الحساب الأب.</p>
+                   <p className="rounded-md bg-slate-100 p-3">قد تنتقل أرصدة هذا الفرع إلى قسم مختلف في التقارير المحاسبية. لن تتغير القيود أو الأرصدة نفسها.</p>
+                 </>
+               ) : (
+                 <>
+                   <p>اختر فصل <strong>{repairingIssue.accountName}</strong> كحساب رئيسي، أو نقله إلى حساب أب نشط من تصنيف {TYPE_LABELS[repairingIssue.accountType]}.</p>
+                   <div className="space-y-2">
+                     <Label htmlFor="repair-parent">الحساب الأب الجديد</Label>
+                     <select id="repair-parent" value={repairParentId} onChange={(event) => setRepairParentId(event.target.value)} className="h-10 w-full rounded-md border border-input bg-white px-3 text-sm" data-testid="select-account-hierarchy-parent">
+                       <option value="">فصل الحساب (حساب رئيسي)</option>
+                       {accounts
+                         .filter((account) => account.status === 'active'
+                           && account.type === repairingIssue.accountType
+                           && account.id !== String(repairingIssue.accountId)
+                           && !repairingIssue.cycleAccountIds?.includes(Number(account.id)))
+                         .sort((left, right) => left.code.localeCompare(right.code, 'en'))
+                         .map((account) => <option key={account.id} value={account.id}>{account.code} — {account.name}</option>)}
+                     </select>
+                   </div>
+                   <p className="rounded-md bg-slate-100 p-3">سيتحقق الخادم مجدداً من التصنيف والدورات قبل الحفظ. لن تتغير القيود أو الأرصدة.</p>
+                 </>
+               )}
             </div>
           )}
           <DialogFooter>
             <Button type="button" variant="outline" disabled={isRepairing} onClick={() => setRepairingIssue(null)}>إلغاء</Button>
             <Button type="button" disabled={isRepairing} onClick={() => { void repairHierarchyIssue(); }} data-testid="button-confirm-account-hierarchy-repair">
-              {isRepairing ? 'جارٍ الإصلاح...' : 'تأكيد ومطابقة التصنيف'}
+               {isRepairing ? 'جارٍ الإصلاح...' : repairingIssue?.kind === 'type_mismatch' ? 'تأكيد ومطابقة التصنيف' : 'تأكيد إصلاح الرابط'}
             </Button>
           </DialogFooter>
         </DialogContent>
