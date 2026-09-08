@@ -46,6 +46,63 @@ test("يفحص المنطق المشترك الأب النشط والتصنيف 
     && [...issue.cycleAccountIds].sort((left, right) => left - right).join(",") === "4,5"));
 });
 
+test("يعرض الحساب الذي يشير إلى نفسه كدورة واحدة قابلة للفصل", { timeout: 500 }, () => {
+  const selfParentId = 2;
+  const rows = [
+    {
+      id: 1,
+      data: {
+        code: "SELF-ROOT",
+        name: "حساب مستقل",
+        type: "asset",
+        status: "active",
+        parent: null,
+      },
+    },
+    {
+      id: selfParentId,
+      data: {
+        code: "SELF-CYCLE",
+        name: "حساب يشير إلى نفسه",
+        type: "asset",
+        status: "active",
+        parent: String(selfParentId),
+      },
+    },
+    {
+      id: 3,
+      data: {
+        code: "SELF-OTHER",
+        name: "حساب مرتبط مستقل",
+        type: "asset",
+        status: "active",
+        parent: "1",
+      },
+    },
+  ];
+  const unchangedParents = new Map(rows.map((row) => [row.id, row.data.parent]));
+
+  const cycleIssues = findAccountHierarchyIssues(rows).filter((issue) => issue.kind === "cycle");
+
+  assert.equal(cycleIssues.length, 1, "يجب الإبلاغ عن الدورة الذاتية مرة واحدة فقط");
+  assert.equal(cycleIssues[0].accountId, selfParentId);
+  assert.deepEqual(cycleIssues[0].cycleAccountIds, [selfParentId]);
+  assert.deepEqual(
+    cycleIssues[0].cycleAccounts.map((account) => account.accountId),
+    [selfParentId],
+  );
+
+  rows[1] = {
+    ...rows[1],
+    data: { ...rows[1].data, parent: null },
+  };
+
+  assert.ok(!findAccountHierarchyIssues(rows).some((issue) => issue.kind === "cycle"));
+  assert.equal(rows[1].data.parent, null);
+  assert.equal(rows[0].data.parent, unchangedParents.get(1));
+  assert.equal(rows[2].data.parent, unchangedParents.get(3));
+});
+
 test("يكتشف دورة شديدة الطول مرة واحدة ويكسرها دون تغيير بقية الروابط", { timeout: 1_500 }, () => {
   const cycleSize = 5_000;
   const rows = Array.from({ length: cycleSize }, (_, index) => ({
@@ -207,6 +264,7 @@ let cycleB;
 let longCycleA;
 let longCycleB;
 let longCycleC;
+let selfCycle;
 
 async function request(path, { method = "GET", body, cookie } = {}) {
   const response = await fetch(`${origin}/api${path}`, {
@@ -366,6 +424,17 @@ before(async () => {
   await db.update(erpRecordsTable).set({
     data: { ...longCycleA.data, parent: String(longCycleC.id) },
   }).where(eq(erpRecordsTable.id, longCycleA.id));
+  selfCycle = await createRecord("accounts", {
+    code: `T-${suffix}-15`, name: "حساب بدورة ذاتية", type: "asset",
+    openingBalance: 0, balance: 0, status: "active",
+  });
+  selfCycle = {
+    ...selfCycle,
+    data: { ...selfCycle.data, parent: String(selfCycle.id) },
+  };
+  await db.update(erpRecordsTable).set({
+    data: selfCycle.data,
+  }).where(eq(erpRecordsTable.id, selfCycle.id));
 });
 
 after(async () => {
@@ -637,6 +706,43 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     [...longCycleIssue.cycleAccountIds].sort((a, b) => a - b),
     [longCycleA.id, longCycleB.id, longCycleC.id].sort((a, b) => a - b),
   );
+  const selfCycleIssues = issuesBefore.payload.issues.filter((issue) => issue.kind === "cycle"
+    && issue.cycleAccountIds.includes(selfCycle.id));
+  assert.equal(selfCycleIssues.length, 1, "يجب أن تعرض الواجهة بلاغاً واحداً للدورة الذاتية");
+  assert.deepEqual(selfCycleIssues[0].cycleAccountIds, [selfCycle.id]);
+  assert.deepEqual(
+    selfCycleIssues[0].cycleAccounts.map((account) => account.accountId),
+    [selfCycle.id],
+  );
+
+  const unrelatedParentsBeforeSelfRepair = new Map(
+    [parent, branch, child].map((account) => [account.id, account.data.parent ?? null]),
+  );
+  const repairedSelfCycle = await request("/accounting/account-hierarchy/repair", {
+    method: "POST",
+    cookie: ownerCookie,
+    body: { accountId: selfCycle.id, parentId: null, confirmation: "REPARENT_ACCOUNT" },
+  });
+  assert.equal(repairedSelfCycle.response.status, 200, JSON.stringify(repairedSelfCycle.payload));
+  assert.equal(repairedSelfCycle.payload.parentId, null);
+
+  const rowsAfterSelfRepair = await db.select().from(erpRecordsTable).where(inArray(
+    erpRecordsTable.id,
+    [selfCycle.id, parent.id, branch.id, child.id],
+  ));
+  const rowsAfterSelfRepairById = new Map(rowsAfterSelfRepair.map((row) => [row.id, row.data]));
+  assert.equal(rowsAfterSelfRepairById.get(selfCycle.id).parent, null);
+  for (const [accountId, expectedParent] of unrelatedParentsBeforeSelfRepair) {
+    assert.equal(
+      rowsAfterSelfRepairById.get(accountId).parent ?? null,
+      expectedParent,
+      `يجب ألا يتغير رابط الحساب ${accountId} عند إصلاح الدورة الذاتية`,
+    );
+  }
+  const issuesAfterSelfRepair = await request("/accounting/account-hierarchy/issues", { cookie: ownerCookie });
+  assert.equal(issuesAfterSelfRepair.response.status, 200);
+  assert.ok(!issuesAfterSelfRepair.payload.issues.some((issue) => issue.kind === "cycle"
+    && issue.cycleAccountIds.includes(selfCycle.id)));
 
   const invalidMove = await request("/accounting/account-hierarchy/repair", {
     method: "POST",
@@ -704,6 +810,12 @@ test("يحصر الفحص والإصلاح بالمالك ويتطلب التأ�
     repairType: "reparent",
     oldParentId: cycleB.id,
     newParentId: parent.id,
+  });
+  assert.deepEqual(await auditDetailsFor(selfCycle), {
+    issueKind: "cycle",
+    repairType: "detach",
+    oldParentId: selfCycle.id,
+    newParentId: null,
   });
 
   const repairedLongCycle = await request("/accounting/account-hierarchy/repair", {
