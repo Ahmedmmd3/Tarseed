@@ -206,6 +206,40 @@ test("تهيئة دليل الحسابات المتزامنة تبقى ذرية 
   assert.equal(persistedChild.type, "asset");
   assert.equal(String(persistedChild.parent), String(parentId));
 
+  const concurrentTargetCreate = await request("/data/accounts", {
+    method: "POST", cookie: owner.cookie,
+    body: { code: unique("93").replaceAll(/\D/g, "").slice(0, 6).padEnd(6, "3"), name: "أب النقل المتزامن", type: "asset", parent: null, openingBalance: 0, balance: 0, status: "active" },
+  });
+  assert.equal(concurrentTargetCreate.response.status, 201, JSON.stringify(concurrentTargetCreate.payload));
+  const concurrentTargetId = concurrentTargetCreate.payload.record.id;
+
+  const concurrentHierarchyChanges = await Promise.all([
+    request(`/data/accounts/${concurrentTargetId}`, {
+      method: "PATCH", cookie: owner.cookie, body: { type: "liability" },
+    }),
+    request(`/data/accounts/${childId}`, {
+      method: "PATCH", cookie: secondCookie, body: { parent: String(concurrentTargetId) },
+    }),
+  ]);
+  assert.deepEqual(
+    concurrentHierarchyChanges.map((result) => result.response.status).sort((left, right) => left - right),
+    [200, 409],
+    JSON.stringify(concurrentHierarchyChanges.map((result) => result.payload)),
+  );
+
+  const accountsAfterConcurrentHierarchyChanges = await request("/data/accounts", { cookie: owner.cookie });
+  assert.equal(accountsAfterConcurrentHierarchyChanges.response.status, 200, JSON.stringify(accountsAfterConcurrentHierarchyChanges.payload));
+  const persistedConcurrentTarget = accountsAfterConcurrentHierarchyChanges.payload.records.find((account) => account.id === concurrentTargetId);
+  const persistedConcurrentChild = accountsAfterConcurrentHierarchyChanges.payload.records.find((account) => account.id === childId);
+  assert.ok(persistedConcurrentTarget);
+  assert.ok(persistedConcurrentChild);
+  if (String(persistedConcurrentChild.parent) === String(concurrentTargetId)) {
+    assert.equal(persistedConcurrentTarget.type, persistedConcurrentChild.type);
+  } else {
+    assert.equal(persistedConcurrentTarget.type, "liability");
+    assert.equal(String(persistedConcurrentChild.parent), String(parentId));
+  }
+
   const allAccounts = await request("/data/accounts", { cookie: owner.cookie });
   const capital = allAccounts.payload.records.find((account) => account.code === "3000");
   const operationId = crypto.randomUUID();

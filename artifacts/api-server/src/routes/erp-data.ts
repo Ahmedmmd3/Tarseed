@@ -18,6 +18,7 @@ const router: IRouter = Router();
 type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
 type DemoIdSets = Map<string, Set<string>>;
+const ACCOUNT_HIERARCHY_LOCK_NAMESPACE = 0x41434354;
 const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], invoices: "sales", quotations: "sales", expenses: "accounting", customers: "sales", sales: "sales",
@@ -119,6 +120,13 @@ async function validateAccountHierarchy(
       && (row.data as Record<string, unknown>).status === "active");
     if (activeChild) throw new MutationRejected(409, "لا يمكن تعطيل حساب له حسابات فرعية نشطة.");
   }
+}
+
+async function lockAccountHierarchy(
+  tx: DatabaseTransaction,
+  organizationId: number,
+): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${ACCOUNT_HIERARCHY_LOCK_NAMESPACE}, ${organizationId})`);
 }
 
 type AccountHierarchyIssue = {
@@ -1778,6 +1786,7 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
         }
       }
       if (access.tableName === "accounts") {
+        await lockAccountHierarchy(tx, currentAuth.organizationId);
         await validateAccountHierarchy(tx, currentAuth.organizationId, null, recordData);
       }
       if (access.tableName === "products") {
@@ -2244,6 +2253,7 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         }
       }
       if (access.tableName === "accounts") {
+        await lockAccountHierarchy(tx, currentAuth.organizationId);
         await validateAccountHierarchy(tx, currentAuth.organizationId, current.id, currentData);
       }
       if (!isLocationAllowed(currentAuth, access.tableName, currentData, current.id)) {
