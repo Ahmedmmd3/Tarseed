@@ -78,6 +78,50 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
     assert.equal(createdAccount.response.status, 201, JSON.stringify(createdAccount.payload));
     accountsByType[definition.type] = createdAccount.payload.record;
   }
+  const childAccount = await request("/data/accounts", {
+    method: "POST",
+    cookie,
+    body: {
+      code: unique("1010"),
+      name: "صندوق فرعي قبل النسخة",
+      type: "asset",
+      parent: String(accountsByType.asset.id),
+      balance: 0,
+      status: "active",
+    },
+  });
+  assert.equal(childAccount.response.status, 201, JSON.stringify(childAccount.payload));
+  const inactiveParent = await request("/data/accounts", {
+    method: "POST",
+    cookie,
+    body: { code: unique("1200"), name: "أب موقوف قبل النسخة", type: "asset", balance: 0, status: "active" },
+  });
+  assert.equal(inactiveParent.response.status, 201, JSON.stringify(inactiveParent.payload));
+  const inactiveChild = await request("/data/accounts", {
+    method: "POST",
+    cookie,
+    body: {
+      code: unique("1210"),
+      name: "فرع موقوف قبل النسخة",
+      type: "asset",
+      parent: String(inactiveParent.payload.record.id),
+      balance: 0,
+      status: "active",
+    },
+  });
+  assert.equal(inactiveChild.response.status, 201, JSON.stringify(inactiveChild.payload));
+  const deactivatedChild = await request(`/data/accounts/${inactiveChild.payload.record.id}`, {
+    method: "PATCH",
+    cookie,
+    body: { status: "inactive" },
+  });
+  assert.equal(deactivatedChild.response.status, 200, JSON.stringify(deactivatedChild.payload));
+  const deactivatedParent = await request(`/data/accounts/${inactiveParent.payload.record.id}`, {
+    method: "PATCH",
+    cookie,
+    body: { status: "inactive" },
+  });
+  assert.equal(deactivatedParent.response.status, 200, JSON.stringify(deactivatedParent.payload));
 
   const originalJournals = [
     {
@@ -197,6 +241,44 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   const accountsBeforeRestore = await request("/data/accounts", { cookie });
   assert.ok(accountsBeforeRestore.payload.records.some((account) => account.name === "حساب بعد النسخة"));
 
+  const restoreWithParent = async (parent) => request("/backup/restore", {
+    method: "POST",
+    cookie,
+    body: {
+      ...exported.payload,
+      records: exported.payload.records.map((record) => record.id === childAccount.payload.record.id
+        ? { ...record, data: { ...record.data, parent } }
+        : record),
+    },
+  });
+  const nonNumericParentRestore = await restoreWithParent("ليس-رقماً");
+  assert.equal(nonNumericParentRestore.response.status, 400, JSON.stringify(nonNumericParentRestore.payload));
+  assert.match(nonNumericParentRestore.payload.error, /رابط حساب أب غير صالح/);
+
+  const missingParentRestore = await restoreWithParent(Math.max(...exported.payload.records.map((record) => record.id)) + 1000);
+  assert.equal(missingParentRestore.response.status, 400, JSON.stringify(missingParentRestore.payload));
+  assert.match(missingParentRestore.payload.error, /حساب أب مفقود/);
+
+  const wrongTypeParentRestore = await restoreWithParent(accountsByType.expense.id);
+  assert.equal(wrongTypeParentRestore.response.status, 400, JSON.stringify(wrongTypeParentRestore.payload));
+  assert.match(wrongTypeParentRestore.payload.error, /تصنيف محاسبي مختلف/);
+
+  const cyclicParentRestore = await request("/backup/restore", {
+    method: "POST",
+    cookie,
+    body: {
+      ...exported.payload,
+      records: exported.payload.records.map((record) => {
+        if (record.id === accountsByType.asset.id) {
+          return { ...record, data: { ...record.data, parent: String(childAccount.payload.record.id) } };
+        }
+        return record;
+      }),
+    },
+  });
+  assert.equal(cyclicParentRestore.response.status, 400, JSON.stringify(cyclicParentRestore.payload));
+  assert.match(cyclicParentRestore.payload.error, /دورة غير صالحة/);
+
   const invalidNumberRestore = await request("/backup/restore", {
     method: "POST",
     cookie,
@@ -307,6 +389,13 @@ test("يستعيد المالك نسخة بيانات منشأته دون إبق
   assert.ok(accounts.payload.records.some((account) => account.name === "النقدية قبل النسخة"));
   assert.ok(accounts.payload.records.some((account) => account.name === "إيرادات المبيعات قبل النسخة"));
   assert.ok(accounts.payload.records.some((account) => account.name === "مصروف التشغيل قبل النسخة"));
+  assert.ok(accounts.payload.records.some((account) => account.name === "صندوق فرعي قبل النسخة"
+    && Number(account.parent) === accountsByType.asset.id));
+  assert.ok(accounts.payload.records.some((account) => account.name === "فرع موقوف قبل النسخة"
+    && account.status === "inactive"
+    && Number(account.parent) === inactiveParent.payload.record.id));
+  assert.ok(accounts.payload.records.some((account) => account.name === "أب موقوف قبل النسخة"
+    && account.status === "inactive"));
   assert.ok(!accounts.payload.records.some((account) => account.name === "حساب بعد النسخة"));
   assert.ok(!accounts.payload.records.some((account) => account.name === "تغيير قديم"));
   const journals = await request("/data/journalEntries", { cookie });

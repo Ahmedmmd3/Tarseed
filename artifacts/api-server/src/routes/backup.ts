@@ -281,6 +281,48 @@ function validateBackupRecords(records: BackupRecord[], organizationId: number):
   const hasReference = (tableName: string, value: unknown): boolean =>
     isPositiveId(value) && (idsByTable.get(tableName)?.has(Number(value)) ?? false);
   const productBalances = new Map<number, number>();
+  const accountRecords = records.filter((record) => record.tableName === "accounts");
+  const accounts = new Map(accountRecords.map((record) => [record.id, record.data]));
+
+  for (const account of accountRecords) {
+    const rawParentId = account.data.parent;
+    if (rawParentId === null || rawParentId === undefined || rawParentId === "") continue;
+    const parentId = typeof rawParentId === "number"
+      ? rawParentId
+      : typeof rawParentId === "string" && /^[1-9]\d*$/.test(rawParentId)
+        ? Number(rawParentId)
+        : Number.NaN;
+    if (!Number.isSafeInteger(parentId) || parentId <= 0) {
+      return "يحتوي الملف على رابط حساب أب غير صالح. راجع دليل الحسابات في النسخة قبل الاستعادة.";
+    }
+    const parent = accounts.get(parentId);
+    if (!parent) {
+      return "يحتوي الملف على حساب يشير إلى حساب أب مفقود. راجع دليل الحسابات في النسخة قبل الاستعادة.";
+    }
+    if (parent.status !== "active" && account.data.status === "active") {
+      return "يحتوي الملف على حساب مرتبط بحساب أب موقوف.";
+    }
+    if (parent.type !== account.data.type) {
+      return "يحتوي الملف على حساب أب من تصنيف محاسبي مختلف.";
+    }
+  }
+
+  for (const account of accountRecords) {
+    const visited = new Set<number>();
+    let cursor: number | null = account.id;
+    while (cursor !== null) {
+      if (visited.has(cursor)) {
+        return "يحتوي دليل الحسابات في الملف على دورة غير صالحة.";
+      }
+      visited.add(cursor);
+      const rawParentId: unknown = accounts.get(cursor)?.parent;
+      if (rawParentId === null || rawParentId === undefined || rawParentId === "") {
+        cursor = null;
+      } else {
+        cursor = typeof rawParentId === "number" ? rawParentId : Number(rawParentId);
+      }
+    }
+  }
 
   for (const record of records) {
     const data = record.data;
