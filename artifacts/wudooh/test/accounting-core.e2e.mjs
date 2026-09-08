@@ -154,6 +154,54 @@ async function mockSharedAccounting(page, journals = seededJournals()) {
   return capturedJournalPosts;
 }
 
+async function mockAccountHierarchyRepair(page) {
+  const repairRequests = [];
+  const issues = [
+    {
+      kind: 'missing_parent',
+      accountId: 901,
+      accountCode: '1910',
+      accountName: 'حساب بأب مفقود',
+      accountType: 'asset',
+      parentId: 9999,
+    },
+    {
+      kind: 'cycle',
+      accountId: 902,
+      accountCode: '1920',
+      accountName: 'حساب داخل دورة',
+      accountType: 'asset',
+      parentId: 903,
+      cycleAccountIds: [902, 903],
+      cycleAccounts: [
+        { accountId: 902, accountCode: '1920', accountName: 'حساب داخل دورة' },
+        { accountId: 903, accountCode: '1930', accountName: 'الحساب الآخر في الدورة' },
+      ],
+    },
+  ];
+
+  await page.route('**/api/accounting/account-hierarchy/issues', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ issues }),
+    });
+  });
+  await page.route('**/api/accounting/account-hierarchy/repair', async (route) => {
+    const request = route.request().postDataJSON();
+    repairRequests.push(request);
+    const repairedIssueIndex = issues.findIndex((issue) => issue.accountId === request.accountId);
+    if (repairedIssueIndex !== -1) issues.splice(repairedIssueIndex, 1);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ repairedAccountIds: [request.accountId] }),
+    });
+  });
+
+  return repairRequests;
+}
+
 async function fillJournal(page, { description, debit, credit }) {
   await page.getByTestId('button-add-journal').click();
   await page.getByTestId('input-journal-desc').fill(description);
@@ -338,4 +386,48 @@ test('يحفظ الحساب الفرعي تحت أبيه ويمنع اختيار
   const parentOptions = page.getByTestId('select-account-parent').locator('option');
   await expect(parentOptions.filter({ hasText: '1900 — أصل اختباري أساسي' })).toHaveCount(0);
   await expect(parentOptions.filter({ hasText: '1910 — أصل اختباري فرعي' })).toHaveCount(0);
+});
+
+test('يعرض مشاكل شجرة الحسابات ويصلح الأب المفقود والدورة دون إرسال تعديل عند الإلغاء', async ({ page }) => {
+  await mockSharedAccounting(page);
+  const repairRequests = await mockAccountHierarchyRepair(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto('/accounts', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByTestId('connection-status-remote')).toBeVisible();
+
+  const issuesCard = page.getByTestId('account-hierarchy-issues');
+  const missingParentIssue = page.getByTestId('account-hierarchy-issue-missing_parent-901');
+  const cycleIssue = page.getByTestId('account-hierarchy-issue-cycle-902');
+  await expect(issuesCard).toContainText('تحتاج شجرة الحسابات إلى مراجعة');
+  await expect(missingParentIssue).toContainText('يشير إلى حساب أب محذوف (المعرّف 9999). اختر فصله أو نقله إلى أب صالح.');
+  await expect(cycleIssue).toContainText('توجد دورة بين: 1920 — حساب داخل دورة، 1930 — الحساب الآخر في الدورة. افصل أحدها أو انقله لكسر الدورة.');
+
+  await page.getByTestId('button-repair-account-hierarchy-901').click();
+  await expect(page.getByTestId('dialog-repair-account-hierarchy')).toBeVisible();
+  await expect(page.getByTestId('select-account-hierarchy-parent')).toHaveValue('');
+  await page.getByRole('button', { name: 'إلغاء', exact: true }).click();
+  await expect(page.getByTestId('dialog-repair-account-hierarchy')).toBeHidden();
+  expect(repairRequests).toHaveLength(0);
+  await expect(missingParentIssue).toBeVisible();
+
+  await page.getByTestId('button-repair-account-hierarchy-901').click();
+  await page.getByTestId('button-confirm-account-hierarchy-repair').click();
+  await expect(missingParentIssue).toBeHidden();
+  expect(repairRequests).toEqual([{
+    accountId: 901,
+    parentId: null,
+    confirmation: 'REPARENT_ACCOUNT',
+  }]);
+
+  await page.getByTestId('button-repair-account-hierarchy-902').click();
+  const parentSelect = page.getByTestId('select-account-hierarchy-parent');
+  await expect(parentSelect.locator('option').filter({ hasText: '1000 — الصندوق' })).toHaveCount(1);
+  await parentSelect.selectOption('1');
+  await page.getByTestId('button-confirm-account-hierarchy-repair').click();
+  await expect(cycleIssue).toBeHidden();
+  await expect(issuesCard).toBeHidden();
+  expect(repairRequests).toEqual([
+    { accountId: 901, parentId: null, confirmation: 'REPARENT_ACCOUNT' },
+    { accountId: 902, parentId: 1, confirmation: 'REPARENT_ACCOUNT' },
+  ]);
 });
