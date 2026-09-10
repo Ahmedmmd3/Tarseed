@@ -134,3 +134,45 @@ mtime_ms = 1789020533789
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3d377e9e-83b8-4895-a44d-4138213a43a9/ed58e4bf-a7a2-43ad-a872-f9a71039d2de"
 storage_version_token = "1789020553014172"
 content_type = "image/png"
+
+[[outputs]]
+id = "CCC905A77y2KMgoyMITJ7"
+uri = "file://screenshots/code/safe-code-1.png"
+type = "image"
+title = "لقطة آمنة ١ — مكوّن الأزرار"
+description = "مكوّن واجهة عام لا يحتوي على منطق خادم أو بيانات خاصة."
+logical_id = "3805dd9b-d865-4c41-86fc-296d52e5c38e"
+content_hash = "sha256:fbf14f852a6b72dfb24ce7c0ef71e3f6ed19a6714f8f4e957ff79f1655cdcfd0"
+size = 209935
+mtime_ms = 1789021162993
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3805dd9b-d865-4c41-86fc-296d52e5c38e/74fa4305-2950-4123-b4de-0e576d5a8754"
+storage_version_token = "1789021170757540"
+content_type = "image/png"
+
+[[outputs]]
+id = "DMHzasUglO5AoFKLxfO9V"
+uri = "file://screenshots/code/safe-code-2.png"
+type = "image"
+title = "لقطة آمنة ٢ — مكوّن النوافذ"
+description = "مكوّن واجهة عام لا يحتوي على منطق خادم أو بيانات خاصة."
+logical_id = "0d0ce651-e7b1-48b4-a66f-3ae5a4455225"
+content_hash = "sha256:0a45e5902388e1a3f5ac98abcb72830d36036ce1c7cb23ac5ce745356b629335"
+size = 216658
+mtime_ms = 1789021163409
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/0d0ce651-e7b1-48b4-a66f-3ae5a4455225/bf557e8e-856d-4445-92bd-725fc1876710"
+storage_version_token = "1789021171481645"
+content_type = "image/png"
+
+[[outputs]]
+id = "7iWcy-pbHjt8RucjHs554"
+uri = "file://screenshots/code/safe-code-3.png"
+type = "image"
+title = "لقطة آمنة ٣ — مكوّن الجداول"
+description = "مكوّن واجهة عام لا يحتوي على منطق خادم أو بيانات خاصة."
+logical_id = "9a6f4fc0-1bb6-4c16-bdb3-08b7ceaf3061"
+content_hash = "sha256:49431bd220689a4d5604c02d4af88eeafd54510edcbfedbc2bf9236fcc4678fe"
+size = 192526
+mtime_ms = 1789021163925
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/9a6f4fc0-1bb6-4c16-bdb3-08b7ceaf3061/0eb8c4f4-4ecf-4450-8b14-0aeed85d98ef"
+storage_version_token = "1789021172049215"
+content_type = "image/png"
