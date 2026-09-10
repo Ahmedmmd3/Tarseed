@@ -49,3 +49,88 @@ uri = "file://artifacts/tarseed-launch-video/public/audio/bg_music.mp3"
 type = "audio"
 title = "Tarseed launch background music"
 description = "Generated music: Driving modern fintech electronic instrumental background music scoring a 15-second vertical Arabic accounting product reveal. Crisp muted synth pulses, subtle digital percussion, 11…"
+logical_id = "35ea37d2-f05e-424c-843c-eef9cb4b6e8c"
+
+[[outputs]]
+id = "qrVaF9bbwu7p2biGJx7WA"
+uri = "file://screenshots/code/code-1.png"
+type = "image"
+title = "لقطة كود ١ — المحاسبة"
+description = "جزء عشوائي من منطق المحاسبة في خادم ترصيد."
+logical_id = "5a91659d-0d38-4c69-94e3-b39863426e2f"
+content_hash = "sha256:7abfa59d178e7d8ce464064fe3de793635ffea21ce5e789ad16c79d21b0f1cdc"
+size = 364177
+mtime_ms = 1789020543229
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/5a91659d-0d38-4c69-94e3-b39863426e2f/817e3632-4755-48a7-bb60-0505a6d261e7"
+storage_version_token = "1789020550266663"
+content_type = "image/png"
+
+[[outputs]]
+id = "SPnWovBIVwjcJtgNvOrSC"
+uri = "file://screenshots/code/code-2.png"
+type = "image"
+title = "لقطة كود ٢ — المساعد المالي"
+description = "جزء عشوائي من مسارات المساعد المالي."
+logical_id = "324ddf71-b722-45ce-9c62-a44877c783c7"
+content_hash = "sha256:eab16239af5f75610d3fce231575584084cca654659fe953ef2c80b40a0bea63"
+size = 245020
+mtime_ms = 1789020532541
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/324ddf71-b722-45ce-9c62-a44877c783c7/af57556a-ecd0-4234-9cae-71578b8b58a7"
+storage_version_token = "1789020550834391"
+content_type = "image/png"
+
+[[outputs]]
+id = "gdR7iP57zkL5Z_h6zqtoU"
+uri = "file://screenshots/code/code-3.png"
+type = "image"
+title = "لقطة كود ٣ — حالة التطبيق"
+description = "جزء عشوائي من إدارة حالة وبيانات تطبيق ترصيد."
+logical_id = "0d868730-9f81-4df4-9e1a-2d8a5e839c40"
+content_hash = "sha256:e42a5883653b772478ce5b029c9814dfa8f6e545199602f5d7d5cb30030e50d6"
+size = 263870
+mtime_ms = 1789020532849
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/0d868730-9f81-4df4-9e1a-2d8a5e839c40/7bba1b53-7563-47b4-a355-d65fb19e2934"
+storage_version_token = "1789020551422566"
+content_type = "image/png"
+
+[[outputs]]
+id = "LGgk7rgi0HJnGuvEMaqJI"
+uri = "file://screenshots/code/code-4.png"
+type = "image"
+title = "لقطة كود ٤ — تخطيط الواجهة"
+description = "جزء عشوائي من مكوّن تخطيط الواجهة."
+logical_id = "ecef6e0e-14a0-42db-9d54-fb1780f5b483"
+content_hash = "sha256:beea3aa65bc40e0ece643522dc6ebec77b99327fac6b8cc7e358550c50934623"
+size = 289447
+mtime_ms = 1789020533193
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/ecef6e0e-14a0-42db-9d54-fb1780f5b483/ee4787db-df95-4543-9aed-d8bdacb7cf76"
+storage_version_token = "1789020551922107"
+content_type = "image/png"
+
+[[outputs]]
+id = "XUlmarpO1kePsiIzC_EgW"
+uri = "file://screenshots/code/code-5.png"
+type = "image"
+title = "لقطة كود ٥ — مكوّن العرض"
+description = "جزء عشوائي من أحد مكوّنات واجهة المستخدم."
+logical_id = "0ed6b86d-c4e1-4ef3-85f4-35e4e3a167d2"
+content_hash = "sha256:d56e27100c79d984719be21c77e606fa967a003c5d37d171894e8fe7872d8682"
+size = 147275
+mtime_ms = 1789020533473
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/0ed6b86d-c4e1-4ef3-85f4-35e4e3a167d2/494f5e9c-91c6-4624-b928-2eb07826fce3"
+storage_version_token = "1789020552480069"
+content_type = "image/png"
+
+[[outputs]]
+id = "Qa1eWKYY12SLWsq0tNMPe"
+uri = "file://screenshots/code/code-6.png"
+type = "image"
+title = "لقطة كود ٦ — المخزون"
+description = "جزء عشوائي من شاشة إدارة المخزون."
+logical_id = "3d377e9e-83b8-4895-a44d-4138213a43a9"
+content_hash = "sha256:95a3e5799f281d30b2d47d888e800cfc13073582aaff8be3cca96cc4d3f6e0d6"
+size = 341950
+mtime_ms = 1789020533789
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3d377e9e-83b8-4895-a44d-4138213a43a9/ed58e4bf-a7a2-43ad-a872-f9a71039d2de"
+storage_version_token = "1789020553014172"
+content_type = "image/png"
