@@ -1,0 +1,7 @@
+{
+  "name": "scripts",
+  "type": "module",
+  "dependencies": {
+    "playwright": "^1.42.1"
+  }
+}

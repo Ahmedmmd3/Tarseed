@@ -421,3 +421,17 @@ uri = "file://attached_assets/generated_audio/tarseed_tech_product_original.mp3"
 type = "audio"
 title = "Tarseed technical product reveal"
 description = "Generated music: Original instrumental product-demo music for a modern Arabic fintech and accounting application. 13 seconds. Precise clean electronic rhythm, crisp muted percussion, subtle data-like…"
+
+[[outputs]]
+id = "XHawt9OajEkfzumm0vQZ6"
+uri = "file://artifacts/tarseed-launch-video/exports/tarseed-launch-final.mp4"
+type = "video"
+title = "فيديو إطلاق ترصيد — النسخة النهائية"
+description = "ملف MP4 مُنشأ محليًا ومفحوص إطارًا بإطار؛ 1080×1920، 60fps، مدة 27 ثانية، مع الصوت النهائي."
+logical_id = "99bce3a5-cc7d-42a4-a3f7-011582c1547a"
+content_hash = "sha256:799ad936d810a31d32d831ead87852e772705f7014389a3d0103d51f917c4fc7"
+size = 1314559
+mtime_ms = 1789148884781
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/99bce3a5-cc7d-42a4-a3f7-011582c1547a/198a8f9b-eccc-494e-ae56-69b8c0d5b867"
+storage_version_token = "1789149004373201"
+content_type = "video/mp4"
