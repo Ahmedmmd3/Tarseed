@@ -97,7 +97,7 @@ export default function VideoTemplate({
         </AnimatePresence>
         <audio ref={audioStressRef} src={`${import.meta.env.BASE_URL}audio/stress_drone.mp3`} preload="auto" muted={muted} />
         <audio ref={audioThudRef} src={`${import.meta.env.BASE_URL}audio/thud.mp3`} preload="auto" muted={muted} />
-        <audio ref={audioTarseedRef} src={`${import.meta.env.BASE_URL}audio/tarseed_music.mp3`} preload="auto" muted={muted} />
+        <audio ref={audioTarseedRef} src={`${import.meta.env.BASE_URL}audio/tarseed_final.mp3`} preload="auto" muted={muted} />
       </VideoCanvas>
     </VideoPausedContext.Provider>
   );

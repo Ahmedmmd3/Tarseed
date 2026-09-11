@@ -1,6 +1,7 @@
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { SceneLayout } from '@/lib/video/layout';
 import { useEffect, useState } from 'react';
+import { ProblemCaption } from './ProblemCaption';
 
 export function Scene1() {
   const [phase, setPhase] = useState(0);
@@ -16,11 +17,31 @@ export function Scene1() {
   }, []);
 
   const scenes = [
-    { src: 'legacy-erp.jpg', origin: '20% 10%', scale: 1.6, portrait: false },
-    { src: 'dashboard-chaos.jpg', origin: '50% 15%', scale: 1.5, portrait: false },
-    { src: 'report-overload.jpg', origin: '50% 50%', scale: 1.5, portrait: false },
-    { src: 'complex-pos.jpg', origin: '10% 80%', scale: 1.4, portrait: false },
-    { src: 'mobile-ledger.jpg', origin: '50% 50%', scale: 1, portrait: true },
+    {
+      src: 'legacy-erp.jpg', origin: '20% 10%', scale: 1.6, portrait: false,
+      caption: 'قوائم كثيرة… وخطوات أكثر',
+      blurStyle: { top: '0%', right: '0%', width: '30%', height: '5%' }
+    },
+    {
+      src: 'dashboard-chaos.jpg', origin: '50% 15%', scale: 1.5, portrait: false,
+      caption: 'أرقام كثيرة بدون وضوح',
+      blurStyle: { top: '0%', right: '0%', width: '15%', height: '7%' }
+    },
+    {
+      src: 'report-overload.jpg', origin: '50% 50%', scale: 1.5, portrait: false,
+      caption: 'تقارير معقدة يصعب فهمها',
+      blurStyle: { top: '0%', right: '0%', width: '15%', height: '7%' }
+    },
+    {
+      src: 'complex-pos.jpg', origin: '10% 80%', scale: 1.4, portrait: false,
+      caption: 'عملية البيع تأخذ وقتاً',
+      blurStyle: { top: '0%', right: '0%', width: '10%', height: '7%' }
+    },
+    {
+      src: 'mobile-ledger.jpg', origin: '50% 50%', scale: 1, portrait: true,
+      caption: 'الازدحام مستمر حتى على الجوال',
+      blurStyle: { top: '0%', left: '0%', width: '100%', height: '10%' }
+    },
   ];
 
   return (
@@ -63,17 +84,37 @@ export function Scene1() {
             }
             transition={{ duration: 0.6, type: 'spring', bounce: 0.2 }}
           >
-            <motion.img
-              src={`${import.meta.env.BASE_URL}images/clutter/${s.src}`}
-              className={`${s.portrait ? 'h-full w-auto' : 'w-full h-auto'} block`}
+            <motion.div
+              className="relative w-full h-full"
               style={{ transformOrigin: s.origin }}
               initial={{ scale: 1 }}
               animate={isActive ? { scale: s.scale } : { scale: 1 }}
               transition={{ duration: 1.5, ease: 'easeInOut' }}
-            />
+            >
+              <img
+                src={`${import.meta.env.BASE_URL}images/clutter/${s.src}`}
+                className={`${s.portrait ? 'h-full w-auto' : 'w-full h-auto'} block`}
+              />
+              {/* Blur mask over fictional app name/logo */}
+              <div
+                className="absolute backdrop-blur-xl bg-black/20"
+                style={s.blurStyle}
+              />
+            </motion.div>
           </motion.div>
         );
       })}
+
+      {/* Captions */}
+      <AnimatePresence mode="popLayout">
+        {phase < 5 && (
+          <ProblemCaption
+            key={`caption-${phase}`}
+            text={scenes[phase].caption}
+            className="top-[10vh]"
+          />
+        )}
+      </AnimatePresence>
 
       {/* Final Flash into next scene */}
       <motion.div
