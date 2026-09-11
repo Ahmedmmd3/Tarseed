@@ -1,5 +1,3 @@
-// Video Template
-
 import {
   VideoCanvas,
   VideoPausedContext,
@@ -16,15 +14,15 @@ import { Scene4 } from './video_scenes/Scene4';
 
 export const SCENE_DURATIONS = {
   s1: 3000,
-  s2: 4000,
-  s3: 4000,
+  s2: 3000,
+  s3: 5000,
   s4: 4000,
 };
 
 const VIDEO_ASPECT_RATIO: VideoAspectRatio = '9:16';
 
 const SCENES = { s1: Scene1, s2: Scene2, s3: Scene3, s4: Scene4 };
-const STARTS = { s1: 0, s2: 3, s3: 7, s4: 11 };
+const STARTS = { s1: 0, s2: 3, s3: 6, s4: 11 };
 
 export default function VideoTemplate({
   durations = SCENE_DURATIONS, loop = true, paused = false, muted = false, onSceneChange,
@@ -37,7 +35,9 @@ export default function VideoTemplate({
   const Scene = SCENES[baseKey];
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastKey = useRef<string | null>(null);
+
   useEffect(() => onSceneChange?.(currentSceneKey), [currentSceneKey, onSceneChange]);
+
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -53,8 +53,10 @@ export default function VideoTemplate({
 
   return (
     <VideoPausedContext.Provider value={paused}>
-      <VideoCanvas aspectRatio={VIDEO_ASPECT_RATIO} style={{ backgroundColor: '#010619' }} className="dark">
-        <AnimatePresence mode="popLayout">{Scene && <Scene key={currentSceneKey} />}</AnimatePresence>
+      <VideoCanvas aspectRatio={VIDEO_ASPECT_RATIO} style={{ backgroundColor: '#010619' }} className="dark text-foreground font-sans">
+        <AnimatePresence mode="sync">
+          {Scene && <Scene key={currentSceneKey} />}
+        </AnimatePresence>
         <audio ref={audioRef} src={`${import.meta.env.BASE_URL}audio/bg_music.mp3`} preload="auto" autoPlay muted={muted} />
       </VideoCanvas>
     </VideoPausedContext.Provider>

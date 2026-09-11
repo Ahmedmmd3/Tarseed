@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { SceneLayout, VideoText } from '@/lib/video/layout';
 import { useEffect, useState } from 'react';
 
 export function Scene2() {
@@ -9,72 +10,93 @@ export function Scene2() {
       setTimeout(() => setPhase(1), 500),
       setTimeout(() => setPhase(2), 1100),
       setTimeout(() => setPhase(3), 1700),
+      setTimeout(() => setPhase(4), 2700), // The flash/zoom at the end
     ];
     return () => timers.forEach(t => clearTimeout(t));
   }, []);
 
-  const imagePaths = [
-    `${import.meta.env.BASE_URL}images/server_tangle.jpg`,
-    `${import.meta.env.BASE_URL}images/glowing_charts.jpg`,
-    `${import.meta.env.BASE_URL}images/khaleeji_corporate_mess.jpg`,
-  ];
-
   return (
-    <motion.div
-      className="absolute inset-0 flex flex-col items-center justify-center bg-[#010619] overflow-hidden"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-    >
-      {/* Edge-to-edge Images in sequence */}
-      <div className="absolute inset-0 z-0 bg-black">
-        <motion.img
-          src={imagePaths[0]}
-          className="absolute inset-0 w-full h-full object-cover"
-          initial={{ scale: 1.15 }}
-          animate={{ scale: 1 }}
-          transition={{ duration: 5, ease: 'easeOut' }}
-        />
-        <motion.img
-          src={imagePaths[1]}
-          className="absolute inset-0 w-full h-full object-cover"
-          initial={{ opacity: 0, scale: 1.15 }}
-          animate={{ opacity: phase >= 1 ? 1 : 0, scale: phase >= 1 ? 1 : 1.15 }}
-          transition={{ opacity: { duration: 0.4 }, scale: { duration: 4, ease: 'easeOut' } }}
-        />
-        <motion.img
-          src={imagePaths[2]}
-          className="absolute inset-0 w-full h-full object-cover"
-          initial={{ opacity: 0, scale: 1.15 }}
-          animate={{ opacity: phase >= 2 ? 1 : 0, scale: phase >= 2 ? 1 : 1.15 }}
-          transition={{ opacity: { duration: 0.4 }, scale: { duration: 4, ease: 'easeOut' } }}
-        />
-      </div>
+    <SceneLayout className="bg-zinc-950 overflow-hidden relative items-center justify-center">
 
-      {/* Dimming overlay for text clarity */}
-      <div className="absolute inset-0 bg-gradient-to-t from-[#010619] via-[#010619]/70 to-[#010619]/30 z-10" />
-
-      {/* Cinematic flicker */}
+      {/* Glitchy red background persists but faster */}
       <motion.div
-        className="absolute inset-0 bg-[#00D2FF]/10 pointer-events-none z-20 mix-blend-color-dodge"
-        initial={{ opacity: 0 }}
-        animate={phase >= 2 ? { opacity: [0, 0.4, 0] } : { opacity: 0 }}
-        transition={{ duration: 0.1, repeat: 4 }}
+        className="absolute inset-0 bg-red-950/30 mix-blend-color-burn"
+        animate={{ opacity: [0.3, 0.8, 0.2, 0.9, 0.4] }}
+        transition={{ duration: 0.15, repeat: Infinity, repeatType: 'mirror' }}
       />
 
-      <div className="absolute bottom-[20vh] w-full px-8 text-center z-30">
+      {/* Layer 1: Report Overload */}
+      <motion.img
+        src={`${import.meta.env.BASE_URL}images/clutter/report-overload.jpg`}
+        className="absolute w-[150vw] max-w-none shadow-2xl opacity-60 grayscale sepia-[0.2]"
+        initial={{ opacity: 0, scale: 1.2, rotate: -5, y: '-20vh' }}
+        animate={{ opacity: 0.7, scale: 1, rotate: -2, y: '-10vh' }}
+        transition={{ duration: 0.5, ease: 'easeOut' }}
+        exit={{ opacity: 0 }}
+      />
+
+      {/* Layer 2: Complex POS */}
+      <motion.img
+        src={`${import.meta.env.BASE_URL}images/clutter/complex-pos.jpg`}
+        className="absolute w-[130vw] max-w-none shadow-2xl border border-white/10"
+        initial={{ opacity: 0, scale: 1.3, rotate: 15, y: '30vh', x: '15vw' }}
+        animate={
+          phase >= 1
+            ? { opacity: 0.8, scale: 1.05, rotate: 4, y: '10vh', x: '5vw' }
+            : { opacity: 0, scale: 1.3, rotate: 15, y: '30vh', x: '15vw' }
+        }
+        transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+        exit={{ opacity: 0 }}
+      />
+
+      {/* Layer 3: Mobile Ledger - the final straw */}
+      <motion.img
+        src={`${import.meta.env.BASE_URL}images/clutter/mobile-ledger.jpg`}
+        className="absolute w-[90vw] max-w-none shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-white/20 rounded-xl"
+        initial={{ opacity: 0, scale: 1.5, rotate: -15, y: '-10vh', x: '-20vw' }}
+        animate={
+          phase >= 2
+            ? { opacity: 0.95, scale: 1.1, rotate: -6, y: '5vh', x: '-5vw' }
+            : { opacity: 0, scale: 1.5, rotate: -15, y: '-10vh', x: '-20vw' }
+        }
+        transition={{ type: 'spring', stiffness: 350, damping: 20 }}
+        exit={{ opacity: 0 }}
+      />
+
+      {/* Noise Texture */}
+      <div className="absolute inset-0 pointer-events-none opacity-30" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
+
+      {/* Camera Shake Container for Text */}
+      <motion.div
+        className="relative z-10 w-full flex justify-center mt-[25vh]"
+        animate={phase >= 3 ? { x: [-5, 5, -5, 5, 0], y: [-2, 2, -2, 2, 0] } : {}}
+        transition={{ duration: 0.3, repeat: phase >= 3 ? Infinity : 0 }}
+      >
         <motion.div
-          className="inline-block"
-          initial={{ opacity: 0, y: 20 }}
-          animate={phase >= 3 ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
-          transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+          className="bg-red-600/90 backdrop-blur-md px-[5vw] py-[3vh] rounded-xl text-center shadow-[0_0_50px_rgba(220,38,38,0.6)] border-2 border-red-400"
+          initial={{ scale: 0, opacity: 0 }}
+          animate={
+            phase >= 3
+              ? { scale: 1.1, opacity: 1 }
+              : { scale: 0, opacity: 0 }
+          }
+          transition={{ type: 'spring', stiffness: 500, damping: 15 }}
+          exit={{ opacity: 0 }}
         >
-          <h2 className="text-4xl md:text-5xl font-bold text-white tracking-tight drop-shadow-2xl">
-            ولا إحنا معقدينها؟
-          </h2>
+          <VideoText className="text-5xl font-black text-white leading-tight">
+            توقف عن المعاناة
+          </VideoText>
         </motion.div>
-      </div>
-    </motion.div>
+      </motion.div>
+
+      {/* The Flash / Snap Transition to clean UI */}
+      <motion.div
+        className="absolute inset-0 z-50 bg-white"
+        initial={{ opacity: 0 }}
+        animate={phase >= 4 ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        exit={{ opacity: 1 }}
+      />
+    </SceneLayout>
   );
 }
