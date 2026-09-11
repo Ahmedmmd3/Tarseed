@@ -1,97 +1,38 @@
-import { motion, AnimatePresence } from 'framer-motion';
-import { SceneLayout, VideoText } from '@/lib/video/layout';
-import { useEffect, useState } from 'react';
-import { FeatureCaption } from './FeatureCaption';
+import { motion } from 'framer-motion';
+import { SceneLayout, SafeFrame, VideoText } from '@/lib/video/layout';
+import { SCENE_DURATIONS } from '../VideoTemplate';
 
 export function Scene2() {
-  const [phase, setPhase] = useState(0);
-
-  useEffect(() => {
-    let rafId: number;
-    const updatePhase = () => {
-      const audio = document.querySelector('audio');
-      if (audio) {
-        const t = audio.currentTime;
-        const localTime = t - 12.0; // Scene2 starts at 12.0s
-        let nextPhase = 0;
-        if (localTime >= 5.2) nextPhase = 2;
-        else if (localTime >= 2.6) nextPhase = 1;
-
-        setPhase(prev => prev !== nextPhase ? nextPhase : prev);
-      }
-      rafId = requestAnimationFrame(updatePhase);
-    };
-    rafId = requestAnimationFrame(updatePhase);
-    return () => cancelAnimationFrame(rafId);
-  }, []);
-
-  const scenes = [
-    { src: 'dashboard.jpg', origin: '15% 20%', scale: 1.4 },
-    { src: 'ai-chat.jpg', origin: '50% 50%', scale: 1.1 },
-    { src: 'ai-journal.jpg', origin: '50% 50%', scale: 1.1 },
-  ];
+  const duration = SCENE_DURATIONS.s2 / 1000; // 2.0s
 
   return (
-    <SceneLayout className="bg-brand-bg bg-mesh overflow-hidden relative items-center justify-center">
-      {/* Blurred Backgrounds */}
-      {scenes.map((s, i) => (
-        <motion.img
-          key={`bg-${i}`}
-          src={`${import.meta.env.BASE_URL}images/glimpses/${s.src}`}
-          className="absolute inset-0 w-full h-full object-cover blur-[40px] z-0"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: phase === i ? 0.3 : 0 }}
-          transition={{ duration: 0.6 }}
+    <SafeFrame className="bg-[#0B1120] text-center overflow-hidden">
+      <SceneLayout className="flex flex-col items-center justify-center">
+        
+        {/* Dynamic wipe background */}
+        <motion.div
+          className="absolute inset-0 z-0 bg-blue-600"
+          initial={{ y: '100%' }}
+          animate={{ y: 0 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.6, ease: [0.76, 0, 0.24, 1] }}
         />
-      ))}
 
-      <motion.div
-        className="absolute top-[8vh] z-40 text-center w-full px-6"
-        initial={{ y: -30, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ opacity: 0 }}
-      >
-        <VideoText className="text-4xl font-extrabold text-white mb-2 tracking-tight drop-shadow-xl">
-          المحاسبة أصبحت ذكية
-        </VideoText>
-        <VideoText className="text-xl font-medium text-brand-cyan drop-shadow-md">
-          اطلب من مساعدك الذكي ما تريد
-        </VideoText>
-      </motion.div>
-
-      {/* Foreground Cards */}
-      {scenes.map((s, i) => {
-        const isActive = phase === i;
-        const isPast = phase > i;
-        return (
+        <div className="relative z-20 flex flex-col items-center justify-center h-full w-full">
           <motion.div
-            key={`fg-${i}`}
-            className="absolute z-10 w-[94vw] h-auto max-h-[65vh] mt-[10vh] overflow-hidden rounded-xl shadow-[0_20px_60px_rgba(0,102,255,0.4)] border border-brand-cyan/40 bg-zinc-900 flex justify-center items-center"
-            initial={{ opacity: 0, scale: 0.9, x: i === 0 ? -30 : i === 2 ? 30 : 0, y: i === 1 ? 30 : 0 }}
-            animate={
-              isActive ? { opacity: 1, scale: 1, x: 0, y: 0 } :
-              isPast ? { opacity: 0, scale: 1.05, y: -30 } :
-              { opacity: 0, scale: 0.9, y: 30 }
-            }
-            transition={{ duration: 0.7, type: 'spring', bounce: 0.2 }}
+            initial={{ opacity: 0, scale: 0.5, filter: "blur(20px)" }}
+            animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+            exit={{ opacity: 0, scale: 1.5, filter: "blur(20px)" }}
+            transition={{ duration: 0.6, delay: 0.3, ease: 'easeOut' }}
           >
-            <motion.img
-              src={`${import.meta.env.BASE_URL}images/glimpses/${s.src}`}
-              className="w-full h-auto block"
-              style={{ transformOrigin: s.origin }}
-              initial={{ scale: 1 }}
-              animate={isActive ? { scale: s.scale } : { scale: 1 }}
-              transition={{ duration: 2.6, ease: 'easeInOut' }}
-            />
+            <VideoText as="h2" scale="display" className="font-black text-white px-[4vmin] leading-tight">
+              اسأل..<br />
+              <span className="text-cyan-200">وترصيد يُجيب</span>
+            </VideoText>
           </motion.div>
-        );
-      })}
+        </div>
 
-      <AnimatePresence mode="popLayout">
-        {phase === 0 && <FeatureCaption key="c1" text="كل أرقامك في نظرة واحدة" className="bottom-[15vh] right-[10vw]" />}
-        {phase === 1 && <FeatureCaption key="c2" text="اسأل مساعدك المالي" className="bottom-[15vh] left-[10vw]" />}
-        {phase === 2 && <FeatureCaption key="c3" text="حوّل سؤالك إلى قيد متوازن" className="bottom-[15vh] right-[10vw]" />}
-      </AnimatePresence>
-    </SceneLayout>
+      </SceneLayout>
+    </SafeFrame>
   );
 }

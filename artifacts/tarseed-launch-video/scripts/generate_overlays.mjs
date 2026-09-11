@@ -14,155 +14,66 @@ const overlays = [
   {
     id: 's0',
     html: `
-      <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; direction: rtl;">
-        <div style="text-align: center; font-family: 'Cairo', sans-serif; color: white;">
-          <h1 style="font-size: 60px; font-weight: 800; margin-bottom: 20px; text-shadow: 2px 2px 10px rgba(255,0,0,0.5);">هل المحاسبة معقدة فعلًا…</h1>
-          <h2 style="font-size: 48px; font-weight: 700; color: #fca5a5; text-shadow: 2px 2px 10px rgba(255,0,0,0.5);">ولا إحنا مصعّبينها؟</h2>
+      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; direction: rtl; background: transparent;">
+        <h1 style="font-size: 72px; font-weight: 900; color: white; margin-bottom: 40px; font-family: 'Cairo', sans-serif;">المحاسبة معقدة؟</h1>
+        <div style="background-color: #2563eb; color: white; padding: 16px 40px; border-radius: 9999px; font-size: 48px; font-weight: 800; font-family: 'Cairo', sans-serif;">ليس بعد اليوم!</div>
+      </div>
+    `
+  },
+  {
+    id: 's1',
+    html: `
+      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; direction: rtl;">
+        <div style="margin-top: 15vh; text-align: center;">
+          <h2 style="font-size: 72px; font-weight: 900; color: white; margin-bottom: 20px; font-family: 'Cairo', sans-serif;">ترصيد</h2>
+          <p style="font-size: 48px; font-weight: 700; color: #a5f3fc; font-family: 'Cairo', sans-serif;">إدارة أسهل لنمو أسرع</p>
+        </div>
+        <div style="position: absolute; bottom: 15vh; right: 10vw; background-color: rgba(37,99,235,0.8); border: 2px solid rgba(96,165,250,0.5); color: white; padding: 16px 32px; border-radius: 20px; font-size: 32px; font-weight: 700; font-family: 'Cairo', sans-serif;">لوحة تحكم متكاملة</div>
+        <div style="position: absolute; top: 35vh; left: 10vw; background-color: rgba(8,145,178,0.8); border: 2px solid rgba(34,211,238,0.5); color: white; padding: 16px 32px; border-radius: 20px; font-size: 32px; font-weight: 700; font-family: 'Cairo', sans-serif;">رؤية واضحة</div>
+      </div>
+    `
+  },
+  {
+    id: 's2',
+    html: `
+      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; direction: rtl; background: transparent;">
+        <h2 style="font-size: 80px; font-weight: 900; color: white; font-family: 'Cairo', sans-serif; text-align: center; line-height: 1.4;">
+          اسأل.. <br/> <span style="color: #a5f3fc;">وترصيد يُجيب</span>
+        </h2>
+      </div>
+    `
+  },
+  {
+    id: 's3',
+    html: `
+      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; direction: rtl; background: transparent;">
+        <div style="margin-top: 10vh; text-align: center;">
+          <h2 style="font-size: 64px; font-weight: 900; color: white; margin-bottom: 20px; font-family: 'Cairo', sans-serif;">مساعدك المالي الذكي</h2>
+          <p style="font-size: 40px; font-weight: 700; color: #a5f3fc; font-family: 'Cairo', sans-serif;">قيود يومية بضغطة زر</p>
+        </div>
+        <div style="position: absolute; bottom: 10vh; background-color: white; color: #1e3a8a; padding: 20px 48px; border-radius: 9999px; font-size: 40px; font-weight: 800; font-family: 'Cairo', sans-serif; box-shadow: 0 20px 40px rgba(0,0,0,0.3);">بدون أخطاء بشرية!</div>
+      </div>
+    `
+  },
+  {
+    id: 's4',
+    html: `
+      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; direction: rtl; background: transparent;">
+        <div style="margin-top: 10vh; text-align: center;">
+          <h2 style="font-size: 64px; font-weight: 900; color: white; margin-bottom: 20px; line-height: 1.4; font-family: 'Cairo', sans-serif;">
+            فواتير وتقارير<br/>
+            <span style="color: #67e8f9;">في ثوانٍ</span>
+          </h2>
         </div>
       </div>
     `
   },
   {
-    id: 's1_0',
+    id: 's5',
     html: `
-      <div style="position: absolute; top: 10vh; width: 100%; display: flex; justify-content: center; direction: rtl;">
-        <div style="background-color: #450a0a; color: white; padding: 16px 40px; border-radius: 9999px; font-size: 36px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 2px solid #ef4444; box-shadow: 0 10px 25px rgba(239,68,68,0.5);">
-          قوائم كثيرة… وخطوات أكثر
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's1_1',
-    html: `
-      <div style="position: absolute; top: 10vh; width: 100%; display: flex; justify-content: center; direction: rtl;">
-        <div style="background-color: #450a0a; color: white; padding: 16px 40px; border-radius: 9999px; font-size: 36px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 2px solid #ef4444; box-shadow: 0 10px 25px rgba(239,68,68,0.5);">
-          أرقام كثيرة بدون وضوح
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's1_2',
-    html: `
-      <div style="position: absolute; top: 10vh; width: 100%; display: flex; justify-content: center; direction: rtl;">
-        <div style="background-color: #450a0a; color: white; padding: 16px 40px; border-radius: 9999px; font-size: 36px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 2px solid #ef4444; box-shadow: 0 10px 25px rgba(239,68,68,0.5);">
-          تقارير معقدة يصعب فهمها
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's1_3',
-    html: `
-      <div style="position: absolute; top: 10vh; width: 100%; display: flex; justify-content: center; direction: rtl;">
-        <div style="background-color: #450a0a; color: white; padding: 16px 40px; border-radius: 9999px; font-size: 36px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 2px solid #ef4444; box-shadow: 0 10px 25px rgba(239,68,68,0.5);">
-          عملية البيع تأخذ وقتاً
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's1_4',
-    html: `
-      <div style="position: absolute; top: 10vh; width: 100%; display: flex; justify-content: center; direction: rtl;">
-        <div style="background-color: #450a0a; color: white; padding: 16px 40px; border-radius: 9999px; font-size: 36px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 2px solid #ef4444; box-shadow: 0 10px 25px rgba(239,68,68,0.5);">
-          الازدحام مستمر حتى على الجوال
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's1b',
-    html: `
-      <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; direction: rtl;">
-        <h1 style="font-size: 72px; font-weight: 900; color: white; font-family: 'Cairo', sans-serif;">قررنا نغيّر الطريقة</h1>
-      </div>
-    `
-  },
-  {
-    id: 's2_top',
-    html: `
-      <div style="position: absolute; top: 8vh; width: 100%; text-align: center; direction: rtl; display: flex; flex-direction: column; align-items: center;">
-        <div style="font-size: 56px; font-weight: 800; color: white; margin-bottom: 8px; font-family: 'Cairo', sans-serif; text-shadow: 0 4px 15px rgba(0,0,0,0.5);">المحاسبة أصبحت ذكية</div>
-        <div style="font-size: 32px; font-weight: 600; color: #22d3ee; font-family: 'Cairo', sans-serif; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">اطلب من مساعدك الذكي ما تريد</div>
-      </div>
-    `
-  },
-  {
-    id: 's2_0',
-    html: `
-      <div style="position: absolute; bottom: 15vh; right: 10vw; direction: rtl;">
-        <div style="background: linear-gradient(135deg, #0e7490, #0369a1); color: white; padding: 16px 40px; border-radius: 20px; font-size: 32px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 1px solid #67e8f9; box-shadow: 0 15px 30px rgba(8,145,178,0.4);">
-          كل أرقامك في نظرة واحدة
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's2_1',
-    html: `
-      <div style="position: absolute; bottom: 15vh; left: 10vw; direction: rtl;">
-        <div style="background: linear-gradient(135deg, #0e7490, #0369a1); color: white; padding: 16px 40px; border-radius: 20px; font-size: 32px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 1px solid #67e8f9; box-shadow: 0 15px 30px rgba(8,145,178,0.4);">
-          اسأل مساعدك المالي
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's2_2',
-    html: `
-      <div style="position: absolute; bottom: 15vh; right: 10vw; direction: rtl;">
-        <div style="background: linear-gradient(135deg, #0e7490, #0369a1); color: white; padding: 16px 40px; border-radius: 20px; font-size: 32px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 1px solid #67e8f9; box-shadow: 0 15px 30px rgba(8,145,178,0.4);">
-          حوّل سؤالك إلى قيد متوازن
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's3_top',
-    html: `
-      <div style="position: absolute; top: 8vh; width: 100%; text-align: center; direction: rtl; display: flex; flex-direction: column; align-items: center;">
-        <div style="font-size: 56px; font-weight: 800; color: white; margin-bottom: 8px; font-family: 'Cairo', sans-serif; text-shadow: 0 4px 15px rgba(0,0,0,0.5);">كل شيء مترابط</div>
-      </div>
-    `
-  },
-  {
-    id: 's3_0',
-    html: `
-      <div style="position: absolute; bottom: 15vh; right: 10vw; direction: rtl;">
-        <div style="background: linear-gradient(135deg, #0e7490, #0369a1); color: white; padding: 16px 40px; border-radius: 20px; font-size: 32px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 1px solid #67e8f9; box-shadow: 0 15px 30px rgba(8,145,178,0.4);">
-          بع أسرع واحسب الضريبة تلقائياً
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's3_1',
-    html: `
-      <div style="position: absolute; bottom: 15vh; left: 10vw; direction: rtl;">
-        <div style="background: linear-gradient(135deg, #0e7490, #0369a1); color: white; padding: 16px 40px; border-radius: 20px; font-size: 32px; font-family: 'Cairo', sans-serif; font-weight: 700; border: 1px solid #67e8f9; box-shadow: 0 15px 30px rgba(8,145,178,0.4);">
-          تقارير مالية واضحة لحظياً
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's4_bottom',
-    html: `
-      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; direction: rtl; margin-top: 350px;">
-        <div style="font-size: 48px; font-weight: 800; color: white; font-family: 'Cairo', sans-serif; text-shadow: 0 4px 15px rgba(0,0,0,0.5);">
-          المحاسبة بطريقة أوضح
-        </div>
-      </div>
-    `
-  },
-  {
-    id: 's4_glows',
-    html: `
-      <div style="position: absolute; inset: 0; overflow: hidden; z-index: -1;">
-        <div style="position: absolute; top: 25%; left: 25%; width: 50vw; height: 50vw; background-color: rgba(37,99,235,0.4); border-radius: 50%; filter: blur(80px);"></div>
-        <div style="position: absolute; bottom: 25%; right: 25%; width: 60vw; height: 60vw; background-color: rgba(34,211,238,0.3); border-radius: 50%; filter: blur(80px);"></div>
+      <div style="position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; direction: rtl; background: transparent;">
+        <h2 style="font-size: 56px; font-weight: 900; color: #1e3a8a; margin-bottom: 40px; font-family: 'Cairo', sans-serif;">أسهل. أوضح. أسرع.</h2>
+        <div style="background-color: #2563eb; color: white; padding: 24px 64px; border-radius: 9999px; font-size: 40px; font-weight: 800; margin-bottom: 15vh; font-family: 'Cairo', sans-serif; box-shadow: 0 20px 40px rgba(37,99,235,0.4);">ابدأ مجاناً الآن</div>
       </div>
     `
   }
@@ -198,8 +109,7 @@ const overlays = [
       </html>
     `;
     await page.setContent(content, { waitUntil: 'networkidle' });
-    // Wait a moment for font rendering
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(1000);
     await page.screenshot({ path: `${outDir}/${item.id}.png`, omitBackground: true });
     console.log(`Generated ${item.id}.png`);
   }

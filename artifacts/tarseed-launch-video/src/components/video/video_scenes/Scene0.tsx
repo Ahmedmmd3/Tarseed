@@ -1,30 +1,60 @@
 import { motion } from 'framer-motion';
-import { SceneLayout, VideoText } from '@/lib/video/layout';
+import { SceneLayout, SafeFrame, VideoText } from '@/lib/video/layout';
+import { SCENE_DURATIONS } from '../VideoTemplate';
 
 export function Scene0() {
+  const duration = SCENE_DURATIONS.s0 / 1000; // 2.5s
+
   return (
-    <SceneLayout className="bg-zinc-950 overflow-hidden relative items-center justify-center">
-      {/* Glitchy red background matching Scene1 */}
-      <motion.div
-        className="absolute inset-0 bg-red-950/20 z-0"
-        animate={{ opacity: [0.2, 0.6, 0.3, 0.8, 0.4] }}
-        transition={{ duration: 0.3, repeat: Infinity, repeatType: 'mirror' }}
-      />
+    <SafeFrame className="bg-[#0B1120] text-center text-white overflow-hidden">
+      <SceneLayout className="flex flex-col items-center justify-center">
+        
+        {/* Background Animated Gradient / Glow */}
+        <motion.div
+          className="absolute inset-0 z-0 opacity-40"
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 0.6, scale: 1.2 }}
+          exit={{ opacity: 0, scale: 1.5, filter: "blur(20px)" }}
+          transition={{ duration, ease: "easeOut" }}
+        >
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[60vmin] h-[60vmin] bg-blue-600 rounded-full blur-[100px]" />
+        </motion.div>
 
-      {/* Noise Texture */}
-      <div className="absolute inset-0 pointer-events-none opacity-20 z-0" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
+        {/* Grid Pattern */}
+        <div 
+          className="absolute inset-0 z-0 opacity-20 pointer-events-none" 
+          style={{ 
+            backgroundImage: 'radial-gradient(#4b5563 1px, transparent 1px)', 
+            backgroundSize: '3vmin 3vmin' 
+          }} 
+        />
 
-      <motion.div
-        className="relative z-10 px-8 py-6 max-w-[80vw]"
-        initial={{ opacity: 0, scale: 0.9, filter: 'blur(10px)' }}
-        animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
-        exit={{ opacity: 0, scale: 1.1, filter: 'blur(10px)' }}
-        transition={{ duration: 0.8, type: 'spring', bounce: 0.3 }}
-      >
-        <VideoText className="text-5xl font-black text-white text-center leading-[1.3] drop-shadow-[0_0_20px_rgba(220,38,38,0.5)]">
-          هل المحاسبة معقدة فعلًا…<br/>ولا إحنا مصعّبينها؟
-        </VideoText>
-      </motion.div>
-    </SceneLayout>
+        <div className="relative z-10 flex flex-col items-center gap-[4vmin]">
+          <motion.div
+            initial={{ opacity: 0, y: '5vmin', filter: "blur(10px)" }}
+            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, y: '-5vmin', filter: "blur(10px)" }}
+            transition={{ duration: 0.6, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <VideoText as="h1" scale="heading" className="font-black text-white">
+              المحاسبة معقدة؟
+            </VideoText>
+          </motion.div>
+
+          <motion.div
+            className="bg-blue-600 text-white px-[6vmin] py-[2.5vmin] rounded-full font-bold"
+            initial={{ opacity: 0, scale: 0.5, rotate: -5 }}
+            animate={{ opacity: 1, scale: 1, rotate: 0 }}
+            exit={{ opacity: 0, scale: 0.8, y: '3vmin' }}
+            transition={{ duration: 0.6, delay: 1.2, type: 'spring', bounce: 0.5 }}
+          >
+            <VideoText as="span" scale="body">
+              ليس بعد اليوم!
+            </VideoText>
+          </motion.div>
+        </div>
+
+      </SceneLayout>
+    </SafeFrame>
   );
 }

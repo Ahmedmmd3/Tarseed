@@ -9,39 +9,34 @@ import { useEffect, useRef, useState } from 'react';
 
 import { Scene0 } from './video_scenes/Scene0';
 import { Scene1 } from './video_scenes/Scene1';
-import { Scene1b } from './video_scenes/Scene1b';
 import { Scene2 } from './video_scenes/Scene2';
 import { Scene3 } from './video_scenes/Scene3';
 import { Scene4 } from './video_scenes/Scene4';
+import { Scene5 } from './video_scenes/Scene5';
 
 export const SCENE_DURATIONS = {
   s0: 2500,
   s1: 7500,
-  s1b: 2000,
-  s2: 8000,
-  s3: 4500,
-  s4: 2500,
+  s2: 2000,
+  s3: 8000,
+  s4: 4500,
+  s5: 2500,
 };
 
 const VIDEO_ASPECT_RATIO: VideoAspectRatio = '9:16';
 
-const SCENES = { s0: Scene0, s1: Scene1, s1b: Scene1b, s2: Scene2, s3: Scene3, s4: Scene4 };
+const SCENES = { s0: Scene0, s1: Scene1, s2: Scene2, s3: Scene3, s4: Scene4, s5: Scene5 };
 
 const STARTS = {
   s0: 0.0,
   s1: 2.5,
-  s1b: 10.0,
-  s2: 12.0,
-  s3: 20.0,
-  s4: 24.5,
+  s2: 10.0,
+  s3: 12.0,
+  s4: 20.0,
+  s5: 24.5,
 } as const;
 
 const ASSETS = [
-  'images/clutter/legacy-erp.jpg',
-  'images/clutter/dashboard-chaos.jpg',
-  'images/clutter/report-overload.jpg',
-  'images/clutter/complex-pos.jpg',
-  'images/clutter/mobile-ledger.jpg',
   'images/glimpses/dashboard.jpg',
   'images/glimpses/ai-chat.jpg',
   'images/glimpses/ai-journal.jpg',
@@ -75,10 +70,10 @@ export default function VideoTemplate({
       if (audioRef.current) {
         const t = audioRef.current.currentTime;
         let nextKey = 's0';
-        if (t >= 24.5) nextKey = 's4';
-        else if (t >= 20.0) nextKey = 's3';
-        else if (t >= 12.0) nextKey = 's2';
-        else if (t >= 10.0) nextKey = 's1b';
+        if (t >= 24.5) nextKey = 's5';
+        else if (t >= 20.0) nextKey = 's4';
+        else if (t >= 12.0) nextKey = 's3';
+        else if (t >= 10.0) nextKey = 's2';
         else if (t >= 2.5) nextKey = 's1';
 
         setActiveSceneKey((prev: string) => prev !== nextKey ? nextKey : prev);
@@ -118,7 +113,7 @@ export default function VideoTemplate({
 
   return (
     <VideoPausedContext.Provider value={paused}>
-      <VideoCanvas aspectRatio={VIDEO_ASPECT_RATIO} style={{ backgroundColor: '#010619' }} className="dark text-foreground font-sans">
+      <VideoCanvas aspectRatio={VIDEO_ASPECT_RATIO} style={{ backgroundColor: '#010619' }} className="dark text-foreground font-sans bg-mesh overflow-hidden">
         <div className="absolute opacity-0 pointer-events-none w-[1px] h-[1px] overflow-hidden z-0">
           {ASSETS.map(src => (
             <img key={src} src={`${import.meta.env.BASE_URL}${src}`} alt="" />

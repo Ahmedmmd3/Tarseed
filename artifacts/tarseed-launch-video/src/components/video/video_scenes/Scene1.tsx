@@ -1,131 +1,91 @@
-import { motion, AnimatePresence } from 'framer-motion';
-import { SceneLayout } from '@/lib/video/layout';
-import { useEffect, useState } from 'react';
-import { ProblemCaption } from './ProblemCaption';
+import { motion } from 'framer-motion';
+import { SceneLayout, SafeFrame, VideoText, MediaFrame } from '@/lib/video/layout';
+import { SCENE_DURATIONS } from '../VideoTemplate';
 
 export function Scene1() {
-  const [phase, setPhase] = useState(0);
-
-  useEffect(() => {
-    let rafId: number;
-    const updatePhase = () => {
-      const audio = document.querySelector('audio');
-      if (audio) {
-        const t = audio.currentTime;
-        const localTime = t - 2.5; // Scene1 starts at 2.5s
-        let nextPhase = 0;
-        if (localTime >= 6.0) nextPhase = 4;
-        else if (localTime >= 4.5) nextPhase = 3;
-        else if (localTime >= 3.0) nextPhase = 2;
-        else if (localTime >= 1.5) nextPhase = 1;
-
-        setPhase(prev => prev !== nextPhase ? nextPhase : prev);
-      }
-      rafId = requestAnimationFrame(updatePhase);
-    };
-    rafId = requestAnimationFrame(updatePhase);
-    return () => cancelAnimationFrame(rafId);
-  }, []);
-
-  const scenes = [
-    {
-      src: 'legacy-erp.jpg', origin: '20% 10%', scale: 1.6, portrait: false,
-      caption: 'قوائم كثيرة… وخطوات أكثر',
-      blurStyle: { top: '0%', right: '0%', width: '30%', height: '5%' }
-    },
-    {
-      src: 'dashboard-chaos.jpg', origin: '50% 15%', scale: 1.5, portrait: false,
-      caption: 'أرقام كثيرة بدون وضوح',
-      blurStyle: { top: '0%', right: '0%', width: '15%', height: '7%' }
-    },
-    {
-      src: 'report-overload.jpg', origin: '50% 50%', scale: 1.5, portrait: false,
-      caption: 'تقارير معقدة يصعب فهمها',
-      blurStyle: { top: '0%', right: '0%', width: '15%', height: '7%' }
-    },
-    {
-      src: 'complex-pos.jpg', origin: '10% 80%', scale: 1.4, portrait: false,
-      caption: 'عملية البيع تأخذ وقتاً',
-      blurStyle: { top: '0%', right: '0%', width: '10%', height: '7%' }
-    },
-    {
-      src: 'mobile-ledger.jpg', origin: '50% 50%', scale: 1, portrait: true,
-      caption: 'الازدحام مستمر حتى على الجوال',
-      blurStyle: { top: '0%', left: '0%', width: '100%', height: '10%' }
-    },
-  ];
+  const duration = SCENE_DURATIONS.s1 / 1000; // 7.5s
 
   return (
-    <SceneLayout className="bg-zinc-950 overflow-hidden relative items-center justify-center">
-      {/* Glitchy red background */}
-      <motion.div
-        className="absolute inset-0 bg-red-950/20 z-0"
-        animate={{ opacity: [0.2, 0.6, 0.3, 0.8, 0.4] }}
-        transition={{ duration: 0.3, repeat: Infinity, repeatType: 'mirror' }}
-      />
-
-      {/* Blurred Backgrounds */}
-      {scenes.map((s, i) => (
-        <motion.img
-          key={`bg-${i}`}
-          src={`${import.meta.env.BASE_URL}images/clutter/${s.src}`}
-          className="absolute inset-0 w-full h-full object-cover blur-[30px] z-0"
+    <SafeFrame className="bg-[#0B1120] text-center overflow-hidden">
+      <SceneLayout className="flex flex-col items-center justify-center">
+        
+        {/* Background stays dark blue to match scene 0, but glowing shifts */}
+        <motion.div
+          className="absolute inset-0 z-0 opacity-40"
           initial={{ opacity: 0 }}
-          animate={{ opacity: phase === i ? 0.3 : 0 }}
-          transition={{ duration: 0.4 }}
-        />
-      ))}
+          animate={{ opacity: 0.5 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 1 }}
+        >
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[80vmin] h-[80vmin] bg-cyan-500 rounded-full blur-[120px]" />
+        </motion.div>
 
-      {/* Noise Texture */}
-      <div className="absolute inset-0 pointer-events-none opacity-20 z-0" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
-
-      {/* Foreground Cards */}
-      {scenes.map((s, i) => {
-        const isActive = phase === i;
-        const isPast = phase > i;
-        return (
+        {/* Typography */}
+        <div className="relative z-20 flex flex-col items-center mb-[6vmin] mt-[8vmin] w-full max-w-[80%]">
           <motion.div
-            key={`fg-${i}`}
-            className={`absolute z-10 flex justify-center items-center overflow-hidden rounded-xl shadow-[0_10px_40px_rgba(255,0,0,0.3)] border border-red-500/30 bg-zinc-900 ${s.portrait ? 'h-[75vh] w-auto max-w-[90vw]' : 'w-[94vw] h-auto max-h-[70vh]'}`}
-            initial={{ opacity: 0, scale: 0.9, y: 30 }}
-            animate={
-              isActive ? { opacity: 1, scale: 1, y: 0 } :
-              isPast ? { opacity: 0, scale: 1.05, y: -30 } :
-              { opacity: 0, scale: 0.9, y: 30 }
-            }
-            transition={{ duration: 0.6, type: 'spring', bounce: 0.2 }}
+            initial={{ opacity: 0, y: '5vmin' }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: '-3vmin' }}
+            transition={{ duration: 0.8, delay: 0.2, type: 'spring' }}
+            className="mb-[2vmin]"
           >
-            <motion.div
-              className="relative w-full h-full"
-              style={{ transformOrigin: s.origin }}
-              initial={{ scale: 1 }}
-              animate={isActive ? { scale: s.scale } : { scale: 1 }}
-              transition={{ duration: 1.5, ease: 'easeInOut' }}
-            >
-              <img
-                src={`${import.meta.env.BASE_URL}images/clutter/${s.src}`}
-                className={`${s.portrait ? 'h-full w-auto' : 'w-full h-auto'} block`}
-              />
-              {/* Blur mask over fictional app name/logo */}
-              <div
-                className="absolute backdrop-blur-xl bg-black/20"
-                style={s.blurStyle}
-              />
-            </motion.div>
+            <VideoText as="h2" scale="heading" className="font-black text-white">
+              ترصيد
+            </VideoText>
           </motion.div>
-        );
-      })}
+          <motion.div
+            initial={{ opacity: 0, y: '3vmin' }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: '-3vmin' }}
+            transition={{ duration: 0.8, delay: 0.4, type: 'spring' }}
+          >
+            <VideoText as="p" scale="body" className="font-medium text-cyan-200">
+              إدارة أسهل لنمو أسرع
+            </VideoText>
+          </motion.div>
+        </div>
 
-      {/* Captions */}
-      <AnimatePresence mode="popLayout">
-        {phase < 5 && (
-          <ProblemCaption
-            key={`caption-${phase}`}
-            text={scenes[phase].caption}
-            className="top-[10vh]"
-          />
-        )}
-      </AnimatePresence>
-    </SceneLayout>
+        {/* Dashboard Image Reveal */}
+        <motion.div
+          className="relative z-10 w-[90%] aspect-[4/3] rounded-xl shadow-2xl border border-white/10 overflow-hidden"
+          initial={{ opacity: 0, y: '15vmin', rotateX: 20, scale: 0.8, perspective: 1000 }}
+          animate={{ opacity: 1, y: 0, rotateX: 0, scale: 1 }}
+          exit={{ opacity: 0, scale: 1.1, filter: "blur(10px)" }}
+          transition={{ duration: 1.2, delay: 0.8, type: "spring", stiffness: 60, damping: 15 }}
+        >
+          <MediaFrame fit="cover" position="left top" className="w-full h-full">
+            <img 
+              src={`${import.meta.env.BASE_URL}images/glimpses/dashboard.jpg`} 
+              className="w-full h-full object-cover object-left-top" 
+              alt="Dashboard" 
+            />
+          </MediaFrame>
+          {/* Glow overlay */}
+          <div className="absolute inset-0 bg-gradient-to-t from-[#0B1120] to-transparent opacity-30" />
+        </motion.div>
+
+        {/* Floating accent elements that animate during the scene */}
+        <motion.div
+          className="absolute bottom-[10%] right-[5%] bg-blue-600/20 backdrop-blur-md border border-blue-400/30 text-white px-[4vmin] py-[2vmin] rounded-2xl z-30"
+          initial={{ opacity: 0, x: '10vmin' }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          transition={{ duration: 0.6, delay: 2.5, type: 'spring' }}
+        >
+          <VideoText as="span" scale="caption" className="font-bold">لوحة تحكم متكاملة</VideoText>
+        </motion.div>
+
+        <motion.div
+          className="absolute top-[35%] left-[2%] bg-cyan-600/20 backdrop-blur-md border border-cyan-400/30 text-white px-[4vmin] py-[2vmin] rounded-2xl z-30"
+          initial={{ opacity: 0, x: '-10vmin' }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          transition={{ duration: 0.6, delay: 3.5, type: 'spring' }}
+        >
+          <VideoText as="span" scale="caption" className="font-bold">رؤية واضحة</VideoText>
+        </motion.div>
+
+      </SceneLayout>
+    </SafeFrame>
   );
 }

@@ -1,91 +1,103 @@
-import { motion, AnimatePresence } from 'framer-motion';
-import { SceneLayout, VideoText } from '@/lib/video/layout';
-import { useEffect, useState } from 'react';
-import { FeatureCaption } from './FeatureCaption';
+import { motion } from 'framer-motion';
+import { SceneLayout, SafeFrame, VideoText, MediaFrame } from '@/lib/video/layout';
+import { SCENE_DURATIONS } from '../VideoTemplate';
 
 export function Scene3() {
-  const [phase, setPhase] = useState(0);
-
-  useEffect(() => {
-    let rafId: number;
-    const updatePhase = () => {
-      const audio = document.querySelector('audio');
-      if (audio) {
-        const t = audio.currentTime;
-        const localTime = t - 20.0; // Scene3 starts at 20.0s
-        let nextPhase = 0;
-        if (localTime >= 2.25) nextPhase = 1;
-
-        setPhase(prev => prev !== nextPhase ? nextPhase : prev);
-      }
-      rafId = requestAnimationFrame(updatePhase);
-    };
-    rafId = requestAnimationFrame(updatePhase);
-    return () => cancelAnimationFrame(rafId);
-  }, []);
-
-  const scenes = [
-    { src: 'invoice.jpg', origin: '10% 90%', scale: 1.3 },
-    { src: 'reports.jpg', origin: '50% 10%', scale: 1.3 },
-  ];
+  const duration = SCENE_DURATIONS.s3 / 1000; // 8.0s
 
   return (
-    <SceneLayout className="bg-brand-bg bg-mesh overflow-hidden relative items-center justify-center">
-      {/* Blurred Backgrounds */}
-      {scenes.map((s, i) => (
-        <motion.img
-          key={`bg-${i}`}
-          src={`${import.meta.env.BASE_URL}images/glimpses/${s.src}`}
-          className="absolute inset-0 w-full h-full object-cover blur-[40px] z-0"
+    <SafeFrame className="bg-[#0B1120] overflow-hidden">
+      <SceneLayout className="flex flex-col items-center justify-center">
+        
+        {/* Background stays dark blue */}
+        <motion.div
+          className="absolute inset-0 z-0"
           initial={{ opacity: 0 }}
-          animate={{ opacity: phase === i ? 0.3 : 0 }}
-          transition={{ duration: 0.6 }}
-        />
-      ))}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <div className="absolute -top-1/4 -right-1/4 w-[70vmin] h-[70vmin] bg-blue-700 rounded-full blur-[100px] opacity-40" />
+          <div className="absolute -bottom-1/4 -left-1/4 w-[70vmin] h-[70vmin] bg-cyan-700 rounded-full blur-[100px] opacity-30" />
+        </motion.div>
 
-      <motion.div
-        className="absolute top-[8vh] z-40 text-center w-full px-6"
-        initial={{ y: -30, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ opacity: 0 }}
-      >
-        <VideoText className="text-4xl font-extrabold text-white mb-2 tracking-tight drop-shadow-xl">
-          كل شيء مترابط
-        </VideoText>
-      </motion.div>
-
-      {/* Foreground Cards */}
-      {scenes.map((s, i) => {
-        const isActive = phase === i;
-        const isPast = phase > i;
-        return (
+        {/* Typography */}
+        <div className="relative z-30 w-full text-center mt-[6vmin] mb-[4vmin]">
           <motion.div
-            key={`fg-${i}`}
-            className="absolute z-10 w-[94vw] h-auto max-h-[65vh] mt-[10vh] overflow-hidden rounded-xl shadow-[0_20px_60px_rgba(0,102,255,0.4)] border border-brand-cyan/40 bg-black/80 flex justify-center items-center"
-            initial={{ opacity: 0, scale: 0.9, y: 30 }}
-            animate={
-              isActive ? { opacity: 1, scale: 1, y: 0 } :
-              isPast ? { opacity: 0, scale: 1.05, y: -30 } :
-              { opacity: 0, scale: 0.9, y: 30 }
-            }
-            transition={{ duration: 0.7, type: 'spring', bounce: 0.2 }}
+            initial={{ opacity: 0, y: '4vmin' }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: '-3vmin' }}
+            transition={{ duration: 0.8, delay: 0.2, type: 'spring' }}
+            className="mb-[2vmin]"
           >
-            <motion.img
-              src={`${import.meta.env.BASE_URL}images/glimpses/${s.src}`}
-              className="w-full h-auto block"
-              style={{ transformOrigin: s.origin }}
-              initial={{ scale: 1 }}
-              animate={isActive ? { scale: s.scale } : { scale: 1 }}
-              transition={{ duration: 2.25, ease: 'easeInOut' }}
-            />
+            <VideoText as="h2" scale="heading" className="font-black text-white">
+              مساعدك المالي الذكي
+            </VideoText>
           </motion.div>
-        );
-      })}
+          <motion.div
+            initial={{ opacity: 0, y: '3vmin' }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: '-3vmin' }}
+            transition={{ duration: 0.8, delay: 0.4, type: 'spring' }}
+          >
+            <VideoText as="p" scale="body" className="font-medium text-cyan-200">
+              قيود يومية بضغطة زر
+            </VideoText>
+          </motion.div>
+        </div>
 
-      <AnimatePresence mode="popLayout">
-        {phase === 0 && <FeatureCaption key="c1" text="بع أسرع واحسب الضريبة تلقائياً" className="bottom-[15vh] right-[10vw]" />}
-        {phase === 1 && <FeatureCaption key="c2" text="تقارير مالية واضحة لحظياً" className="bottom-[15vh] left-[10vw]" />}
-      </AnimatePresence>
-    </SceneLayout>
+        {/* Images Stagger */}
+        <div className="relative z-20 w-full flex-1 flex flex-col items-center justify-center -mt-[4vmin]">
+          
+          {/* AI Chat Image - slightly offset to right */}
+          <motion.div
+            className="absolute right-[-5%] w-[85%] rounded-2xl shadow-2xl border border-white/10 overflow-hidden transform"
+            initial={{ opacity: 0, x: '10vmin', rotate: 10, scale: 0.8 }}
+            animate={{ opacity: 1, x: '10%', rotate: 5, scale: 1 }}
+            exit={{ opacity: 0, x: '15vmin', scale: 0.9 }}
+            transition={{ duration: 1, delay: 0.8, type: "spring", stiffness: 60 }}
+          >
+            <MediaFrame fit="cover" position="center">
+              <img 
+                src={`${import.meta.env.BASE_URL}images/glimpses/ai-chat.jpg`} 
+                className="w-full h-auto object-cover" 
+                alt="AI Chat" 
+              />
+            </MediaFrame>
+          </motion.div>
+
+          {/* AI Journal Image - overlaps to left */}
+          <motion.div
+            className="absolute left-[-5%] w-[85%] rounded-2xl shadow-2xl border border-white/10 overflow-hidden transform"
+            initial={{ opacity: 0, x: '-10vmin', rotate: -10, scale: 0.8 }}
+            animate={{ opacity: 1, x: '-10%', rotate: -5, scale: 1 }}
+            exit={{ opacity: 0, x: '-15vmin', scale: 0.9 }}
+            transition={{ duration: 1, delay: 1.6, type: "spring", stiffness: 60 }}
+          >
+            <MediaFrame fit="cover" position="center">
+              <img 
+                src={`${import.meta.env.BASE_URL}images/glimpses/ai-journal.jpg`} 
+                className="w-full h-auto object-cover" 
+                alt="AI Journal" 
+              />
+            </MediaFrame>
+          </motion.div>
+        </div>
+
+        {/* Accent badge */}
+        <motion.div
+          className="absolute bottom-[8vmin] bg-white text-blue-900 px-[6vmin] py-[2.5vmin] rounded-full z-40 font-bold shadow-xl"
+          initial={{ opacity: 0, y: '5vmin', scale: 0.5 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: '5vmin', scale: 0.5 }}
+          transition={{ duration: 0.6, delay: 2.5, type: 'spring', bounce: 0.5 }}
+        >
+          <VideoText as="span" scale="caption">
+            بدون أخطاء بشرية!
+          </VideoText>
+        </motion.div>
+
+      </SceneLayout>
+    </SafeFrame>
   );
 }

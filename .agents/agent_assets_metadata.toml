@@ -407,6 +407,7 @@ uri = "file://attached_assets/generated_audio/tarseed_complexity_original.mp3"
 type = "audio"
 title = "Tarseed complexity opening"
 description = "Generated music: Original instrumental score for the opening of a vertical Arabic accounting software launch film. 10 seconds. Tense, minimal, modern electronic pulse with dry ticking percussion, res…"
+logical_id = "adcab366-35fe-4857-9290-818e452e4a8b"
 
 [[outputs]]
 id = "LrokAgVMPa7yICaI_V6ZJ"
@@ -414,6 +415,7 @@ uri = "file://attached_assets/generated_audio/tarseed_clarity_original.mp3"
 type = "audio"
 title = "Tarseed clarity reveal"
 description = "Generated music: Original instrumental brand music for the reveal of a modern Arabic financial and accounting product. 15 seconds. Optimistic, confident, polished technology sound with warm plucked s…"
+logical_id = "c8f9bc03-399d-4aab-9ad4-6a4450b9ff4c"
 
 [[outputs]]
 id = "RGIpr8xz34XWWVa92wMeX"
@@ -421,17 +423,18 @@ uri = "file://attached_assets/generated_audio/tarseed_tech_product_original.mp3"
 type = "audio"
 title = "Tarseed technical product reveal"
 description = "Generated music: Original instrumental product-demo music for a modern Arabic fintech and accounting application. 13 seconds. Precise clean electronic rhythm, crisp muted percussion, subtle data-like…"
+logical_id = "061005f3-21e4-46be-b29c-1bad9ca25e3a"
 
 [[outputs]]
 id = "XHawt9OajEkfzumm0vQZ6"
 uri = "file://artifacts/tarseed-launch-video/exports/tarseed-launch-final.mp4"
 type = "video"
-title = "فيديو إطلاق ترصيد — النسخة النهائية"
-description = "ملف MP4 مُنشأ محليًا ومفحوص إطارًا بإطار؛ 1080×1920، 60fps، مدة 27 ثانية، مع الصوت النهائي."
+title = "إعلان إطلاق ترصيد — رؤيتي الجديدة"
+description = "فيديو دعائي عمودي 9:16، مدته 27 ثانية، مُنشأ محليًا ومفحوص من ملف MP4 النهائي."
 logical_id = "99bce3a5-cc7d-42a4-a3f7-011582c1547a"
-content_hash = "sha256:799ad936d810a31d32d831ead87852e772705f7014389a3d0103d51f917c4fc7"
-size = 1314559
-mtime_ms = 1789148884781
-storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/99bce3a5-cc7d-42a4-a3f7-011582c1547a/198a8f9b-eccc-494e-ae56-69b8c0d5b867"
-storage_version_token = "1789149004373201"
+content_hash = "sha256:40e82b2d908e1294d758d851f59f9ba78a637f01093f04ab148b6460011ca43b"
+size = 1068558
+mtime_ms = 1789151956461
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/99bce3a5-cc7d-42a4-a3f7-011582c1547a/6af886ea-4c3d-4ab0-81a1-0576673da134"
+storage_version_token = "1789152028659279"
 content_type = "video/mp4"
