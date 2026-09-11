@@ -1,6 +1,7 @@
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { SceneLayout, VideoText } from '@/lib/video/layout';
 import { useEffect, useState } from 'react';
+import { FeatureCaption } from './FeatureCaption';
 
 export function Scene3() {
   const [phase, setPhase] = useState(0);
@@ -69,6 +70,11 @@ export function Scene3() {
           </motion.div>
         );
       })}
+
+      <AnimatePresence mode="popLayout">
+        {phase === 0 && <FeatureCaption key="c1" text="بع أسرع واحسب الضريبة تلقائياً" className="bottom-[15vh] right-[10vw]" />}
+        {phase === 1 && <FeatureCaption key="c2" text="تقارير مالية واضحة لحظياً" className="bottom-[15vh] left-[10vw]" />}
+      </AnimatePresence>
     </SceneLayout>
   );
 }
