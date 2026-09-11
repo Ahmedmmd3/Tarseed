@@ -13,16 +13,16 @@ import { Scene3 } from './video_scenes/Scene3';
 import { Scene4 } from './video_scenes/Scene4';
 
 export const SCENE_DURATIONS = {
-  s1: 3000,
-  s2: 3000,
-  s3: 5000,
-  s4: 4000,
+  s1: 7500,
+  s2: 8000,
+  s3: 4500,
+  s4: 2000,
 };
 
 const VIDEO_ASPECT_RATIO: VideoAspectRatio = '9:16';
 
 const SCENES = { s1: Scene1, s2: Scene2, s3: Scene3, s4: Scene4 };
-const STARTS = { s1: 0, s2: 3, s3: 6, s4: 11 };
+const STARTS = { s1: 0, s2: 7.5, s3: 15.5, s4: 20 };
 
 export default function VideoTemplate({
   durations = SCENE_DURATIONS, loop = true, paused = false, muted = false, onSceneChange,

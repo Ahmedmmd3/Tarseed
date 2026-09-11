@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { SceneLayout, VideoText } from '@/lib/video/layout';
+import { SceneLayout } from '@/lib/video/layout';
 import { useEffect, useState } from 'react';
 
 export function Scene1() {
@@ -7,62 +7,81 @@ export function Scene1() {
 
   useEffect(() => {
     const timers = [
-      setTimeout(() => setPhase(1), 1000),
-      setTimeout(() => setPhase(2), 2000),
+      setTimeout(() => setPhase(1), 1500),
+      setTimeout(() => setPhase(2), 3000),
+      setTimeout(() => setPhase(3), 4500),
+      setTimeout(() => setPhase(4), 6000),
     ];
     return () => timers.forEach(t => clearTimeout(t));
   }, []);
+
+  const scenes = [
+    { src: 'legacy-erp.jpg', origin: '20% 10%', scale: 1.6, portrait: false },
+    { src: 'dashboard-chaos.jpg', origin: '50% 15%', scale: 1.5, portrait: false },
+    { src: 'report-overload.jpg', origin: '50% 50%', scale: 1.5, portrait: false },
+    { src: 'complex-pos.jpg', origin: '10% 80%', scale: 1.4, portrait: false },
+    { src: 'mobile-ledger.jpg', origin: '50% 50%', scale: 1, portrait: true },
+  ];
 
   return (
     <SceneLayout className="bg-zinc-950 overflow-hidden relative items-center justify-center">
       {/* Glitchy red background */}
       <motion.div
-        className="absolute inset-0 bg-red-950/20 mix-blend-color-burn"
+        className="absolute inset-0 bg-red-950/20 mix-blend-color-burn z-0"
         animate={{ opacity: [0.2, 0.6, 0.3, 0.8, 0.4] }}
         transition={{ duration: 0.3, repeat: Infinity, repeatType: 'mirror' }}
       />
 
-      {/* Legacy ERP - Base layer */}
-      <motion.img
-        src={`${import.meta.env.BASE_URL}images/clutter/legacy-erp.jpg`}
-        className="absolute w-[160vw] max-w-none opacity-50 grayscale sepia-[0.3]"
-        initial={{ scale: 1, rotate: -2, x: '-5vw', y: '0vh' }}
-        animate={{ scale: 1.15, rotate: 1, x: '0vw', y: '-5vh' }}
-        transition={{ duration: 3, ease: 'linear' }}
-        exit={{ scale: 1.2, opacity: 0, transition: { duration: 0.3 } }}
-      />
-
-      {/* Dashboard Chaos - Pops in */}
-      <motion.img
-        src={`${import.meta.env.BASE_URL}images/clutter/dashboard-chaos.jpg`}
-        className="absolute w-[120vw] max-w-none shadow-2xl border border-white/10 rounded-lg origin-bottom-right"
-        initial={{ opacity: 0, scale: 0.8, rotate: 10, y: '30vh', x: '10vw' }}
-        animate={
-          phase >= 1
-            ? { opacity: 0.85, scale: 1, rotate: -4, y: '10vh', x: '-5vw' }
-            : { opacity: 0, scale: 0.8, rotate: 10, y: '30vh', x: '10vw' }
-        }
-        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-        exit={{ scale: 0.9, y: '20vh', opacity: 0, transition: { duration: 0.3 } }}
-      />
+      {/* Blurred Backgrounds */}
+      {scenes.map((s, i) => (
+        <motion.img
+          key={`bg-${i}`}
+          src={`${import.meta.env.BASE_URL}images/clutter/${s.src}`}
+          className="absolute inset-0 w-full h-full object-cover blur-[30px] z-0"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: phase === i ? 0.3 : 0 }}
+          transition={{ duration: 0.4 }}
+        />
+      ))}
 
       {/* Noise Texture */}
-      <div className="absolute inset-0 pointer-events-none opacity-20" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
+      <div className="absolute inset-0 pointer-events-none opacity-20 z-0" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
 
+      {/* Foreground Cards */}
+      {scenes.map((s, i) => {
+        const isActive = phase === i;
+        const isPast = phase > i;
+        return (
+          <motion.div
+            key={`fg-${i}`}
+            className={`absolute z-10 flex justify-center items-center overflow-hidden rounded-xl shadow-[0_10px_40px_rgba(255,0,0,0.3)] border border-red-500/30 bg-black/80 ${s.portrait ? 'h-[75vh] w-auto max-w-[90vw]' : 'w-[94vw] h-auto max-h-[70vh]'}`}
+            initial={{ opacity: 0, scale: 0.9, y: 30 }}
+            animate={
+              isActive ? { opacity: 1, scale: 1, y: 0 } :
+              isPast ? { opacity: 0, scale: 1.05, y: -30 } :
+              { opacity: 0, scale: 0.9, y: 30 }
+            }
+            transition={{ duration: 0.6, type: 'spring', bounce: 0.2 }}
+          >
+            <motion.img
+              src={`${import.meta.env.BASE_URL}images/clutter/${s.src}`}
+              className={`${s.portrait ? 'h-full w-auto' : 'w-full h-auto'} block`}
+              style={{ transformOrigin: s.origin }}
+              initial={{ scale: 1 }}
+              animate={isActive ? { scale: s.scale } : { scale: 1 }}
+              transition={{ duration: 1.5, ease: 'easeInOut' }}
+            />
+          </motion.div>
+        );
+      })}
+
+      {/* Final Flash into next scene */}
       <motion.div
-        className="relative z-10 bg-black/70 backdrop-blur-md p-[4vmin] rounded-2xl border border-red-500/30 text-center mx-[4vw] mb-[15vh] shadow-[0_0_40px_rgba(255,0,0,0.2)]"
-        initial={{ scale: 0.8, opacity: 0, y: '5vh' }}
-        animate={{ scale: 1, opacity: 1, y: 0 }}
-        transition={{ delay: 0.5, type: 'spring', bounce: 0.4 }}
-        exit={{ scale: 1.1, opacity: 0, filter: 'blur(10px)', transition: { duration: 0.3 } }}
-      >
-        <VideoText className="text-5xl font-bold text-white leading-tight mb-2">
-          تعقيد وفوضى؟
-        </VideoText>
-        <VideoText className="text-3xl font-medium text-red-300">
-          في أنظمتك المحاسبية
-        </VideoText>
-      </motion.div>
+        className="absolute inset-0 z-50 bg-white"
+        initial={{ opacity: 0 }}
+        animate={phase === 4 ? { opacity: [0, 1] } : { opacity: 0 }}
+        transition={{ delay: 1.3, duration: 0.2 }}
+      />
     </SceneLayout>
   );
 }
