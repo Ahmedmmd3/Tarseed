@@ -7,13 +7,24 @@ export function Scene1() {
   const [phase, setPhase] = useState(0);
 
   useEffect(() => {
-    const timers = [
-      setTimeout(() => setPhase(1), 1500),
-      setTimeout(() => setPhase(2), 3000),
-      setTimeout(() => setPhase(3), 4500),
-      setTimeout(() => setPhase(4), 6000),
-    ];
-    return () => timers.forEach(t => clearTimeout(t));
+    let rafId: number;
+    const updatePhase = () => {
+      const audio = document.querySelector('audio');
+      if (audio) {
+        const t = audio.currentTime;
+        const localTime = t - 2.5; // Scene1 starts at 2.5s
+        let nextPhase = 0;
+        if (localTime >= 6.0) nextPhase = 4;
+        else if (localTime >= 4.5) nextPhase = 3;
+        else if (localTime >= 3.0) nextPhase = 2;
+        else if (localTime >= 1.5) nextPhase = 1;
+
+        setPhase(prev => prev !== nextPhase ? nextPhase : prev);
+      }
+      rafId = requestAnimationFrame(updatePhase);
+    };
+    rafId = requestAnimationFrame(updatePhase);
+    return () => cancelAnimationFrame(rafId);
   }, []);
 
   const scenes = [

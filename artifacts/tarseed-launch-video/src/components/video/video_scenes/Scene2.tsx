@@ -7,11 +7,22 @@ export function Scene2() {
   const [phase, setPhase] = useState(0);
 
   useEffect(() => {
-    const timers = [
-      setTimeout(() => setPhase(1), 2600), // AI Chat
-      setTimeout(() => setPhase(2), 5200), // AI Journal
-    ];
-    return () => timers.forEach(t => clearTimeout(t));
+    let rafId: number;
+    const updatePhase = () => {
+      const audio = document.querySelector('audio');
+      if (audio) {
+        const t = audio.currentTime;
+        const localTime = t - 12.0; // Scene2 starts at 12.0s
+        let nextPhase = 0;
+        if (localTime >= 5.2) nextPhase = 2;
+        else if (localTime >= 2.6) nextPhase = 1;
+
+        setPhase(prev => prev !== nextPhase ? nextPhase : prev);
+      }
+      rafId = requestAnimationFrame(updatePhase);
+    };
+    rafId = requestAnimationFrame(updatePhase);
+    return () => cancelAnimationFrame(rafId);
   }, []);
 
   const scenes = [

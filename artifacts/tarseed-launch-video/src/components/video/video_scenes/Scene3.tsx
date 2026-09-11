@@ -7,10 +7,21 @@ export function Scene3() {
   const [phase, setPhase] = useState(0);
 
   useEffect(() => {
-    const timers = [
-      setTimeout(() => setPhase(1), 2250), // Reports
-    ];
-    return () => timers.forEach(t => clearTimeout(t));
+    let rafId: number;
+    const updatePhase = () => {
+      const audio = document.querySelector('audio');
+      if (audio) {
+        const t = audio.currentTime;
+        const localTime = t - 20.0; // Scene3 starts at 20.0s
+        let nextPhase = 0;
+        if (localTime >= 2.25) nextPhase = 1;
+
+        setPhase(prev => prev !== nextPhase ? nextPhase : prev);
+      }
+      rafId = requestAnimationFrame(updatePhase);
+    };
+    rafId = requestAnimationFrame(updatePhase);
+    return () => cancelAnimationFrame(rafId);
   }, []);
 
   const scenes = [

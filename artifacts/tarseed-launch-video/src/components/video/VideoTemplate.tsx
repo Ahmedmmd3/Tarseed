@@ -5,7 +5,7 @@ import {
   useVideoPlayer,
 } from '@/lib/video';
 import { AnimatePresence } from 'framer-motion';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { Scene0 } from './video_scenes/Scene0';
 import { Scene1 } from './video_scenes/Scene1';
@@ -56,14 +56,43 @@ export default function VideoTemplate({
   durations?: Record<string, number>; loop?: boolean; paused?: boolean; muted?: boolean;
   onSceneChange?: (key: string) => void;
 } = {}) {
-  const { currentSceneKey } = useVideoPlayer({ durations, loop, paused });
-  const baseKey = currentSceneKey.replace(/_r[12]$/, '') as keyof typeof SCENES;
-  const Scene = SCENES[baseKey];
+  const { currentSceneKey: hookSceneKey } = useVideoPlayer({ durations, loop, paused });
+  const isIframed = typeof window !== 'undefined' && window.self !== window.top;
 
+  const [activeSceneKey, setActiveSceneKey] = useState(hookSceneKey);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lastKey = useRef<string | null>(null);
 
-  useEffect(() => onSceneChange?.(currentSceneKey), [currentSceneKey, onSceneChange]);
+  // Sync visual scene to audio clock in export mode
+  useEffect(() => {
+    if (isIframed) {
+      setActiveSceneKey(hookSceneKey);
+      return;
+    }
+
+    let rafId: number;
+    const checkAudioTime = () => {
+      if (audioRef.current) {
+        const t = audioRef.current.currentTime;
+        let nextKey = 's0';
+        if (t >= 24.5) nextKey = 's4';
+        else if (t >= 20.0) nextKey = 's3';
+        else if (t >= 12.0) nextKey = 's2';
+        else if (t >= 10.0) nextKey = 's1b';
+        else if (t >= 2.5) nextKey = 's1';
+
+        setActiveSceneKey((prev: string) => prev !== nextKey ? nextKey : prev);
+      }
+      rafId = requestAnimationFrame(checkAudioTime);
+    };
+    rafId = requestAnimationFrame(checkAudioTime);
+    return () => cancelAnimationFrame(rafId);
+  }, [isIframed, hookSceneKey]);
+
+  const baseKey = activeSceneKey.replace(/_r[12]$/, '') as keyof typeof SCENES;
+  const Scene = SCENES[baseKey];
+
+  useEffect(() => onSceneChange?.(activeSceneKey), [activeSceneKey, onSceneChange]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -76,8 +105,8 @@ export default function VideoTemplate({
       return;
     }
 
-    if (lastKey.current !== currentSceneKey) {
-      lastKey.current = currentSceneKey;
+    if (lastKey.current !== activeSceneKey) {
+      lastKey.current = activeSceneKey;
       const targetTime = STARTS[baseKey as keyof typeof STARTS] || 0.0;
       if (baseKey === 's0' || Math.abs(audio.currentTime - targetTime) > 1.5) {
         audio.currentTime = targetTime;
@@ -85,7 +114,7 @@ export default function VideoTemplate({
     }
 
     audio.play().catch(() => {});
-  }, [currentSceneKey, baseKey, muted, paused]);
+  }, [activeSceneKey, baseKey, muted, paused]);
 
   return (
     <VideoPausedContext.Provider value={paused}>
@@ -96,7 +125,7 @@ export default function VideoTemplate({
           ))}
         </div>
         <AnimatePresence mode="sync">
-          {Scene && <Scene key={currentSceneKey} />}
+          {Scene && <Scene key={activeSceneKey} />}
         </AnimatePresence>
         <audio ref={audioRef} src={`${import.meta.env.BASE_URL}audio/master_soundtrack.mp3`} preload="auto" muted={muted} loop={false} />
       </VideoCanvas>
