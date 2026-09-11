@@ -1,0 +1,29 @@
+@import url("https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap");
+
+:root {
+  --background: 216 20% 95.5%;
+  --foreground: 220 60% 9.8%;
+  --primary: 221 88.7% 45.1%;
+  --primary-foreground: 216 20% 95.5%;
+  --border: 221 20.8% 71.4%;
+  --input: 221 20.8% 71.4%;
+  --ring: 202 100% 50%;
+  --app-font-sans: "Cairo", sans-serif;
+  --font-sans: var(--app-font-sans);
+  --brand-primary: #0d47d9;
+  --brand-accent: #00a3ff;
+  --brand-dark: #0a1328;
+  --brand-muted: #a8b2c4;
+  --brand-light: #f1f3f6;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  min-width: 320px;
+  overflow-x: hidden;
+  direction: rtl;
+  font-family: "Cairo", sans-serif;
+  background: #f1f3f6;
+}

@@ -330,3 +330,73 @@ mtime_ms = 1789139984835
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/81d914aa-5de5-4b71-99c7-7464a017c64a/76af4e14-0f28-4329-97bb-4eee7b343ee2"
 storage_version_token = "1789139997710449"
 content_type = "image/jpeg"
+
+[[outputs]]
+id = "b7SbBIv-gmLHuEIXhk1MZ"
+uri = "file://screenshots/tarseed-glimpses/dashboard.jpg"
+type = "image"
+title = "ترصيد — لمحة لوحة التحكم"
+description = "لقطة 1280×720 مستخرجة من تصميم لوحة التحكم الفعلي ببيانات تجريبية."
+logical_id = "3380c0b0-09f1-4217-b49f-fdd412b7f78a"
+content_hash = "sha256:d93b39d367d85a3d851edf7aaaa2a224037d3f46bd8f61ba32267c6af72c3fef"
+size = 65409
+mtime_ms = 1789140449252
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3380c0b0-09f1-4217-b49f-fdd412b7f78a/593edd86-4219-4706-9b50-1bd8c3a2c0f6"
+storage_version_token = "1789140474992708"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "U12dnw-4CMITPAeqcYy47"
+uri = "file://screenshots/tarseed-glimpses/ai-chat.jpg"
+type = "image"
+title = "ترصيد — محادثة المساعد المالي"
+description = "سؤال وجواب عن القيد المحاسبي ضمن واجهة المساعد المالي الفعلية."
+logical_id = "b753776f-1d5a-47d8-954c-93f19206b61d"
+content_hash = "sha256:5fa045cba13ac8c208a677a98d615fedf4f636c2d5fbf0c038bd4b54f90d9cf0"
+size = 62420
+mtime_ms = 1789140452104
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/b753776f-1d5a-47d8-954c-93f19206b61d/b0b7289e-8447-4e70-ae8b-201e77962f5a"
+storage_version_token = "1789140475529798"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "HhOFpFKRzFbGaJu9W3aMu"
+uri = "file://screenshots/tarseed-glimpses/ai-journal.jpg"
+type = "image"
+title = "ترصيد — القيد المقترح بالذكاء الاصطناعي"
+description = "قيد مشتريات وضريبة متوازن داخل شاشة القيود الحقيقية."
+logical_id = "40de92ff-32b6-48ff-b62f-341cc5d50a9b"
+content_hash = "sha256:3295962636053f0412ecd2cb20048937a7c58710dbe54cfc05f084e0500eb444"
+size = 60329
+mtime_ms = 1789140455448
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/40de92ff-32b6-48ff-b62f-341cc5d50a9b/c155391b-5a6a-4706-a393-1947213b683c"
+storage_version_token = "1789140476191785"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "QU-krutOVMtId948mLIaG"
+uri = "file://screenshots/tarseed-glimpses/invoice.jpg"
+type = "image"
+title = "ترصيد — إنشاء فاتورة"
+description = "لمحة من نقطة البيع والفاتورة بهوية التطبيق الفعلية."
+logical_id = "78569472-ff20-4fa8-a329-ad241ed1f760"
+content_hash = "sha256:e2e83966d21c5622b89ab5c1520bd8d58c92497622c4937cf845521e362b4577"
+size = 75955
+mtime_ms = 1789140458172
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/78569472-ff20-4fa8-a329-ad241ed1f760/e79b0d6c-a5a7-4e0e-a9c5-3d56af77d948"
+storage_version_token = "1789140476746162"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "74FsYhSa2ngOuz_cxNA74"
+uri = "file://screenshots/tarseed-glimpses/reports.jpg"
+type = "image"
+title = "ترصيد — التقارير المالية"
+description = "لمحة من التقارير وميزان المراجعة بهوية التطبيق الفعلية."
+logical_id = "3b289d31-3451-4646-b7c0-ba16c4e15761"
+content_hash = "sha256:7a066adcd48ec1cee98c83b32f5731cdf3ab59ea34648873afd5078690913ef9"
+size = 65571
+mtime_ms = 1789140460252
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3b289d31-3451-4646-b7c0-ba16c4e15761/47f99d5a-a7e8-4420-af7c-1a5a25fa2c61"
+storage_version_token = "1789140477348317"
+content_type = "image/jpeg"
