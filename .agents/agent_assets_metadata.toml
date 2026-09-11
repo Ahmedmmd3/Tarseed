@@ -400,3 +400,24 @@ mtime_ms = 1789140460252
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3b289d31-3451-4646-b7c0-ba16c4e15761/47f99d5a-a7e8-4420-af7c-1a5a25fa2c61"
 storage_version_token = "1789140477348317"
 content_type = "image/jpeg"
+
+[[outputs]]
+id = "p7XxWdcOXvPysvI_bIuI1"
+uri = "file://attached_assets/generated_audio/tarseed_complexity_original.mp3"
+type = "audio"
+title = "Tarseed complexity opening"
+description = "Generated music: Original instrumental score for the opening of a vertical Arabic accounting software launch film. 10 seconds. Tense, minimal, modern electronic pulse with dry ticking percussion, res…"
+
+[[outputs]]
+id = "LrokAgVMPa7yICaI_V6ZJ"
+uri = "file://attached_assets/generated_audio/tarseed_clarity_original.mp3"
+type = "audio"
+title = "Tarseed clarity reveal"
+description = "Generated music: Original instrumental brand music for the reveal of a modern Arabic financial and accounting product. 15 seconds. Optimistic, confident, polished technology sound with warm plucked s…"
+
+[[outputs]]
+id = "RGIpr8xz34XWWVa92wMeX"
+uri = "file://attached_assets/generated_audio/tarseed_tech_product_original.mp3"
+type = "audio"
+title = "Tarseed technical product reveal"
+description = "Generated music: Original instrumental product-demo music for a modern Arabic fintech and accounting application. 13 seconds. Precise clean electronic rhythm, crisp muted percussion, subtle data-like…"

@@ -22,14 +22,6 @@ export function Scene2() {
 
   return (
     <SceneLayout className="bg-brand-bg bg-mesh overflow-hidden relative items-center justify-center">
-      {/* Intro flash dissolving from Scene 1 */}
-      <motion.div
-        className="absolute inset-0 z-50 bg-white pointer-events-none"
-        initial={{ opacity: 1 }}
-        animate={{ opacity: 0 }}
-        transition={{ duration: 0.5, ease: 'easeOut' }}
-      />
-
       {/* Blurred Backgrounds */}
       {scenes.map((s, i) => (
         <motion.img
@@ -63,7 +55,7 @@ export function Scene2() {
         return (
           <motion.div
             key={`fg-${i}`}
-            className="absolute z-10 w-[94vw] h-auto max-h-[65vh] mt-[10vh] overflow-hidden rounded-xl shadow-[0_20px_60px_rgba(0,102,255,0.4)] border border-brand-cyan/40 bg-black/80 flex justify-center items-center"
+            className="absolute z-10 w-[94vw] h-auto max-h-[65vh] mt-[10vh] overflow-hidden rounded-xl shadow-[0_20px_60px_rgba(0,102,255,0.4)] border border-brand-cyan/40 bg-zinc-900 flex justify-center items-center"
             initial={{ opacity: 0, scale: 0.9, x: i === 0 ? -30 : i === 2 ? 30 : 0, y: i === 1 ? 30 : 0 }}
             animate={
               isActive ? { opacity: 1, scale: 1, x: 0, y: 0 } :

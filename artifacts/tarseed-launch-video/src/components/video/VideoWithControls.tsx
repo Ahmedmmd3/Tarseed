@@ -4,10 +4,12 @@ import VideoTemplate, { SCENE_DURATIONS } from './VideoTemplate';
 import { useSceneControls } from './useSceneControls';
 
 const SCENE_DETAILS: Record<string, { title: string; filePath: string }> = {
-  s1: { title: 'المحاسبة صعبة؟', filePath: 'src/components/video/video_scenes/Scene1.tsx' },
-  s2: { title: 'ولا إحنا معقدينها؟', filePath: 'src/components/video/video_scenes/Scene2.tsx' },
-  s3: { title: 'نغيّر الطريقة', filePath: 'src/components/video/video_scenes/Scene3.tsx' },
-  s4: { title: 'ترصيد قريباً', filePath: 'src/components/video/video_scenes/Scene4.tsx' },
+  s0: { title: 'مقدمة', filePath: 'src/components/video/video_scenes/Scene0.tsx' },
+  s1: { title: 'الأنظمة المعقدة', filePath: 'src/components/video/video_scenes/Scene1.tsx' },
+  s1b: { title: 'نغيّر الطريقة', filePath: 'src/components/video/video_scenes/Scene1b.tsx' },
+  s2: { title: 'ترصيد - الذكاء الاصطناعي', filePath: 'src/components/video/video_scenes/Scene2.tsx' },
+  s3: { title: 'الفواتير والتقارير', filePath: 'src/components/video/video_scenes/Scene3.tsx' },
+  s4: { title: 'الخاتمة', filePath: 'src/components/video/video_scenes/Scene4.tsx' },
 };
 
 const time = (ms: number) => `${Math.floor(ms / 60000)}:${Math.floor((ms % 60000) / 1000).toString().padStart(2, '0')}`;
@@ -65,7 +67,7 @@ export default function VideoWithControls() {
   const visible = !collapsed || hovering;
   return (
     <div className="relative h-screen w-full">
-      <VideoTemplate key={controls.mountKey} durations={controls.durations} paused={controls.paused} muted={muted} onSceneChange={controls.onSceneChange} />
+      <VideoTemplate key={controls.mountKey} durations={controls.durations} paused={controls.paused} muted={muted} onSceneChange={controls.onSceneChange} loop={true} />
       <div className="absolute inset-x-0 bottom-0 z-50 flex h-1/4 flex-col justify-end" onPointerEnter={() => setHovering(true)} onPointerLeave={() => setHovering(false)}>
         <div className={`flex items-center gap-3 bg-black/60 px-4 py-3 backdrop-blur-md transition ${visible ? 'translate-y-0 opacity-100' : 'translate-y-full opacity-0'}`}>
           <button onClick={controls.togglePause} className="text-white/80" aria-label={controls.paused ? 'تشغيل' : 'إيقاف'}>{controls.paused ? <Play /> : <Pause />}</button>

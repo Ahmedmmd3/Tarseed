@@ -48,7 +48,7 @@ export function Scene1() {
     <SceneLayout className="bg-zinc-950 overflow-hidden relative items-center justify-center">
       {/* Glitchy red background */}
       <motion.div
-        className="absolute inset-0 bg-red-950/20 mix-blend-color-burn z-0"
+        className="absolute inset-0 bg-red-950/20 z-0"
         animate={{ opacity: [0.2, 0.6, 0.3, 0.8, 0.4] }}
         transition={{ duration: 0.3, repeat: Infinity, repeatType: 'mirror' }}
       />
@@ -75,7 +75,7 @@ export function Scene1() {
         return (
           <motion.div
             key={`fg-${i}`}
-            className={`absolute z-10 flex justify-center items-center overflow-hidden rounded-xl shadow-[0_10px_40px_rgba(255,0,0,0.3)] border border-red-500/30 bg-black/80 ${s.portrait ? 'h-[75vh] w-auto max-w-[90vw]' : 'w-[94vw] h-auto max-h-[70vh]'}`}
+            className={`absolute z-10 flex justify-center items-center overflow-hidden rounded-xl shadow-[0_10px_40px_rgba(255,0,0,0.3)] border border-red-500/30 bg-zinc-900 ${s.portrait ? 'h-[75vh] w-auto max-w-[90vw]' : 'w-[94vw] h-auto max-h-[70vh]'}`}
             initial={{ opacity: 0, scale: 0.9, y: 30 }}
             animate={
               isActive ? { opacity: 1, scale: 1, y: 0 } :
@@ -115,14 +115,6 @@ export function Scene1() {
           />
         )}
       </AnimatePresence>
-
-      {/* Final Flash into next scene */}
-      <motion.div
-        className="absolute inset-0 z-50 bg-white"
-        initial={{ opacity: 0 }}
-        animate={phase === 4 ? { opacity: [0, 1] } : { opacity: 0 }}
-        transition={{ delay: 1.3, duration: 0.2 }}
-      />
     </SceneLayout>
   );
 }
