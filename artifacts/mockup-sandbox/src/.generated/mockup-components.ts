@@ -2,5 +2,10 @@
 type ModuleMap = Record<string, () => Promise<Record<string, unknown>>>;
 export const modules: ModuleMap = {
   "./components/mockups/wudooh-dashboard/Current.tsx": () => import("../components/mockups/wudooh-dashboard/Current.tsx"),
-  "./components/mockups/wudooh-dashboard/Direction.tsx": () => import("../components/mockups/wudooh-dashboard/Direction.tsx")
+  "./components/mockups/wudooh-dashboard/Direction.tsx": () => import("../components/mockups/wudooh-dashboard/Direction.tsx"),
+  "./components/mockups/accounting-clutter/ComplexPOS.tsx": () => import("../components/mockups/accounting-clutter/ComplexPOS.tsx"),
+  "./components/mockups/accounting-clutter/DashboardChaos.tsx": () => import("../components/mockups/accounting-clutter/DashboardChaos.tsx"),
+  "./components/mockups/accounting-clutter/LegacyERP.tsx": () => import("../components/mockups/accounting-clutter/LegacyERP.tsx"),
+  "./components/mockups/accounting-clutter/MobileLedger.tsx": () => import("../components/mockups/accounting-clutter/MobileLedger.tsx"),
+  "./components/mockups/accounting-clutter/ReportOverload.tsx": () => import("../components/mockups/accounting-clutter/ReportOverload.tsx")
 };

@@ -260,3 +260,73 @@ mtime_ms = 1789021470513
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/8917bd01-57bb-482a-887d-6d237015d550/d06f9e21-8f36-46db-963f-23fd66f8faca"
 storage_version_token = "1789021487384233"
 content_type = "image/jpeg"
+
+[[outputs]]
+id = "WAHfusKvhFPC9lLdme8U3"
+uri = "file://screenshots/accounting-clutter/legacy-erp.jpg"
+type = "image"
+title = "واجهة محاسبية قديمة — ERP"
+description = "جداول رمادية كثيفة وأشرطة أدوات كثيرة."
+logical_id = "a3b6705c-fb56-4433-a4a1-9b4fd977d455"
+content_hash = "sha256:d8fc9c28e2b9eec2e1e7e2c0686297f3cc7d0e97c877600394b0e43a10183466"
+size = 119684
+mtime_ms = 1789139977523
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/a3b6705c-fb56-4433-a4a1-9b4fd977d455/55a573ce-a62b-47ae-be06-ff11f14bfc7e"
+storage_version_token = "1789139995234972"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "HTT9hVaeCKjPQcyUnKfRV"
+uri = "file://screenshots/accounting-clutter/dashboard-chaos.jpg"
+type = "image"
+title = "لوحة محاسبية فوضوية"
+description = "مؤشرات ورسوم وتنبيهات متنافسة بصرياً."
+logical_id = "3b959548-06ac-4aec-898a-1e8339df9b0c"
+content_hash = "sha256:fc8dea8ac5c33613bd5297299ceec9a2dcfd20bf66f6add9bf927113188c4dc7"
+size = 103510
+mtime_ms = 1789139979439
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/3b959548-06ac-4aec-898a-1e8339df9b0c/099bdd98-b5f3-4fce-910d-dcc2f85660a8"
+storage_version_token = "1789139995935860"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "F30YIhS72q-rU921WLK1P"
+uri = "file://screenshots/accounting-clutter/report-overload.jpg"
+type = "image"
+title = "تقارير وفلاتر مزدحمة"
+description = "تقرير كثيف مع نافذة إعدادات تغطي المحتوى."
+logical_id = "11669b72-c917-4546-832d-86535c9961a7"
+content_hash = "sha256:7d92e8c6ec620e0b0aaca45f5ae8927d432a157061fb833c24ed6a76419e97e8"
+size = 99845
+mtime_ms = 1789139981371
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/11669b72-c917-4546-832d-86535c9961a7/fe08bfe9-742e-4afb-ae35-ebe23d9811f0"
+storage_version_token = "1789139996510469"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "WdOuFTAaIhMdvqAeJaCrb"
+uri = "file://screenshots/accounting-clutter/complex-pos.jpg"
+type = "image"
+title = "نقطة بيع معقدة"
+description = "شبكة منتجات وحاسبة واختصارات وتشغيل مزدحم."
+logical_id = "5e29c223-2126-4975-9b7b-bd4bb398b701"
+content_hash = "sha256:092b56ed3fa392a9b6ab2b07a83fd1692cf8b412617f5df5d230cd851ae562b2"
+size = 112979
+mtime_ms = 1789139983219
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/5e29c223-2126-4975-9b7b-bd4bb398b701/29733849-b718-488e-a56d-40747c1a123a"
+storage_version_token = "1789139997127569"
+content_type = "image/jpeg"
+
+[[outputs]]
+id = "YtqW91n3qvcKKt9Dw53N7"
+uri = "file://screenshots/accounting-clutter/mobile-ledger.jpg"
+type = "image"
+title = "تطبيق محاسبي جوال مزدحم"
+description = "واجهة هاتف محشورة بالأرقام والجداول والتنبيهات."
+logical_id = "81d914aa-5de5-4b71-99c7-7464a017c64a"
+content_hash = "sha256:89f4698c6aeeb5ed25941b28ccdd539fcef0d91fe4864fe6cda726ce39b8eca7"
+size = 56070
+mtime_ms = 1789139984835
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/81d914aa-5de5-4b71-99c7-7464a017c64a/76af4e14-0f28-4329-97bb-4eee7b343ee2"
+storage_version_token = "1789139997710449"
+content_type = "image/jpeg"
