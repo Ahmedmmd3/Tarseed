@@ -270,7 +270,9 @@ test.describe('المبيعات والمخزون والمصروفات والعم
         warning: [{
           productId: 102, name: 'أكواب ورقية', currentQuantity: 15, minStock: 10, maxStock: 100, reorderPoint: 20, safetyStock: 10, leadTimeDays: 3, preferredSupplierName: 'مورد ب', preferredSupplierId: 502, urgencyScore: 5, suggestedOrderQuantity: 85
         }],
-        overstock: []
+        overstock: [{
+          productId: 103, name: 'مناديل مبللة', currentQuantity: 140, minStock: 10, maxStock: 100, reorderPoint: 20, safetyStock: 10, leadTimeDays: 4, preferredSupplierName: null, preferredSupplierId: null, urgencyScore: 40, suggestedOrderQuantity: 0
+        }]
       }
     }));
 
@@ -290,10 +292,13 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expect(page.getByTestId('section-inventory-alerts')).toBeVisible();
     await expect(page.getByTestId('panel-critical-stock')).toBeVisible();
     await expect(page.getByTestId('panel-warning-stock')).toBeVisible();
+    await expect(page.getByTestId('panel-overstock')).toBeVisible();
 
     await expect(page.getByTestId('panel-critical-stock')).toContainText('قهوة عربية مختصة');
     await expect(page.getByTestId('panel-critical-stock')).toContainText('الكمية: 2 / الحد الأدنى: 5');
     await expect(page.getByTestId('panel-warning-stock')).toContainText('أكواب ورقية');
+    await expect(page.getByTestId('panel-overstock')).toContainText('مناديل مبللة');
+    await expect(page.getByTestId('panel-overstock')).toContainText('الكمية: 140 / الحد الأعلى: 100');
 
     // 3. Click link to order
     await page.getByTestId('panel-warning-stock').getByRole('link', { name: 'إنشاء أمر شراء' }).click();

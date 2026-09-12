@@ -17,7 +17,7 @@ import { todayLocalDate } from '@/lib/date';
 
 type Product = { id: number | string; name: string; vatRate?: number | string };
 type Warehouse = { id: number | string; name: string; status?: string };
-type Supplier = { id: number | string; name: string };
+type Supplier = { id: number | string; name: string; creditLimit?: number | string };
 type PurchaseOrder = {
   id: number | string;
   orderNumber: string;
@@ -276,7 +276,16 @@ function SupplierPaymentsPanel() {
             <TableBody>
               {supplierRows.map(({ supplier, total, paid, remaining, payables }) => (
                 <TableRow key={supplier.id} data-testid={`supplier-balance-row-${supplier.id}`}>
-                  <TableCell className="font-bold text-slate-900">{supplier.name}</TableCell>
+                  <TableCell className="font-bold text-slate-900">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span>{supplier.name}</span>
+                      {Number(supplier.creditLimit) > 0 && remaining > Number(supplier.creditLimit) && (
+                        <span className="rounded-full bg-rose-100 px-2 py-1 text-[11px] font-bold text-rose-700" data-testid={`supplier-credit-limit-exceeded-${supplier.id}`}>
+                          تجاوز حد الائتمان
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
                   <TableCell>{formatCurrency(total)}</TableCell>
                   <TableCell className="font-bold text-emerald-700">{formatCurrency(paid)}</TableCell>
                   <TableCell className="font-black text-rose-700" data-testid={`supplier-remaining-${supplier.id}`}>
@@ -802,6 +811,17 @@ function PurchaseReceiptsWorkspace() {
 }
 
 export default function Purchases() {
+  const { currentUser } = useStore();
+  const canUseAccounting = currentUser?.roleId === 'owner' || currentUser?.permissions.accounting === true;
+  const supplierPayables = useCrud<SupplierPayable>('receivables', canUseAccounting);
+  const supplierDebt = useCallback((supplier: Supplier) => {
+    const related = supplierPayables.data.filter((item) =>
+      item.type === 'payable' && item.purchaseOrderId
+      && ((item.supplierId != null && String(item.supplierId) === String(supplier.id))
+        || String(item.supplierName ?? item.party).trim() === supplier.name.trim()));
+    return Math.max(0, related.reduce((sum, item) => sum + payableRemaining(item), 0));
+  }, [supplierPayables.data]);
+
   return (
     <div className="flex flex-col gap-6" data-testid="page-purchases">
       <div className="flex items-center justify-between">
@@ -831,10 +851,33 @@ export default function Purchases() {
               title="إدارة الموردين"
               fields={[
                 { key: 'name', label: 'اسم المورد', required: true },
-                { key: 'contactPerson', label: 'الشخص المسؤول' },
+                { key: 'vendorCode', label: 'رمز المورد', helpText: 'رمز داخلي للمراجعة', showInTable: false },
+                { key: 'contactPerson', label: 'الشخص المسؤول', showInTable: false },
                 { key: 'phone', label: 'رقم الهاتف' },
-                { key: 'email', label: 'البريد الإلكتروني' },
+                { key: 'email', label: 'البريد الإلكتروني', showInTable: false },
+                { key: 'website', label: 'الموقع الإلكتروني', showInTable: false },
+                { key: 'taxNumber', label: 'الرقم الضريبي', helpText: 'مطلوب للفاتورة الإلكترونية', showInTable: false },
+                { key: 'commercialReg', label: 'رقم السجل التجاري', showInTable: false },
+                { key: 'address', label: 'العنوان', showInTable: false },
+                { key: 'city', label: 'المدينة', showInTable: false },
+                { key: 'country', label: 'الدولة', defaultValue: 'السعودية', showInTable: false },
+                { key: 'currency', label: 'العملة المفضلة', type: 'select', options: [{ value: 'SAR', label: 'ريال سعودي' }, { value: 'EGP', label: 'جنيه مصري' }, { value: 'USD', label: 'دولار أمريكي' }, { value: 'EUR', label: 'يورو' }, { value: 'AED', label: 'درهم إماراتي' }], defaultValue: 'SAR', showInTable: false },
+                { key: 'paymentTerms', label: 'شروط الدفع', type: 'select', options: [{ value: 'immediate', label: 'فوري' }, { value: 'net15', label: 'صافي 15 يوم' }, { value: 'net30', label: 'صافي 30 يوم' }, { value: 'net60', label: 'صافي 60 يوم' }, { value: 'net90', label: 'صافي 90 يوم' }], defaultValue: 'net30', renderCell: (value) => <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-bold text-sky-700">{({ immediate: 'فوري', net15: 'صافي 15 يوم', net30: 'صافي 30 يوم', net60: 'صافي 60 يوم', net90: 'صافي 90 يوم' } as Record<string, string>)[String(value)] ?? String(value || '—')}</span> },
+                { key: 'creditLimit', label: 'حد الائتمان', type: 'number', helpText: 'أقصى مديونية مسموحة لهذا المورد', showInTable: false },
+                { key: 'bankName', label: 'اسم البنك', showInTable: false },
+                { key: 'iban', label: 'رقم الآيبان (IBAN)', showInTable: false },
+                { key: 'category', label: 'فئة المورد', type: 'select', options: [{ value: 'raw_materials', label: 'مواد خام' }, { value: 'services', label: 'خدمات' }, { value: 'technology', label: 'تقنية' }, { value: 'equipment', label: 'معدات' }, { value: 'other', label: 'أخرى' }], showInTable: false },
+                { key: 'rating', label: 'التقييم', type: 'select', options: [{ value: '5', label: '⭐⭐⭐⭐⭐' }, { value: '4', label: '⭐⭐⭐⭐' }, { value: '3', label: '⭐⭐⭐' }, { value: '2', label: '⭐⭐' }, { value: '1', label: '⭐' }] },
+                { key: 'status', label: 'الحالة', type: 'select', options: [{ value: 'active', label: 'نشط' }, { value: 'suspended', label: 'موقف مؤقتاً' }, { value: 'blacklisted', label: 'محظور' }], defaultValue: 'active', renderCell: (value) => { const status = String(value || 'active'); const label = status === 'active' ? 'نشط' : status === 'suspended' ? 'موقف مؤقتاً' : 'محظور'; const tone = status === 'active' ? 'bg-emerald-100 text-emerald-700' : status === 'suspended' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700'; return <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${tone}`}>{label}</span>; } },
+                { key: 'startDate', label: 'تاريخ بدء التعامل', type: 'date', showInTable: false },
+                { key: 'notes', label: 'ملاحظات داخلية', type: 'textarea', showInTable: false },
               ]}
+              extraColumns={[{ key: 'totalDebt', label: 'إجمالي المديونية' }]}
+              renderExtraCells={(supplier: Supplier) => (
+                <TableCell className="font-black text-rose-700" data-testid={`supplier-directory-debt-${supplier.id}`}>
+                  {canUseAccounting ? (supplierPayables.loading ? 'جارٍ التحميل...' : formatCurrency(supplierDebt(supplier))) : '—'}
+                </TableCell>
+              )}
             />
           </div>
         </TabsContent>

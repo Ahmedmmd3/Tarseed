@@ -1,0 +1,111 @@
+في artifacts/wudooh/src/pages/purchases.tsx
+عدّل CrudTable الخاص بالموردين — بدّل الـ fields الأربعة
+الحالية بهذه القائمة الكاملة:
+
+fields={[
+  // البيانات الأساسية
+  { key: 'name', label: 'اسم المورد', required: true },
+  { key: 'vendorCode', label: 'رمز المورد', helpText: 'رمز داخلي للمراجعة' },
+  { key: 'contactPerson', label: 'الشخص المسؤول' },
+  { key: 'phone', label: 'رقم الهاتف' },
+  { key: 'email', label: 'البريد الإلكتروني' },
+  { key: 'website', label: 'الموقع الإلكتروني' },
+
+  // البيانات القانونية
+  { key: 'taxNumber', label: 'الرقم الضريبي', helpText: 'مطلوب للفاتورة الإلكترونية' },
+  { key: 'commercialReg', label: 'رقم السجل التجاري' },
+
+  // العنوان
+  { key: 'address', label: 'العنوان' },
+  { key: 'city', label: 'المدينة' },
+  { key: 'country', label: 'الدولة', defaultValue: 'السعودية' },
+
+  // البيانات المالية
+  {
+    key: 'currency',
+    label: 'العملة المفضلة',
+    type: 'select',
+    options: [
+      { value: 'SAR', label: 'ريال سعودي' },
+      { value: 'EGP', label: 'جنيه مصري' },
+      { value: 'USD', label: 'دولار أمريكي' },
+      { value: 'EUR', label: 'يورو' },
+      { value: 'AED', label: 'درهم إماراتي' },
+    ],
+    defaultValue: 'SAR'
+  },
+  {
+    key: 'paymentTerms',
+    label: 'شروط الدفع',
+    type: 'select',
+    options: [
+      { value: 'immediate', label: 'فوري' },
+      { value: 'net15', label: 'صافي 15 يوم' },
+      { value: 'net30', label: 'صافي 30 يوم' },
+      { value: 'net60', label: 'صافي 60 يوم' },
+      { value: 'net90', label: 'صافي 90 يوم' },
+    ],
+    defaultValue: 'net30'
+  },
+  {
+    key: 'creditLimit',
+    label: 'حد الائتمان',
+    type: 'number',
+    helpText: 'أقصى مديونية مسموحة لهذا المورد'
+  },
+
+  // البيانات البنكية
+  { key: 'bankName', label: 'اسم البنك' },
+  { key: 'iban', label: 'رقم الآيبان (IBAN)' },
+
+  // التصنيف
+  {
+    key: 'category',
+    label: 'فئة المورد',
+    type: 'select',
+    options: [
+      { value: 'raw_materials', label: 'مواد خام' },
+      { value: 'services', label: 'خدمات' },
+      { value: 'technology', label: 'تقنية' },
+      { value: 'equipment', label: 'معدات' },
+      { value: 'other', label: 'أخرى' },
+    ]
+  },
+  {
+    key: 'rating',
+    label: 'تقييم المورد',
+    type: 'select',
+    options: [
+      { value: '5', label: '⭐⭐⭐⭐⭐ ممتاز' },
+      { value: '4', label: '⭐⭐⭐⭐ جيد جداً' },
+      { value: '3', label: '⭐⭐⭐ جيد' },
+      { value: '2', label: '⭐⭐ مقبول' },
+      { value: '1', label: '⭐ ضعيف' },
+    ]
+  },
+  {
+    key: 'status',
+    label: 'حالة المورد',
+    type: 'select',
+    options: [
+      { value: 'active', label: 'نشط' },
+      { value: 'suspended', label: 'موقف مؤقتاً' },
+      { value: 'blacklisted', label: 'محظور' },
+    ],
+    defaultValue: 'active'
+  },
+  { key: 'startDate', label: 'تاريخ بدء التعامل', type: 'date' },
+  { key: 'notes', label: 'ملاحظات داخلية', type: 'textarea' },
+]}
+
+أضف في جدول عرض الموردين هذه الأعمدة:
+- اسم المورد
+- الهاتف
+- شروط الدفع (badge)
+- التقييم (نجوم)
+- الحالة (badge ملون: أخضر/برتقالي/أحمر)
+- إجمالي المديونية (من SupplierPaymentsPanel)
+
+أضف أيضاً في SupplierPaymentsPanel بجانب كل مورد:
+- badge يظهر لو المديونية تجاوزت creditLimit باللون الأحمر
+  "تجاوز حد الائتمان"

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, FileText, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
+import { AlertTriangle, ArrowDownRight, ArrowLeft, ArrowUpRight, BarChart3, Boxes, BriefcaseBusiness, Check, CheckCircle2, ClipboardList, Copy, FileText, LoaderCircle, PackageOpen, ReceiptText, ShoppingCart, Sparkles, Store, TrendingUp, Truck, UsersRound, Wallet, type LucideIcon } from 'lucide-react';
 import { Link } from 'wouter';
 import { useStore, type Journal } from '@/context/store';
 import { Button } from '@/components/ui/button';
@@ -356,7 +356,7 @@ export default function Overview() {
              <div><p className="text-xs font-bold text-teal-200">المخزون وإعادة الطلب</p><h2 id="inventory-alerts-heading" className="mt-1 text-xl font-black sm:text-2xl">تنبيهات المخزون</h2></div>
             <Link href="/inventory" className="hidden items-center gap-1 text-xs font-bold text-teal-200 transition hover:text-white sm:inline-flex" data-testid="link-inventory-details">إدارة المنتجات <ArrowLeft className="h-3.5 w-3.5" /></Link>
           </div>
-          {reorderAlerts.critical.length === 0 && reorderAlerts.warning.length === 0 ? (
+          {reorderAlerts.critical.length === 0 && reorderAlerts.warning.length === 0 && reorderAlerts.overstock.length === 0 ? (
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center shadow-xl shadow-slate-950/10">
               <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
                <h3 className="mt-3 font-black text-emerald-900">المخزون بوضع جيد</h3>
@@ -392,6 +392,21 @@ export default function Overview() {
                         <Link href={`/purchase-orders?productId=${item.productId}&quantity=${item.suggestedOrderQuantity}&supplierId=${item.preferredSupplierId || ''}`} className="inline-flex h-8 items-center justify-center rounded-lg bg-amber-100 px-3 text-xs font-bold text-amber-800 transition hover:bg-amber-200">
                           إنشاء أمر شراء
                         </Link>
+                      </div>
+                    ))}
+                  </div>
+                </DataPanel>
+              )}
+              {reorderAlerts.overstock.length > 0 && (
+                <DataPanel title="منتجات مخزونها زائد" subtitle="تجاوزت الحد الأعلى المحدد" icon={TrendingUp} testId="panel-overstock" className="border-blue-200 bg-blue-50/50">
+                  <div className="space-y-2">
+                    {reorderAlerts.overstock.map((item) => (
+                      <div key={item.productId} className="flex flex-col gap-2 rounded-xl bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{item.name}</p>
+                          <p className="mt-0.5 text-xs font-medium text-blue-700">الكمية: {item.currentQuantity} / الحد الأعلى: {item.maxStock}</p>
+                        </div>
+                        <span className="rounded-lg bg-blue-100 px-3 py-1.5 text-xs font-bold text-blue-800">مخزون زائد</span>
                       </div>
                     ))}
                   </div>

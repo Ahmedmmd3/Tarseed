@@ -3,6 +3,7 @@ import { useCrud } from '@/hooks/use-crud';
 import { useStore } from '@/context/store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -16,12 +17,14 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 export type FieldDef = {
   key: string;
   label: string;
-  type?: 'text' | 'number' | 'date' | 'select' | 'searchable-select';
+  type?: 'text' | 'number' | 'date' | 'select' | 'searchable-select' | 'textarea';
   options?: { label: string; value: string | number }[];
   required?: boolean;
   defaultValue?: string | number;
   disabled?: boolean;
   helpText?: string;
+  showInTable?: boolean;
+  renderCell?: (value: unknown, item: any) => ReactNode;
 };
 
 function SearchableSelectField({
@@ -279,6 +282,7 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
   const [isSyncingJournals, setIsSyncingJournals] = useState(false);
   const [journalSyncMessage, setJournalSyncMessage] = useState('');
   const [journalSyncError, setJournalSyncError] = useState('');
+  const visibleFields = fields.filter((field) => field.showInTable !== false);
 
   const handleSyncJournals = async () => {
     if (!currentUser || isSyncingJournals) return;
@@ -370,7 +374,7 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
           item={sourceAdjustment?.item ?? null}
           fields={fields.map((field) => ({
             ...field,
-            type: field.type === 'searchable-select' ? 'select' : field.type,
+            type: field.type === 'searchable-select' ? 'select' : field.type === 'textarea' ? 'text' : field.type,
           })) as Array<Omit<FieldDef, 'type'> & { type?: 'text' | 'number' | 'date' | 'select' }>}
           onOpenChange={(nextOpen) => { if (!nextOpen) setSourceAdjustment(null); }}
           onCompleted={load}
@@ -446,6 +450,15 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
                           disabled={f.disabled}
                           onChange={(value) => setFormData({ ...formData, [f.key]: value })}
                         />
+                      ) : f.type === 'textarea' ? (
+                        <Textarea
+                          id={f.key}
+                          required={f.required}
+                          disabled={f.disabled}
+                          value={formData[f.key] ?? ''}
+                          className="min-h-24 disabled:cursor-not-allowed disabled:opacity-50 disabled:bg-slate-50"
+                          onChange={(e) => setFormData({ ...formData, [f.key]: e.target.value })}
+                        />
                       ) : (
                         <Input
                           id={f.key}
@@ -493,10 +506,10 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
       )}
 
       <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-        <Table className={fields.length + extraColumns.length >= 4 ? 'min-w-[920px]' : 'min-w-[520px]'}>
+        <Table className={visibleFields.length + extraColumns.length >= 4 ? 'min-w-[920px]' : 'min-w-[520px]'}>
           <TableHeader>
             <TableRow>
-              {fields.map((f) => (
+              {visibleFields.map((f) => (
                 <TableHead key={f.key}>{f.label}</TableHead>
               ))}
               {extraColumns.map((column) => (
@@ -508,9 +521,11 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
           <TableBody>
             {data.map((item) => (
               <TableRow key={item.id}>
-                {fields.map((f) => (
+                {visibleFields.map((f) => (
                   <TableCell key={f.key}>
-                    {f.type === 'select' || f.type === 'searchable-select'
+                    {f.renderCell
+                      ? f.renderCell(item[f.key], item)
+                      : f.type === 'select' || f.type === 'searchable-select'
                       ? f.options?.find((o) => String(o.value) === String(item[f.key]))?.label || item[f.key]
                       : item[f.key]}
                   </TableCell>
@@ -553,7 +568,7 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
             ))}
             {data.length === 0 && !loading && (
               <TableRow>
-                <TableCell colSpan={fields.length + extraColumns.length + (!readOnly || isAccountingSource ? 1 : 0)} className="h-24 text-center text-slate-500">
+                <TableCell colSpan={visibleFields.length + extraColumns.length + (!readOnly || isAccountingSource ? 1 : 0)} className="h-24 text-center text-slate-500">
                   لا توجد بيانات
                 </TableCell>
               </TableRow>
