@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Archive, BookOpen, CalendarDays, CheckCircle2, ChevronLeft, CircleDollarSign, FileDown, FileSpreadsheet, FileText, Landmark, Loader2, ReceiptText, RefreshCw, Scale, WalletCards, type LucideIcon } from 'lucide-react';
+import { Archive, BookOpen, CalendarDays, CheckCircle2, ChevronLeft, CircleDollarSign, FileDown, FileSpreadsheet, FileText, Landmark, Loader2, ReceiptText, RefreshCw, Scale, WalletCards, Boxes, type LucideIcon } from 'lucide-react';
 import { utils, write, writeFile } from 'xlsx';
 import jsPDF from 'jspdf';
 import JSZip from 'jszip';
@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useToast } from '@/hooks/use-toast';
 import { todayLocalDate } from '@/lib/date';
 
-type ExportReportId = 'journals' | 'trial' | 'ledger' | 'invoices' | 'expenses' | 'income' | 'balance' | 'zip';
+type ExportReportId = 'journals' | 'trial' | 'ledger' | 'invoices' | 'expenses' | 'income' | 'balance' | 'inventory-status' | 'zip';
 type ExportStatus = 'idle' | 'loading' | 'success' | 'error';
 
 type JournalLine = {
@@ -73,12 +73,34 @@ type Summary = {
   };
 };
 
+type ReorderAlertItem = {
+  productId: number | string;
+  name: string;
+  currentQuantity: number;
+  minStock: number;
+  maxStock: number;
+  reorderPoint: number;
+  safetyStock: number;
+  leadTimeDays: number;
+  preferredSupplierName?: string;
+  preferredSupplierId?: number | string;
+  urgencyScore: number;
+  suggestedOrderQuantity: number;
+};
+
+type ReorderAlertsResponse = {
+  critical: ReorderAlertItem[];
+  warning: ReorderAlertItem[];
+  overstock: ReorderAlertItem[];
+};
+
 type Dataset = {
   accounts: Account[];
   journals: ExportJournal[];
   invoices: ExportInvoice[];
   expenses: ExportExpense[];
   summary: Summary | null;
+  inventoryAlerts: ReorderAlertsResponse | null;
 };
 
 type ReportDefinition = {
@@ -98,6 +120,7 @@ const reportDefinitions: ReportDefinition[] = [
   { id: 'expenses', title: 'المصاريف', description: 'سجل المصاريف مصنفة بالفئات', icon: WalletCards, tone: 'rose', fileName: 'المصاريف' },
   { id: 'income', title: 'قائمة الدخل', description: 'الإيرادات والمصاريف وصافي الربح', icon: CircleDollarSign, tone: 'emerald', fileName: 'قائمة_الدخل' },
   { id: 'balance', title: 'الميزانية العمومية', description: 'الأصول والخصوم وحقوق الملكية', icon: Landmark, tone: 'amber', fileName: 'الميزانية_العمومية' },
+  { id: 'inventory-status', title: 'تقرير حالة المخزون', description: 'حالة الأرصدة والكميات المقترحة للطلب', icon: Boxes, tone: 'violet', fileName: 'تقرير_حالة_المخزون' },
   { id: 'zip', title: 'تصدير شامل ZIP', description: 'صدّر كل التقارير دفعة واحدة في ملف ZIP', icon: Archive, tone: 'navy', fileName: 'ترصيد_تصدير' },
 ];
 
@@ -111,7 +134,7 @@ export default function Export() {
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
   const [toDate, setToDate] = useState(todayLocalDate());
   const [selectedAccountId, setSelectedAccountId] = useState('all');
-  const [dataset, setDataset] = useState<Dataset>({ accounts: [], journals: [], invoices: [], expenses: [], summary: null });
+  const [dataset, setDataset] = useState<Dataset>({ accounts: [], journals: [], invoices: [], expenses: [], summary: null, inventoryAlerts: null });
   const [status, setStatus] = useState<ExportStatus>('idle');
   const [error, setError] = useState('');
   const [exportError, setExportError] = useState('');
@@ -399,23 +422,32 @@ function LoadingState() {
 
 async function loadExportDataset(from: string, to: string, dataGeneration: number): Promise<Dataset> {
   const headers = { 'X-Wudooh-Data-Generation': String(dataGeneration) };
-  const [journalsResponse, accountsResponse, invoicesResponse, expensesResponse, summaryResponse] = await Promise.all([
+  const [journalsResponse, accountsResponse, invoicesResponse, expensesResponse, summaryResponse, alertsResponse] = await Promise.all([
     fetch('/api/data/journalEntries', { credentials: 'include', headers }),
     fetch('/api/data/accounts', { credentials: 'include', headers }),
     fetch('/api/data/invoices', { credentials: 'include', headers }),
     fetch('/api/data/expenses', { credentials: 'include', headers }),
     fetch(`/api/accounting/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { credentials: 'include', headers }),
+    fetch('/api/inventory/reorder-alerts', { credentials: 'include', headers }),
   ]);
   const responses = [journalsResponse, accountsResponse, invoicesResponse, expensesResponse, summaryResponse];
   const failed = responses.find((response) => !response.ok);
   if (failed) throw new Error('تعذر تحميل سجل المنشأة. تحقق من الاتصال ثم أعد المحاولة.');
-  const [journalsPayload, accountsPayload, invoicesPayload, expensesPayload, summaryPayload] = await Promise.all(responses.map((response) => response.json()));
+  const [journalsPayload, accountsPayload, invoicesPayload, expensesPayload, summaryPayload, alertsPayload] = await Promise.all([
+    journalsResponse.json(),
+    accountsResponse.json(),
+    invoicesResponse.json(),
+    expensesResponse.json(),
+    summaryResponse.json(),
+    alertsResponse.ok ? alertsResponse.json() : Promise.resolve(null),
+  ]);
   return {
     accounts: extractArray(accountsPayload).map(normalizeAccount),
     journals: extractArray(journalsPayload).map(normalizeJournal).filter((journal) => journal.date >= from && journal.date <= to),
     invoices: extractArray(invoicesPayload).map(normalizeInvoice).filter((invoice) => invoice.date >= from && invoice.date <= to),
     expenses: extractArray(expensesPayload).map(normalizeExpense).filter((expense) => expense.date >= from && expense.date <= to),
     summary: normalizeSummary(summaryPayload),
+    inventoryAlerts: alertsPayload as ReorderAlertsResponse | null,
   };
 }
 
@@ -678,6 +710,16 @@ function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: 
     المبلغ: sumReportColumn(expenseDetailRows, 'المبلغ'),
     'طريقة الدفع': '',
   });
+
+  const inventoryRows = (dataset.inventoryAlerts ? [
+    ...dataset.inventoryAlerts.critical.map(item => ({ 'المنتج': item.name, 'الكمية الحالية': item.currentQuantity, 'الحد الأدنى': item.minStock, 'نقطة الطلب': item.reorderPoint, 'مخزون الأمان': item.safetyStock, 'الحد الأعلى': item.maxStock, 'مدة التوريد': item.leadTimeDays, 'الحالة': 'حرج', 'المورد المفضل': item.preferredSupplierName || '', 'الكمية المقترحة للطلب': item.suggestedOrderQuantity })),
+    ...dataset.inventoryAlerts.warning.map(item => ({ 'المنتج': item.name, 'الكمية الحالية': item.currentQuantity, 'الحد الأدنى': item.minStock, 'نقطة الطلب': item.reorderPoint, 'مخزون الأمان': item.safetyStock, 'الحد الأعلى': item.maxStock, 'مدة التوريد': item.leadTimeDays, 'الحالة': 'تحذير', 'المورد المفضل': item.preferredSupplierName || '', 'الكمية المقترحة للطلب': item.suggestedOrderQuantity })),
+    ...dataset.inventoryAlerts.overstock.map(item => ({ 'المنتج': item.name, 'الكمية الحالية': item.currentQuantity, 'الحد الأدنى': item.minStock, 'نقطة الطلب': item.reorderPoint, 'مخزون الأمان': item.safetyStock, 'الحد الأعلى': item.maxStock, 'مدة التوريد': item.leadTimeDays, 'الحالة': 'فائض', 'المورد المفضل': item.preferredSupplierName || '', 'الكمية المقترحة للطلب': item.suggestedOrderQuantity }))
+  ] : []).sort((a, b) => {
+    const statusOrder: Record<string, number> = { 'حرج': 1, 'تحذير': 2, 'فائض': 3 };
+    return (statusOrder[a['الحالة']] || 9) - (statusOrder[b['الحالة']] || 9) || a['المنتج'].localeCompare(b['المنتج']);
+  });
+
   return {
     journalRows,
     trialRows,
@@ -686,6 +728,7 @@ function buildReportRows(dataset: Dataset, journals: ExportJournal[], accounts: 
     expenseRows,
     incomeRows,
     balanceRows,
+    inventoryRows,
   };
 }
 
@@ -716,6 +759,7 @@ function rowsForReport(reportId: ExportableReportId, rows: ReportRows): Record<s
     expenses: rows.expenseRows,
     income: rows.incomeRows,
     balance: rows.balanceRows,
+    'inventory-status': rows.inventoryRows,
   }[reportId];
 }
 

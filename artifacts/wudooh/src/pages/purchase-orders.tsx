@@ -379,6 +379,8 @@ export default function PurchaseOrders() {
 
   const [form, setForm] = useState(defaultForm());
   const [items, setItems] = useState<PurchaseOrderItem[]>([defaultItem()]);
+  const [hasHandledQueryParams, setHasHandledQueryParams] = useState(false);
+  const [suggestedQuantity, setSuggestedQuantity] = useState<number | null>(null);
 
   const loadExpiringShareAlerts = async () => {
     if (!currentUser) {
@@ -402,6 +404,52 @@ export default function PurchaseOrders() {
     void loadExpiringShareAlerts();
   }, [currentUser]);
 
+  useEffect(() => {
+    if (hasHandledQueryParams || productsCrud.loading || suppliersCrud.loading || productsCrud.data.length === 0) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const productId = params.get('productId');
+    const quantity = params.get('quantity');
+    const supplierId = params.get('supplierId');
+
+    if (productId && !open && !editingId) {
+      const product = productsCrud.data.find(p => String(p.id) === productId);
+      if (product) {
+        setHasHandledQueryParams(true);
+        const supplier = supplierId ? suppliersCrud.data.find(s => String(s.id) === supplierId) : undefined;
+        const initialQty = quantity && Number(quantity) > 0 ? Number(quantity) : 1;
+        const parsedSuggestedQuantity = quantity && Number(quantity) > 0 ? Number(quantity) : null;
+        setSuggestedQuantity(parsedSuggestedQuantity);
+
+        const unitCost = Number(product.cost ?? product.unitPrice ?? 0);
+        const vatRate = product.vatRate !== undefined ? Number(product.vatRate) : 15;
+        const lineNet = initialQty * unitCost;
+        const vatAmount = lineNet * (vatRate / 100);
+
+        setForm({
+          ...defaultForm(),
+          supplierId: supplier ? String(supplier.id) : '',
+          supplierName: supplier ? supplier.name : '',
+        });
+        setItems([{
+          ...defaultItem(),
+          productId: product.id,
+          productName: product.name,
+          quantity: initialQty,
+          unitCost,
+          vatRate,
+          lineNet,
+          vatAmount,
+          total: lineNet + vatAmount
+        }]);
+        setOpen(true);
+
+        const newUrl = window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+      }
+    }
+  }, [hasHandledQueryParams, productsCrud.loading, suppliersCrud.loading, productsCrud.data, suppliersCrud.data, open, editingId]);
+
   const supplierDecisionSummary = useMemo(() => {
     const summary = { confirmed: 0, rejected: 0, pending: 0, recorded: 0 };
     for (const order of purchaseOrdersCrud.data) {
@@ -418,6 +466,7 @@ export default function PurchaseOrders() {
     setForm(defaultForm());
     setItems([defaultItem()]);
     setEditingId(null);
+    setSuggestedQuantity(null);
   };
 
   const openEdit = (po: PurchaseOrder) => {
@@ -1349,12 +1398,16 @@ export default function PurchaseOrders() {
                         min="0.01"
                         step="any"
                         className="h-9"
+                         placeholder={suggestedQuantity != null && index === 0 ? String(suggestedQuantity) : undefined}
                         value={item.quantity || ''}
                         onChange={(e) =>
                           updateItem(index, 'quantity', e.target.value)
                         }
                         data-testid={`po-item-qty-${index}`}
                       />
+                       {suggestedQuantity != null && index === 0 && (
+                         <p className="text-[11px] leading-5 text-indigo-700">كمية مقترحة بناءً على إعدادات المخزون: {suggestedQuantity}</p>
+                       )}
                     </div>
                     <div className="col-span-4 sm:col-span-2 space-y-1">
                       <Label className="text-xs">التكلفة (الوحدة)</Label>

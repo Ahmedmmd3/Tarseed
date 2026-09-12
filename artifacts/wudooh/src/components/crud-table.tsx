@@ -19,6 +19,7 @@ export type FieldDef = {
   required?: boolean;
   defaultValue?: string | number;
   disabled?: boolean;
+  helpText?: string;
 };
 
 interface CrudTableProps {
@@ -335,7 +336,16 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
                 <form onSubmit={handleSubmit} className="flex flex-col gap-4 py-4">
                   {fields.map((f) => (
                     <div key={f.key} className="flex flex-col gap-2">
-                      <Label htmlFor={f.key}>{f.label}</Label>
+                      {f.helpText ? (
+                        <Label htmlFor={f.key} className="flex items-center gap-1.5">
+                          <span>{f.label}</span>
+                          <span className="text-slate-400" title={f.helpText} aria-hidden="true">
+                            <AlertCircle className="h-3.5 w-3.5" />
+                          </span>
+                        </Label>
+                      ) : (
+                        <Label htmlFor={f.key}>{f.label}</Label>
+                      )}
                       {f.type === 'select' ? (
                         <select
                           id={f.key}

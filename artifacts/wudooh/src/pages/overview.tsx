@@ -49,6 +49,27 @@ type DashboardAccountingSummary = {
 
 const weeklySummaryStoragePrefix = 'wudooh-weekly-summary-v1';
 
+type ReorderAlertItem = {
+  productId: number | string;
+  name: string;
+  currentQuantity: number;
+  minStock: number;
+  maxStock: number;
+  reorderPoint: number;
+  safetyStock: number;
+  leadTimeDays: number;
+  preferredSupplierName?: string;
+  preferredSupplierId?: number | string;
+  urgencyScore: number;
+  suggestedOrderQuantity: number;
+};
+
+type ReorderAlertsResponse = {
+  critical: ReorderAlertItem[];
+  warning: ReorderAlertItem[];
+  overstock: ReorderAlertItem[];
+};
+
 export default function Overview() {
   const { accounts, receivables, journals, currentUser, connectionMode } = useStore();
   const [weeklySummary, setWeeklySummary] = useState('');
@@ -59,6 +80,8 @@ export default function Overview() {
   const [copyConfirmed, setCopyConfirmed] = useState(false);
   const [accountingSummary, setAccountingSummary] = useState<DashboardAccountingSummary | null>(null);
   const [dashboardJournals, setDashboardJournals] = useState<Journal[]>(journals);
+  const [reorderAlerts, setReorderAlerts] = useState<ReorderAlertsResponse | null>(null);
+  const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
   const weeklySummaryIdentityRef = useRef('');
   const canReadAccounting = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.accounting === true));
   const localRevenue = accounts.filter((account) => account.type === 'revenue').reduce((sum, account) => sum + account.balance, 0);
@@ -207,6 +230,36 @@ export default function Overview() {
     setWeeklySummaryGeneratedAt(stored.generatedAt);
   }, [canUseWeeklySummary, currentUser?.id, currentUser?.organizationId]);
 
+  useEffect(() => {
+    if (connectionMode !== 'remote' || !canReadInventory) {
+      setReorderAlerts(null);
+      setIsLoadingAlerts(false);
+      return;
+    }
+    let active = true;
+    setIsLoadingAlerts(true);
+    void (async () => {
+      try {
+        const response = await fetch('/api/inventory/reorder-alerts', {
+          credentials: 'include',
+          headers: {
+            'X-Wudooh-Data-Generation': String(currentUser?.dataGeneration ?? 0),
+          },
+        });
+        if (!response.ok) return;
+        const payload = await response.json() as ReorderAlertsResponse;
+        if (active) {
+          setReorderAlerts(payload);
+        }
+      } catch {
+        // Suppress failure, fallback handled.
+      } finally {
+        if (active) setIsLoadingAlerts(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [canReadInventory, connectionMode, currentUser?.dataGeneration]);
+
   const generateWeeklySummary = async () => {
     if (isGeneratingWeeklySummary) return;
     const requestIdentity = weeklySummaryIdentityRef.current;
@@ -294,6 +347,58 @@ export default function Overview() {
             <div><h2 className="font-black text-amber-950">هناك أوامر شراء متأخرة</h2><p className="mt-1 text-sm text-amber-800">{overduePurchaseOrders.length.toLocaleString('ar-SA')} أمر تجاوز تاريخ التسليم المتوقع وما زال ينتظر الاستلام.</p></div>
           </div>
           <Link href="/purchase-orders" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-amber-900 px-4 text-sm font-bold text-white transition hover:bg-amber-950">مراجعة الأوامر <ArrowLeft className="h-4 w-4" /></Link>
+        </section>
+      )}
+
+      {canReadInventory && !isLoadingAlerts && reorderAlerts && (
+        <section aria-labelledby="inventory-alerts-heading" data-testid="section-inventory-alerts">
+          <div className="mb-4 flex items-end justify-between gap-4 text-white">
+             <div><p className="text-xs font-bold text-teal-200">المخزون وإعادة الطلب</p><h2 id="inventory-alerts-heading" className="mt-1 text-xl font-black sm:text-2xl">تنبيهات المخزون</h2></div>
+            <Link href="/inventory" className="hidden items-center gap-1 text-xs font-bold text-teal-200 transition hover:text-white sm:inline-flex" data-testid="link-inventory-details">إدارة المنتجات <ArrowLeft className="h-3.5 w-3.5" /></Link>
+          </div>
+          {reorderAlerts.critical.length === 0 && reorderAlerts.warning.length === 0 ? (
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-6 text-center shadow-xl shadow-slate-950/10">
+              <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-500" />
+               <h3 className="mt-3 font-black text-emerald-900">المخزون بوضع جيد</h3>
+              <p className="mt-1 text-sm text-emerald-700">لا توجد منتجات قريبة من النفاد وتحتاج للطلب حالياً.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              {reorderAlerts.critical.length > 0 && (
+                 <DataPanel title="منتجات نفد مخزونها تقريباً" subtitle="وصلت إلى الحد الأدنى أو أقل" icon={AlertTriangle} testId="panel-critical-stock" className="border-rose-200 bg-rose-50/50">
+                  <div className="space-y-2">
+                    {reorderAlerts.critical.map((item) => (
+                      <div key={item.productId} className="flex flex-col gap-2 rounded-xl bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{item.name}</p>
+                          <p className="mt-0.5 text-xs text-rose-600 font-medium">الكمية: {item.currentQuantity} / الحد الأدنى: {item.minStock}</p>
+                        </div>
+                        <span className="rounded-lg bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-800">نفد تقريباً</span>
+                      </div>
+                    ))}
+                  </div>
+                </DataPanel>
+              )}
+              {reorderAlerts.warning.length > 0 && (
+                 <DataPanel title="منتجات تحتاج طلب" subtitle="اقتربت من النفاد ووصلت إلى نقطة الطلب" icon={AlertTriangle} testId="panel-warning-stock" className="border-amber-200 bg-amber-50/50">
+                  <div className="space-y-2">
+                    {reorderAlerts.warning.map((item) => (
+                      <div key={item.productId} className="flex flex-col gap-2 rounded-xl bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{item.name}</p>
+                          <p className="mt-0.5 text-xs text-amber-700 font-medium">الكمية: {item.currentQuantity} / نقطة الطلب: {item.reorderPoint}</p>
+                          <p className="mt-1 text-xs text-slate-500">المورد المفضل: {item.preferredSupplierName || 'غير محدد'}</p>
+                        </div>
+                        <Link href={`/purchase-orders?productId=${item.productId}&quantity=${item.suggestedOrderQuantity}&supplierId=${item.preferredSupplierId || ''}`} className="inline-flex h-8 items-center justify-center rounded-lg bg-amber-100 px-3 text-xs font-bold text-amber-800 transition hover:bg-amber-200">
+                          إنشاء أمر شراء
+                        </Link>
+                      </div>
+                    ))}
+                  </div>
+                </DataPanel>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -456,8 +561,8 @@ function ModuleCard({ module }: { module: Module }) {
   return <Link href={module.href} data-testid={`card-module-${module.id}`}><div className={`group relative h-full min-h-[168px] cursor-pointer rounded-2xl border p-5 shadow-xl shadow-slate-950/10 transition hover:-translate-y-1 hover:shadow-2xl ${module.id === 'pos' ? 'border-teal-300 bg-gradient-to-br from-white to-teal-50/80' : 'border-white/10 bg-white'}`}><span className={`absolute left-4 top-4 rounded-full px-2 py-1 text-[10px] font-black ${module.ready ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{module.ready ? 'متاح' : 'قيد التجهيز'}</span><div className={`flex h-11 w-11 items-center justify-center rounded-xl ${module.tone}`}><Icon className="h-5 w-5" /></div><h3 className="mt-5 text-base font-black text-slate-900">{module.title}</h3><p className="mt-2 text-xs leading-6 text-slate-500">{module.description}</p><span className="mt-4 inline-flex items-center gap-1 text-xs font-black text-primary opacity-0 transition group-hover:opacity-100">فتح الوحدة <ArrowLeft className="h-3.5 w-3.5" /></span></div></Link>;
 }
 
-function DataPanel({ title, subtitle, icon: Icon, children, testId }: { title: string; subtitle: string; icon: LucideIcon; children: ReactNode; testId: string }) {
-  return <div className="rounded-2xl border border-white/10 bg-white p-5 shadow-xl shadow-slate-950/10" data-testid={testId}><div className="flex items-start gap-3 border-b border-slate-100 pb-4"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600"><Icon className="h-5 w-5" /></span><div><h2 className="text-lg font-black text-slate-900">{title}</h2><p className="mt-1 text-xs text-slate-400">{subtitle}</p></div></div><div className="pt-2">{children}</div></div>;
+function DataPanel({ title, subtitle, icon: Icon, children, testId, className = "border-white/10 bg-white" }: { title: string; subtitle: string; icon: LucideIcon; children: ReactNode; testId: string; className?: string }) {
+  return <div className={`rounded-2xl border p-5 shadow-xl shadow-slate-950/10 ${className}`} data-testid={testId}><div className="flex items-start gap-3 border-b border-slate-100/50 pb-4"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/50 text-slate-700 shadow-sm"><Icon className="h-5 w-5" /></span><div><h2 className="text-lg font-black text-slate-900">{title}</h2><p className="mt-1 text-xs text-slate-500">{subtitle}</p></div></div><div className="pt-4">{children}</div></div>;
 }
 
 type FinancialMovement = {

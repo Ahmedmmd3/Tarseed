@@ -12,11 +12,13 @@ import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { todayLocalDate } from '@/lib/date';
+import { Badge } from '@/components/ui/badge';
 
-type CatalogRecord = { id: number | string; name?: string; status?: string; cost?: number | string };
+type CatalogRecord = { id: number | string; name?: string; status?: string; cost?: number | string; minStock?: number; maxStock?: number; reorderPoint?: number; safetyStock?: number; leadTimeDays?: number; preferredSupplierId?: number | string };
 type Balance = { id: number | string; productId: number | string; warehouseId: number | string; quantity: number | string };
 type Transfer = { id: number | string; productId: number | string; fromWarehouseId: number | string; toWarehouseId: number | string; quantity: number | string; status?: string; date?: string; note?: string };
 type Adjustment = { id: number | string; productId: number | string; warehouseId: number | string; actualQuantity: number | string; delta?: number | string; reason?: string; date?: string };
+type Supplier = { id: number | string; name: string };
 
 function labelFor(records: CatalogRecord[], id: string | number): string {
   return records.find((record) => String(record.id) === String(id))?.name ?? `#${id}`;
@@ -30,23 +32,44 @@ function InventoryBalances({ data, products, warehouses, loading }: { data: Bala
   if (loading) return <LoadingState />;
   return (
     <div className="rounded-2xl border border-slate-100 bg-white shadow-sm">
-      <Table className="min-w-[560px]">
-        <TableHeader><TableRow><TableHead className="w-[34%]">المنتج</TableHead><TableHead className="w-[28%]">الموقع</TableHead><TableHead className="w-[16%] text-center">الكمية</TableHead><TableHead className="w-[22%] text-left">القيمة التقريبية</TableHead></TableRow></TableHeader>
+      <Table className="min-w-[900px]">
+        <TableHeader><TableRow><TableHead>المنتج</TableHead><TableHead>الموقع</TableHead><TableHead className="text-center">الكمية</TableHead><TableHead className="text-center">الحد الأدنى</TableHead><TableHead className="text-center">نقطة الطلب</TableHead><TableHead className="text-center">الحالة</TableHead><TableHead className="text-left">القيمة التقريبية</TableHead></TableRow></TableHeader>
         <TableBody>
           {data.map((item) => {
             const product = products.find(p => String(p.id) === String(item.productId));
             const cost = product?.cost ? Number(product.cost) : 0;
             const approxValue = cost * Number(item.quantity);
+            const totalQty = data.filter(d => String(d.productId) === String(item.productId)).reduce((sum, d) => sum + Number(d.quantity), 0);
+            const minStock = product?.minStock ?? 0;
+            const reorderPoint = product?.reorderPoint ?? 0;
+            const maxStock = product?.maxStock ?? 0;
+            let status = 'طبيعي';
+            let statusColor = 'bg-slate-100 text-slate-700';
+            if (totalQty <= minStock) {
+              status = 'نفد تقريباً';
+              statusColor = 'bg-rose-100 text-rose-800';
+            } else if (totalQty <= reorderPoint) {
+              status = 'قارب النفاد';
+              statusColor = 'bg-amber-100 text-amber-800';
+            } else if (maxStock > 0 && totalQty > maxStock) {
+              status = 'وفير';
+              statusColor = 'bg-emerald-100 text-emerald-800';
+            }
             return (
               <TableRow key={item.id}>
                 <TableCell>{product?.name ?? `#${item.productId}`}</TableCell>
                 <TableCell>{labelFor(warehouses, item.warehouseId)}</TableCell>
                 <TableCell className="text-center font-bold text-teal-700">{item.quantity}</TableCell>
+                <TableCell className="text-center">{minStock}</TableCell>
+                <TableCell className="text-center">{reorderPoint}</TableCell>
+                <TableCell className="text-center">
+                  <Badge variant="outline" className={`border-0 ${statusColor}`} data-testid={`balance-status-${item.productId}`}>{status}</Badge>
+                </TableCell>
                 <TableCell className="text-left text-slate-500">{cost > 0 ? formatCurrency(approxValue) : '—'}</TableCell>
               </TableRow>
             );
           })}
-          {!data.length && <EmptyRow columns={4} text="لا توجد أرصدة ظاهرة ضمن نطاق مواقعك." />}
+          {!data.length && <EmptyRow columns={7} text="لا توجد أرصدة ظاهرة ضمن نطاق مواقعك." />}
         </TableBody>
       </Table>
     </div>
@@ -202,6 +225,7 @@ export default function Inventory() {
   const { currentUser } = useStore();
   const products = useCrud<CatalogRecord>('products');
   const warehouses = useCrud<CatalogRecord>('warehouses');
+  const suppliers = useCrud<Supplier>('suppliers');
   const balances = useCrud<Balance>('inventoryBalances');
   const transfers = useCrud<Transfer>('stockTransfers');
   const adjustments = useCrud<Adjustment>('stockAdjustments');
@@ -228,14 +252,46 @@ export default function Inventory() {
          <TabsContent value="products"><CrudTable
            table="products"
            title="إدارة المنتجات"
-           fields={[{ key: 'name', label: 'الاسم', required: true }, { key: 'barcode', label: 'الباركود' }, { key: 'sku', label: 'رمز المنتج' }, { key: 'price', label: 'سعر البيع', type: 'number' }, { key: 'cost', label: 'سعر التكلفة', type: 'number' }, { key: 'vatRate', label: 'ضريبة المنتج', type: 'select', required: true, options: [{ label: 'لا توجد ضريبة', value: 0 }, { label: 'ضريبة 5٪', value: 5 }, { label: 'ضريبة 15٪', value: 15 }] }]}
-           extraColumns={[{ key: 'stockQuantity', label: 'عدد المخزون', className: 'text-center' }, { key: 'storageWarehouse', label: 'مستودع التخزين' }]}
+           fields={[
+             { key: 'name', label: 'الاسم', required: true },
+             { key: 'barcode', label: 'الباركود' },
+             { key: 'sku', label: 'رمز المنتج' },
+             { key: 'price', label: 'سعر البيع', type: 'number' },
+             { key: 'cost', label: 'سعر التكلفة', type: 'number' },
+             { key: 'vatRate', label: 'ضريبة المنتج', type: 'select', required: true, options: [{ label: 'لا توجد ضريبة', value: 0 }, { label: 'ضريبة 5٪', value: 5 }, { label: 'ضريبة 15٪', value: 15 }] },
+              { key: 'minStock', label: 'الحد الأدنى', type: 'number', defaultValue: 0, helpText: 'أقل كمية مقبولة في المخزون' },
+              { key: 'maxStock', label: 'الحد الأعلى', type: 'number', helpText: 'أعلى كمية تريد الاحتفاظ بها' },
+              { key: 'reorderPoint', label: 'نقطة إعادة الطلب', type: 'number', defaultValue: 0, helpText: 'عند وصول المخزون لهذا الرقم يجب طلب كمية جديدة' },
+              { key: 'safetyStock', label: 'مخزون الأمان', type: 'number', defaultValue: 0, helpText: 'كمية احتياطية للطوارئ' },
+              { key: 'leadTimeDays', label: 'مدة التوريد بالأيام', type: 'number', defaultValue: 7, helpText: 'عدد الأيام التي يستغرقها المورد للتوصيل' },
+              { key: 'preferredSupplierId', label: 'المورد المفضل', type: 'select', options: suppliers.data.map(s => ({ label: s.name, value: s.id })) }
+           ]}
+           extraColumns={[{ key: 'stockQuantity', label: 'إجمالي المخزون', className: 'text-center' }, { key: 'stockStatus', label: 'حالة المخزون', className: 'text-center' }, { key: 'storageWarehouse', label: 'مستودع التخزين' }]}
            renderExtraCells={(item) => {
              const summary = productStock.get(String(item.id));
+             const totalQty = summary?.quantity ?? 0;
+             const minStock = item.minStock ?? 0;
+             const reorderPoint = item.reorderPoint ?? 0;
+             const maxStock = item.maxStock ?? 0;
+              let status = 'طبيعي';
+              let statusColor = 'bg-slate-100 text-slate-700';
+             if (totalQty <= minStock) {
+                status = 'نفد تقريباً';
+               statusColor = 'bg-rose-100 text-rose-800';
+             } else if (totalQty <= reorderPoint) {
+                status = 'قارب النفاد';
+               statusColor = 'bg-amber-100 text-amber-800';
+             } else if (maxStock > 0 && totalQty > maxStock) {
+                status = 'وفير';
+                statusColor = 'bg-emerald-100 text-emerald-800';
+             }
              return (
                <>
                  <TableCell className="text-center font-bold text-teal-700" data-testid={`text-product-stock-${item.id}`}>
-                   {balances.loading ? 'جارٍ التحميل...' : summary?.quantity ?? 0}
+                   {balances.loading ? 'جارٍ التحميل...' : totalQty}
+                 </TableCell>
+                 <TableCell className="text-center" data-testid={`text-product-status-${item.id}`}>
+                   {balances.loading ? '...' : <Badge variant="outline" className={`border-0 ${statusColor}`}>{status}</Badge>}
                  </TableCell>
                  <TableCell className="max-w-[220px] text-slate-600" data-testid={`text-product-warehouse-${item.id}`}>
                    {balances.loading ? 'جارٍ التحميل...' : summary?.warehouses.length ? summary.warehouses.join('، ') : 'غير محدد'}

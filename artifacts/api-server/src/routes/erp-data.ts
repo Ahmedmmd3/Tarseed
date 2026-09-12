@@ -197,7 +197,33 @@ function normalizeProductData(data: Record<string, unknown>, fallbackRate = 15):
   const vatRate = Number(data.vatRate ?? fallbackRate);
   if (![0, 5, 15].includes(vatRate)) return null;
   const barcode = typeof data.barcode === "string" ? data.barcode.trim() : "";
-  return { ...data, barcode, vatRate };
+  const nonNegativeNumber = (value: unknown, fallback: number): number | null => {
+    if (value == null || value === "") return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  };
+  const minStock = nonNegativeNumber(data.minStock, 0);
+  const reorderPoint = nonNegativeNumber(data.reorderPoint, 0);
+  const safetyStock = nonNegativeNumber(data.safetyStock, 0);
+  const leadTimeDays = nonNegativeNumber(data.leadTimeDays, 7);
+  const maxStock = data.maxStock == null || data.maxStock === "" ? null : nonNegativeNumber(data.maxStock, 0);
+  if (minStock == null || reorderPoint == null || safetyStock == null || leadTimeDays == null || maxStock === null && data.maxStock != null && data.maxStock !== "") return null;
+  if (maxStock != null && maxStock < minStock) return null;
+  const preferredSupplierId = data.preferredSupplierId == null || data.preferredSupplierId === ""
+    ? null
+    : Number(data.preferredSupplierId);
+  if (preferredSupplierId != null && (!Number.isInteger(preferredSupplierId) || preferredSupplierId <= 0)) return null;
+  return {
+    ...data,
+    barcode,
+    vatRate,
+    minStock,
+    maxStock,
+    reorderPoint,
+    safetyStock,
+    leadTimeDays,
+    preferredSupplierId,
+  };
 }
 
 function normalizeBranchData(data: Record<string, unknown>): Record<string, unknown> | null {

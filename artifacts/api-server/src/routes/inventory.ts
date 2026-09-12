@@ -362,6 +362,68 @@ router.get("/inventory/settings", requireAuth, requireSubscriptionAccess, requir
   });
 });
 
+router.get("/inventory/reorder-alerts", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (_request: Request, response: Response): Promise<void> => {
+  const auth = response.locals.auth as AuthContext;
+  const organizationId = auth.organizationId;
+  const [products, balances, suppliers] = await Promise.all([
+    db.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "products"),
+      sql`coalesce(nullif(${erpRecordsTable.data}->>'reorderPoint', ''), '0')::numeric > 0`,
+    )),
+    db.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "inventoryBalances"),
+    )),
+    db.select().from(erpRecordsTable).where(and(
+      eq(erpRecordsTable.organizationId, organizationId),
+      eq(erpRecordsTable.tableName, "suppliers"),
+    )),
+  ]);
+  const visibleBalances = auth.roleId === "owner" || auth.locationScope === "all"
+    ? balances
+    : balances.filter((balance) => canAccessLocations(auth, [Number(balance.data.warehouseId)]));
+  const quantities = new Map<number, number>();
+  for (const balance of visibleBalances) {
+    const productId = Number(balance.data.productId);
+    if (!Number.isInteger(productId)) continue;
+    quantities.set(productId, (quantities.get(productId) ?? 0) + (Number(balance.data.quantity) || 0));
+  }
+  const supplierNames = new Map(suppliers.map((supplier) => [supplier.id, String(supplier.data.name ?? "")]));
+  const alerts = products.map((product) => {
+    const minStock = Math.max(0, Number(product.data.minStock) || 0);
+    const reorderPoint = Math.max(0, Number(product.data.reorderPoint) || 0);
+    const safetyStock = Math.max(0, Number(product.data.safetyStock) || 0);
+    const leadTimeDays = Math.max(0, Number(product.data.leadTimeDays) || 7);
+    const rawMaxStock = product.data.maxStock;
+    const maxStock = rawMaxStock == null || rawMaxStock === "" ? null : Math.max(0, Number(rawMaxStock) || 0);
+    const currentQuantity = quantities.get(product.id) ?? 0;
+    const preferredSupplierId = Number(product.data.preferredSupplierId);
+    const suggestedOrderQuantity = Math.max(0, Math.ceil(
+      (maxStock ?? reorderPoint * 2) - currentQuantity,
+    ));
+    return {
+      productId: product.id,
+      name: String(product.data.name ?? `#${product.id}`),
+      currentQuantity,
+      minStock,
+      maxStock,
+      reorderPoint,
+      safetyStock,
+      leadTimeDays,
+      preferredSupplierName: Number.isInteger(preferredSupplierId) ? supplierNames.get(preferredSupplierId) ?? null : null,
+      preferredSupplierId: Number.isInteger(preferredSupplierId) ? preferredSupplierId : null,
+      urgencyScore: currentQuantity / reorderPoint,
+      suggestedOrderQuantity,
+    };
+  }).sort((left, right) => left.urgencyScore - right.urgencyScore);
+  response.json({
+    critical: alerts.filter((item) => item.currentQuantity <= item.minStock),
+    warning: alerts.filter((item) => item.currentQuantity > item.minStock && item.currentQuantity <= item.reorderPoint),
+    overstock: alerts.filter((item) => item.maxStock != null && item.currentQuantity > item.maxStock),
+  });
+});
+
 router.post("/inventory/transfers", requireAuth, requireSubscriptionAccess, requireCurrentDataGeneration, requireInventory, async (request: Request, response: Response): Promise<void> => {
   const auth = response.locals.auth as AuthContext;
   await runAction(response, async () => {

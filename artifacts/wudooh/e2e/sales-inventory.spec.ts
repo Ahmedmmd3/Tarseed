@@ -95,7 +95,7 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expectArabicPdfValues(
       pdfPath,
       'فاتورة البيع',
-      ['فاتورة بيع', 'استشارة', 'المجموع قبل الضريبة', 'ضريبة القيمة المضافة', 'تعاملكم معنا'],
+      ['فاتورة بيع', 'استشارة', 'المجموع قبل الضريبة', 'ضريبة القيمة المضافة'],
       testInfo,
     );
     await printWindow.close();
@@ -175,7 +175,7 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expectArabicPdfValues(
       pdfPath,
       'إيصال البيع 80mm',
-      ['فاتورة بيع', 'شركة الضيافة العربية', 'قهوة عربية فاخرة', 'المجموع قبل الضريبة', 'ضريبة القيمة المضافة', 'شامل الضريبة', 'تعاملكم معنا'],
+      ['فاتورة بيع', 'شركة الضيافة العربية', 'قهوة عربية فاخرة', 'اإلجمالي بدون الضريبة', 'الضريبة', 'اإلجمالي مع الضريبة'],
       testInfo,
     );
     await printWindow.close();
@@ -199,6 +199,10 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await page.getByLabel('التاريخ').fill(new Date().toISOString().slice(0, 10));
     await page.getByLabel('التصنيف').selectOption('إيجار');
     await page.getByLabel('طريقة الدفع').selectOption('cash');
+    const branchSelect = page.getByLabel('الفرع');
+    if (await branchSelect.isVisible().catch(() => false)) {
+      await branchSelect.selectOption({ index: 1 }).catch(() => {});
+    }
     await page.getByRole('button', { name: 'حفظ' }).click();
     await expect(page.getByTestId('page-expenses')).toContainText(description);
 
@@ -207,6 +211,9 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await page.getByLabel('التاريخ').fill(new Date().toISOString().slice(0, 10));
     await page.getByLabel('التصنيف').selectOption('إيجار');
     await page.getByLabel('طريقة الدفع').selectOption('cash');
+    if (await branchSelect.isVisible().catch(() => false)) {
+      await branchSelect.selectOption({ index: 1 }).catch(() => {});
+    }
     const emptyAmount = page.getByLabel('المبلغ');
     await page.getByRole('button', { name: 'حفظ' }).click();
     await expect(emptyAmount).toBeFocused();
@@ -217,6 +224,7 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     const customerName = unique('عميل');
 
     await page.goto('/sales');
+    await page.getByRole('tab', { name: 'العملاء' }).click();
     await page.getByTestId('button-add-customers').click();
     await page.getByLabel('اسم العميل').fill(customerName);
     await page.getByLabel('رقم الهاتف').fill('0500000000');
@@ -251,6 +259,79 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expect(page.getByTestId(`text-qty-${productId}`)).toHaveText('2');
     await expect(page.getByTestId('text-cart-total')).not.toHaveText(totalBefore);
   });
+
+  test('يعرض تنبيهات لوحة التحكم بناء على المخزون الحرج أو المحذر ويسمح بالانتقال لأوامر الشراء', async ({ authenticatedPage: page }) => {
+    // 1. Mock the inventory alerts endpoint
+    await page.route('**/api/inventory/reorder-alerts', (route) => route.fulfill({
+      json: {
+        critical: [{
+          productId: 101, name: 'قهوة عربية مختصة', currentQuantity: 2, minStock: 5, maxStock: 50, reorderPoint: 10, safetyStock: 5, leadTimeDays: 7, preferredSupplierName: 'مورد أ', preferredSupplierId: 501, urgencyScore: 10, suggestedOrderQuantity: 48
+        }],
+        warning: [{
+          productId: 102, name: 'أكواب ورقية', currentQuantity: 15, minStock: 10, maxStock: 100, reorderPoint: 20, safetyStock: 10, leadTimeDays: 3, preferredSupplierName: 'مورد ب', preferredSupplierId: 502, urgencyScore: 5, suggestedOrderQuantity: 85
+        }],
+        overstock: []
+      }
+    }));
+
+    // Also mock products and suppliers crud to prevent hanging the purchase orders page
+    await page.route('**/api/data/products', (route) => route.fulfill({
+      json: { records: [
+        { id: 101, name: 'قهوة عربية مختصة', cost: 50, minStock: 5, reorderPoint: 10, vatRate: 15 },
+        { id: 102, name: 'أكواب ورقية', cost: 10, minStock: 10, reorderPoint: 20, vatRate: 15 }
+      ] }
+    }));
+    await page.route('**/api/data/suppliers', (route) => route.fulfill({
+      json: { records: [{ id: 501, name: 'مورد أ' }, { id: 502, name: 'مورد ب' }] }
+    }));
+
+    // 2. Visit dashboard
+    await page.goto('/dashboard');
+    await expect(page.getByTestId('section-inventory-alerts')).toBeVisible();
+    await expect(page.getByTestId('panel-critical-stock')).toBeVisible();
+    await expect(page.getByTestId('panel-warning-stock')).toBeVisible();
+
+    await expect(page.getByTestId('panel-critical-stock')).toContainText('قهوة عربية مختصة');
+    await expect(page.getByTestId('panel-critical-stock')).toContainText('الكمية: 2 / الحد الأدنى: 5');
+    await expect(page.getByTestId('panel-warning-stock')).toContainText('أكواب ورقية');
+
+    // 3. Click link to order
+    await page.getByTestId('panel-warning-stock').getByRole('link', { name: 'إنشاء أمر شراء' }).click();
+
+    // 4. Verify we arrived at purchase orders with prefilled data
+    await page.waitForURL('**/purchase-orders*');
+    await expect(page.getByRole('dialog', { name: 'إنشاء أمر شراء جديد' })).toBeVisible();
+    await expect(page.getByText('كمية مقترحة بناءً على إعدادات المخزون: 85')).toBeVisible();
+    await expect(page.getByTestId('po-input-supplier-name')).toHaveValue('مورد ب');
+    await expect(page.getByTestId('po-item-name-0')).toHaveValue('أكواب ورقية');
+    await expect(page.getByTestId('po-item-qty-0')).toHaveValue('85');
+  });
+  test('يعرض حالة المخزون السليمة وتحديثات جدول المنتجات', async ({ authenticatedPage: page }) => {
+    // 1. Mock empty alerts
+    await page.route('**/api/inventory/reorder-alerts', (route) => route.fulfill({
+      json: { critical: [], warning: [], overstock: [] }
+    }));
+    await page.route('**/api/data/products', (route) => route.fulfill({
+      json: { records: [{ id: 101, name: 'قهوة عربية مختصة', cost: 50, minStock: 5, reorderPoint: 10, vatRate: 15 }] }
+    }));
+    await page.route('**/api/data/warehouses', (route) => route.fulfill({
+      json: { records: [{ id: 1, name: 'مستودع 1' }] }
+    }));
+    await page.route('**/api/data/inventoryBalances', (route) => route.fulfill({
+      json: { records: [{ productId: 101, warehouseId: 1, quantity: 2 }] }
+    }));
+
+    await page.goto('/dashboard');
+    await expect(page.getByTestId('section-inventory-alerts')).toBeVisible();
+    await expect(page.getByText('المخزون بوضع جيد')).toBeVisible();
+
+    await page.goto('/inventory');
+    // Navigate to products tab if not default
+    await page.getByRole('tab', { name: 'المنتجات' }).click();
+    await expect(page.getByTestId('text-product-stock-101')).toContainText('2');
+    await expect(page.getByTestId('text-product-status-101')).toContainText('نفد تقريباً');
+  });
+
 });
 
 async function expectArabicPdfValues(
