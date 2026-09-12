@@ -14,6 +14,19 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { todayLocalDate } from '@/lib/date';
 
 type ReportType = 'trial' | 'income' | 'balance' | 'ledger' | 'reconciliation' | 'aging';
+type AgingType = 'receivable' | 'payable' | 'all';
+
+const readInitialReportFilters = (): { reportType: ReportType; agingType: AgingType } => {
+  const params = new URLSearchParams(window.location.search);
+  const requestedReport = params.get('report');
+  const requestedAgingType = params.get('agingType');
+  const reportType: ReportType = requestedReport === 'aging' ? 'aging' : 'trial';
+  const agingType: AgingType = requestedAgingType === 'payable' || requestedAgingType === 'receivable'
+    ? requestedAgingType
+    : 'all';
+  return { reportType, agingType };
+};
+
 type ServerSummary = {
   totals: { revenue: number; expense: number; netIncome: number; receivables?: number; payables?: number };
   trialBalance: Array<{ id: string | number; code: string; name: string; type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense'; debit: number; credit: number }>;
@@ -52,7 +65,8 @@ type FiscalYearStatus = {
 
 export default function Reports() {
   const { accounts, journals, closePeriod, connectionMode, currentUser, refreshSession } = useStore();
-  const [reportType, setReportType] = useState<ReportType>('trial');
+  const [initialFilters] = useState(readInitialReportFilters);
+  const [reportType, setReportType] = useState<ReportType>(initialFilters.reportType);
   const year = new Date().getFullYear();
   const [fromDate, setFromDate] = useState(`${year}-01-01`);
   const [toDate, setToDate] = useState(todayLocalDate());
@@ -627,7 +641,7 @@ export default function Reports() {
 
       {reportType === 'ledger' && <LedgerReport />}
       {reportType === 'reconciliation' && <ReconciliationReport />}
-      {reportType === 'aging' && <AgingReport />}
+      {reportType === 'aging' && <AgingReport initialType={initialFilters.agingType} />}
 
       {reportType === 'income' && (
         <Card className="max-w-3xl mx-auto border-slate-200 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">

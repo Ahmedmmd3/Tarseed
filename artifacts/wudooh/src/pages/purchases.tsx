@@ -845,6 +845,16 @@ export default function Purchases() {
         
         <TabsContent value="suppliers">
           <div className="space-y-8">
+            <div className="flex justify-end">
+              <Link
+                href="/reports?report=aging&agingType=payable"
+                className="inline-flex items-center gap-2 text-sm font-bold text-indigo-700 transition hover:text-indigo-900 hover:underline"
+                data-testid="link-supplier-aging-report"
+              >
+                <CalendarClock className="h-4 w-4" />
+                عرض تقرير الأعمار
+              </Link>
+            </div>
             <SupplierPaymentsPanel />
             <CrudTable
               table="suppliers"

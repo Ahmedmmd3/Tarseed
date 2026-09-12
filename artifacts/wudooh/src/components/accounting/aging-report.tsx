@@ -46,7 +46,11 @@ type ComputedGroup = {
   total: number;
 };
 
-export function AgingReport() {
+type AgingReportProps = {
+  initialType?: 'receivable' | 'payable' | 'all';
+};
+
+export function AgingReport({ initialType = 'all' }: AgingReportProps) {
   const { connectionMode, receivables: localReceivables } = useStore();
   const [referenceDate, setReferenceDate] = useState(todayLocalDate());
   const [data, setData] = useState<AgingResponse | null>(null);
@@ -203,7 +207,7 @@ export function AgingReport() {
       {groupedData && (
         <div className="space-y-8">
           {/* Receivables */}
-          <Card className="border-slate-200 shadow-sm overflow-hidden">
+          {initialType !== 'payable' && <Card className="border-slate-200 shadow-sm overflow-hidden">
             <div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-wrap gap-4 justify-between items-center">
               <div>
                 <h3 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
@@ -272,10 +276,10 @@ export function AgingReport() {
                 </TableBody>
               </Table>
             </div>
-          </Card>
+          </Card>}
 
           {/* Payables */}
-          <Card className="border-slate-200 shadow-sm overflow-hidden">
+          {initialType !== 'receivable' && <Card className="border-slate-200 shadow-sm overflow-hidden">
             <div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-wrap gap-4 justify-between items-center">
               <div>
                 <h3 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
@@ -344,7 +348,7 @@ export function AgingReport() {
                 </TableBody>
               </Table>
             </div>
-          </Card>
+          </Card>}
         </div>
       )}
     </div>
