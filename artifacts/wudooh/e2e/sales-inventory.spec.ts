@@ -332,6 +332,47 @@ test.describe('المبيعات والمخزون والمصروفات والعم
     await expect(page.getByTestId('text-product-status-101')).toContainText('نفد تقريباً');
   });
 
+  test('ينشئ قسم منتج ويختاره من قائمة البحث عند إضافة المنتج', async ({ authenticatedPage: page }) => {
+    const categories: Array<{ id: number; name: string; description?: string }> = [];
+    let createdProduct: Record<string, unknown> | undefined;
+
+    await page.route('**/api/data/productCategories', async (route) => {
+      if (route.request().method() === 'POST') {
+        const payload = route.request().postDataJSON() as { name: string; description?: string };
+        categories.push({ id: 77, ...payload });
+        await route.fulfill({ json: { record: categories[0] } });
+        return;
+      }
+      await route.fulfill({ json: { records: categories } });
+    });
+    await page.route('**/api/data/products', async (route) => {
+      if (route.request().method() === 'POST') {
+        createdProduct = route.request().postDataJSON() as Record<string, unknown>;
+        await route.fulfill({ json: { record: { id: 501, ...createdProduct } } });
+        return;
+      }
+      await route.fulfill({ json: { records: [] } });
+    });
+
+    await page.goto('/inventory');
+    await page.getByRole('tab', { name: 'الأقسام' }).click();
+    await page.getByTestId('button-add-productCategories').click();
+    await page.getByLabel('اسم القسم').fill('العناية الشخصية');
+    await page.getByLabel('الوصف').fill('منتجات وأدوات التجميل والعناية');
+    await page.getByRole('button', { name: 'حفظ' }).click();
+    await expect(page.getByRole('cell', { name: 'العناية الشخصية' })).toBeVisible();
+
+    await page.getByRole('tab', { name: 'المنتجات' }).click();
+    await page.getByTestId('button-add-products').click();
+    await page.getByLabel('الاسم').fill('غسول للوجه');
+    await page.getByRole('combobox', { name: 'القسم' }).click();
+    await page.getByPlaceholder('ابحث عن القسم...').fill('العناية');
+    await page.getByRole('option', { name: 'العناية الشخصية' }).click();
+    await page.getByRole('button', { name: 'حفظ' }).click();
+
+    expect(createdProduct?.categoryId).toBe(77);
+  });
+
 });
 
 async function expectArabicPdfValues(

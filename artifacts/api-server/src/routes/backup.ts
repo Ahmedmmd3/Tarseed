@@ -9,7 +9,7 @@ const router: IRouter = Router();
 const BACKUP_VERSION = 1;
 const MAX_RECORDS = 25_000;
 const BACKUP_TABLE_NAMES = [
-  "products", "invoices", "expenses", "customers", "sales", "returns_", "suppliers",
+  "products", "productCategories", "invoices", "expenses", "customers", "sales", "returns_", "suppliers",
   "purchaseOrders", "warehouses", "employees", "projects", "inventoryBalances", "inventoryLayers",
   "stockTransfers", "stockAdjustments", "accounts", "journalEntries", "receivables",
   "financialClosures", "bankReconciliationSessions", "bankStatementLines", "reconciliationAdjustmentEvents",

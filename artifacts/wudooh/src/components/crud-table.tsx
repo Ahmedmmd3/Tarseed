@@ -6,21 +6,89 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles, RotateCcw, FilePenLine, Paperclip } from 'lucide-react';
+import { LoaderCircle, Edit, Trash2, Plus, AlertCircle, ImagePlus, Sparkles, RotateCcw, FilePenLine, Paperclip, Check, ChevronsUpDown } from 'lucide-react';
 import { SourceDocumentAdjustmentDialog } from '@/components/accounting/source-document-adjustment-dialog';
 import { AttachmentsPanel } from '@/components/attachments-panel';
 import { TransferDialog } from '@/components/transfer-dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 
 export type FieldDef = {
   key: string;
   label: string;
-  type?: 'text' | 'number' | 'date' | 'select';
+  type?: 'text' | 'number' | 'date' | 'select' | 'searchable-select';
   options?: { label: string; value: string | number }[];
   required?: boolean;
   defaultValue?: string | number;
   disabled?: boolean;
   helpText?: string;
 };
+
+function SearchableSelectField({
+  id,
+  label,
+  value,
+  options = [],
+  required,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  value: string | number;
+  options?: { label: string; value: string | number }[];
+  required?: boolean;
+  disabled?: boolean;
+  onChange: (value: string | number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => String(option.value) === String(value));
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          id={id}
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          aria-label={label}
+          disabled={disabled}
+          className="w-full justify-between font-normal"
+        >
+          <span className={selected ? '' : 'text-muted-foreground'}>{selected?.label ?? `اختر ${label}`}</span>
+          <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder={`ابحث عن ${label}...`} />
+          <CommandList>
+            <CommandEmpty>لا توجد نتائج.</CommandEmpty>
+            <CommandGroup>
+              {!required && (
+                <CommandItem value={`بدون ${label}`} onSelect={() => { onChange(''); setOpen(false); }}>
+                  <Check className={`ml-2 h-4 w-4 ${value === '' || value == null ? 'opacity-100' : 'opacity-0'}`} />
+                  بدون قسم
+                </CommandItem>
+              )}
+              {options.map((option) => (
+                <CommandItem
+                  key={option.value}
+                  value={option.label}
+                  onSelect={() => { onChange(option.value); setOpen(false); }}
+                >
+                  <Check className={`ml-2 h-4 w-4 ${String(value) === String(option.value) ? 'opacity-100' : 'opacity-0'}`} />
+                  {option.label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 interface CrudTableProps {
   table: string;
@@ -29,6 +97,7 @@ interface CrudTableProps {
   readOnly?: boolean;
   extraColumns?: Array<{ key: string; label: string; className?: string }>;
   renderExtraCells?: (item: any) => ReactNode;
+  onChanged?: () => void | Promise<void>;
 }
 
 const receiptCategories = ['إيجار', 'رواتب', 'مشتريات', 'مرافق', 'تسويق', 'نقل', 'صيانة', 'أخرى'] as const;
@@ -194,7 +263,7 @@ function ReceiptExtractionDialog({
   );
 }
 
-export function CrudTable({ table, title, fields, readOnly = false, extraColumns = [], renderExtraCells }: CrudTableProps) {
+export function CrudTable({ table, title, fields, readOnly = false, extraColumns = [], renderExtraCells, onChanged }: CrudTableProps) {
   const { data, loading, error, create, update, remove, load } = useCrud<any>(table);
   const { currentUser } = useStore();
   const [open, setOpen] = useState(false);
@@ -272,12 +341,14 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
     setIsSubmitting(false);
     if (success) {
       setOpen(false);
+      await onChanged?.();
     }
   };
 
   const handleDelete = async (id: string | number) => {
     if (window.confirm('هل أنت متأكد من الحذف؟')) {
-      await remove(id);
+      const success = await remove(id);
+      if (success) await onChanged?.();
     }
   };
 
@@ -297,7 +368,10 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
           action={sourceAdjustment?.action ?? 'cancel'}
           table={table as 'invoices' | 'purchaseOrders' | 'expenses'}
           item={sourceAdjustment?.item ?? null}
-          fields={fields}
+          fields={fields.map((field) => ({
+            ...field,
+            type: field.type === 'searchable-select' ? 'select' : field.type,
+          })) as Array<Omit<FieldDef, 'type'> & { type?: 'text' | 'number' | 'date' | 'select' }>}
           onOpenChange={(nextOpen) => { if (!nextOpen) setSourceAdjustment(null); }}
           onCompleted={load}
         />
@@ -362,6 +436,16 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
                             </option>
                           ))}
                         </select>
+                      ) : f.type === 'searchable-select' ? (
+                        <SearchableSelectField
+                          id={f.key}
+                          label={f.label}
+                          value={formData[f.key] ?? ''}
+                          options={f.options}
+                          required={f.required}
+                          disabled={f.disabled}
+                          onChange={(value) => setFormData({ ...formData, [f.key]: value })}
+                        />
                       ) : (
                         <Input
                           id={f.key}
@@ -426,7 +510,7 @@ export function CrudTable({ table, title, fields, readOnly = false, extraColumns
               <TableRow key={item.id}>
                 {fields.map((f) => (
                   <TableCell key={f.key}>
-                    {f.type === 'select'
+                    {f.type === 'select' || f.type === 'searchable-select'
                       ? f.options?.find((o) => String(o.value) === String(item[f.key]))?.label || item[f.key]
                       : item[f.key]}
                   </TableCell>

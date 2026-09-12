@@ -22,7 +22,7 @@ type DemoIdSets = Map<string, Set<string>>;
 const ACCOUNT_HIERARCHY_LOCK_NAMESPACE = 0x41434354;
 const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
-  products: ["inventory", "sales"], invoices: "sales", quotations: "sales", expenses: "accounting", customers: "sales", sales: "sales",
+  products: ["inventory", "sales"], productCategories: "inventory", invoices: "sales", quotations: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
   employees: "hr", projects: "operations", inventoryBalances: ["inventory", "sales"], stockTransfers: "inventory",
   branches: ["accounting", "operations"],
@@ -36,6 +36,7 @@ const REFERENCE_TABLE_BY_KEY: Record<string, string> = {
   counterAccountId: "accounts",
   customerId: "customers",
   productId: "products",
+  categoryId: "productCategories",
   invoiceId: "invoices",
   sourceQuotationId: "quotations",
   originalInvoiceId: "invoices",
@@ -213,6 +214,10 @@ function normalizeProductData(data: Record<string, unknown>, fallbackRate = 15):
     ? null
     : Number(data.preferredSupplierId);
   if (preferredSupplierId != null && (!Number.isInteger(preferredSupplierId) || preferredSupplierId <= 0)) return null;
+  const categoryId = data.categoryId == null || data.categoryId === ""
+    ? null
+    : Number(data.categoryId);
+  if (categoryId != null && (!Number.isInteger(categoryId) || categoryId <= 0)) return null;
   return {
     ...data,
     barcode,
@@ -223,6 +228,7 @@ function normalizeProductData(data: Record<string, unknown>, fallbackRate = 15):
     safetyStock,
     leadTimeDays,
     preferredSupplierId,
+    categoryId,
   };
 }
 
@@ -257,7 +263,7 @@ function rejectUnauthorizedInventoryCatalogMutation(access: { auth: AuthContext;
     response.status(403).json({ error: "إدارة مواقع التشغيل متاحة لمالك المنشأة فقط." });
     return true;
   }
-  if (access.tableName === "products" && !canManageInventoryCatalog(access.auth)) {
+  if ((access.tableName === "products" || access.tableName === "productCategories") && !canManageInventoryCatalog(access.auth)) {
     response.status(403).json({ error: "ليس لديك صلاحية لتعديل كتالوج المنتجات." });
     return true;
   }
