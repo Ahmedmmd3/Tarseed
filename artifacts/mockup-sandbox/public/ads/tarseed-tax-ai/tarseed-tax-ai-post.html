@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ترصيد — ضريبة وذكاء اصطناعي</title>
+  <style>
+    :root { --navy:#08152f; --ink:#07142d; --cyan:#45ddd3; --blue:#1557e8; --paper:#f6f8fc; --muted:#adc0df; }
+    * { box-sizing:border-box; }
+    html,body { margin:0; width:100%; height:100%; overflow:hidden; background:var(--navy); }
+    body { font-family:"Segoe UI", Tahoma, Arial, sans-serif; }
+    .ad { width:100vw; height:100vh; min-width:320px; min-height:400px; background:var(--navy); color:var(--paper); position:relative; overflow:hidden; padding:6.3vh 7vw 5.8vh; display:flex; flex-direction:column; }
+    .brand { position:relative; z-index:3; display:flex; align-items:center; justify-content:flex-start; direction:ltr; height:12vh; }
+    .brand img { width:auto; height:14vh; max-height:150px; max-width:42vw; object-fit:contain; object-position:left center; }
+    .headline-wrap { position:relative; z-index:3; margin-top:6vh; width:73%; direction:rtl; text-align:right; }
+    .eyebrow { color:var(--cyan); font-size:2.3vw; font-weight:700; letter-spacing:.03em; margin-bottom:2vh; }
+    h1 { margin:0; font-size:8.6vw; line-height:1.04; letter-spacing:-.055em; font-weight:850; color:var(--paper); }
+    h1 .accent { color:var(--cyan); display:block; }
+    .benefit { margin-top:3.5vh; font-size:3.45vw; line-height:1.45; font-weight:650; color:#d7e2f3; max-width:95%; }
+    .cta { position:relative; z-index:4; margin-top:4.2vh; width:max-content; align-self:flex-start; background:var(--cyan); color:var(--ink); border-radius:1.2vw; padding:1.9vh 3.8vw 2.1vh; font-size:2.65vw; font-weight:800; direction:rtl; white-space:nowrap; box-shadow:0 .8vh 0 rgba(0,0,0,.12); }
+    .product { position:absolute; z-index:2; left:7vw; right:7vw; bottom:5vh; height:31vh; border-radius:2.1vw; background:var(--paper); overflow:hidden; box-shadow:0 2.4vh 6vh rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.5); }
+    .product img { width:100%; height:100%; object-fit:cover; object-position:50% 47%; display:block; }
+    .product::after { content:""; position:absolute; inset:0; border:1px solid rgba(8,21,47,.09); border-radius:inherit; pointer-events:none; }
+    @media (min-width:900px) { .headline-wrap { width:68%; } h1 { font-size:7.7vw; } .benefit { font-size:2.6vw; } .cta { font-size:2.1vw; } .eyebrow { font-size:1.6vw; } }
+    @media (max-aspect-ratio: .78) { .product { height:28vh; } .headline-wrap { margin-top:4vh; } }
+  </style>
+</head>
+<body>
+  <main class="ad" aria-label="إعلان ترصيد للمحاسبة والضريبة">
+    <div class="brand"><img src="./tarseed-logo.png" alt="ترصيد" /></div>
+    <section class="headline-wrap">
+      <div class="eyebrow">ضريبة القيمة المضافة؟</div>
+      <h1>خلّها <span class="accent">أوضح.</span></h1>
+      <div class="benefit">مساعد مالي ذكي بالذكاء الاصطناعي</div>
+      <div class="cta">جرّب ترصيد</div>
+    </section>
+    <div class="product"><img src="./ai-chat.jpg" alt="واجهة المساعد المالي الذكي في ترصيد" /></div>
+  </main>
+</body>
+</html>

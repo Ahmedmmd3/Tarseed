@@ -438,3 +438,17 @@ mtime_ms = 1789151956461
 storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/99bce3a5-cc7d-42a4-a3f7-011582c1547a/6af886ea-4c3d-4ab0-81a1-0576673da134"
 storage_version_token = "1789152028659279"
 content_type = "video/mp4"
+
+[[outputs]]
+id = "H_lwjHggQ8bf1txnM26Tb"
+uri = "file://artifacts/mockup-sandbox/public/ads/tarseed-tax-ai/tarseed-tax-ai-post.png"
+type = "image"
+title = "بوست ترصيد — الضريبة والمساعد الذكي"
+description = "بوست إعلاني عربي جاهز للنشر بمقاس 1080×1350، يبرز ضريبة القيمة المضافة والمساعد المالي والذكاء الاصطناعي."
+logical_id = "c25cb02f-8c6d-4a01-89e9-fd52da876c7d"
+content_hash = "sha256:8199df53003db3ec7a63669ba004c6af78456415d8fdbf33b62d30c779411691"
+size = 162958
+mtime_ms = 1789232174546
+storage_uri = "gcs://replit-rams-assets-picard/rams/assets/repl:dea08568-8461-436c-8fc5-e9763e20510e/c25cb02f-8c6d-4a01-89e9-fd52da876c7d/196ce7e4-667e-4ac3-9168-e8857c22e69e"
+storage_version_token = "1789232194665212"
+content_type = "image/png"
