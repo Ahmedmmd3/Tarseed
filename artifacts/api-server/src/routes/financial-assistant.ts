@@ -15,6 +15,9 @@ const MAX_HISTORY_TOTAL_LENGTH = 10_000;
 const MAX_ACCOUNT_LIST_LENGTH = 200;
 const MAX_RECEIPT_IMAGE_LENGTH = 12_000_000;
 const MAX_ASSISTANT_CONTEXT_LENGTH = 120_000;
+const MAX_SUMMARY_GROUPS = 20;
+const MAX_SUMMARY_GROUP_KEY_LENGTH = 80;
+const OTHER_SUMMARY_GROUP = "قيم أخرى مجمعة";
 const supportedReceiptMediaTypes = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const weeklySummarySystemPrompt = `أنت محاسب يكتب ملخصاً أسبوعياً لصاحب مشروع عربي.
 اكتب ملخصاً واضحاً وودياً بـ 4-5 جمل قصيرة.
@@ -320,11 +323,20 @@ function supplierCreditFacts(suppliers: ErpRecord[], receivables: ErpRecord[]): 
 }
 
 function countBy(rows: ErpRecord[], field: string): Record<string, number> {
-  return rows.reduce<Record<string, number>>((counts, row) => {
-    const key = String(row[field] ?? "غير محدد").slice(0, 80);
-    counts[key] = (counts[key] ?? 0) + 1;
-    return counts;
-  }, {});
+  const counts = rows.reduce<Map<string, number>>((result, row) => {
+    const rawKey = String(row[field] ?? "غير محدد").slice(0, MAX_SUMMARY_GROUP_KEY_LENGTH);
+    const key = rawKey === OTHER_SUMMARY_GROUP ? `القيمة: ${rawKey}` : rawKey;
+    result.set(key, (result.get(key) ?? 0) + 1);
+    return result;
+  }, new Map());
+  const sorted = [...counts.entries()].sort(([leftKey, leftCount], [rightKey, rightCount]) =>
+    rightCount - leftCount || leftKey.localeCompare(rightKey, "ar"));
+  if (sorted.length <= MAX_SUMMARY_GROUPS) return Object.fromEntries(sorted);
+
+  const visible = sorted.slice(0, MAX_SUMMARY_GROUPS - 1);
+  const hiddenCount = sorted.slice(MAX_SUMMARY_GROUPS - 1)
+    .reduce((total, [, count]) => total + count, 0);
+  return Object.fromEntries([...visible, [OTHER_SUMMARY_GROUP, hiddenCount]]);
 }
 
 function assistantTableSummary(tableName: string, rows: ErpRecord[]): Record<string, unknown> {

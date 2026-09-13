@@ -502,6 +502,40 @@ test("لا يرسل المساعد وحدات أو مواقع خارج صلاح�
   assert.equal(hr.serialized.includes("ص".repeat(301)), false);
 });
 
+test("يحد المساعد تجميعات القيم عالية التباين ويجمع الزائد دون رفض السؤال", async () => {
+  const organizationId = fixture.users.hr.organizationId;
+  const variedCount = 500;
+  const inserted = await db.insert(erpRecordsTable).values(Array.from({ length: variedCount }, (_, index) => ({
+    organizationId,
+    tableName: "employees",
+    data: {
+      name: `موظف تنوع ${index}`,
+      status: `حالة-${index}-${"س".repeat(200)}`,
+      department: `قسم-${index}-${"ص".repeat(200)}`,
+      employmentType: `نوع-${index}-${"ع".repeat(200)}`,
+    },
+  }))).returning({ id: erpRecordsTable.id });
+
+  try {
+    const hr = await assistantPayload("hr", "كم عدد الموظفين؟");
+    const summary = hr.payload.organizationData.employees.summary;
+    assert.equal(summary.totalRecords, variedCount + 1);
+    for (const groupName of ["byStatus", "byDepartment", "byEmploymentType"]) {
+      const groups = summary[groupName];
+      assert.equal(Object.keys(groups).length, 20, `${groupName} يجب ألا يتجاوز سقف التجميع`);
+      assert.ok(groups["قيم أخرى مجمعة"] > 0, `${groupName} يجب أن يجمع القيم الزائدة بوضوح`);
+      assert.ok(Object.keys(groups).every((key) => key.length <= 80), `${groupName} يجب أن يحد طول المفاتيح`);
+      assert.equal(Object.values(groups).reduce((total, count) => total + count, 0), variedCount + 1);
+    }
+    assert.ok(hr.serialized.length < 20_000, "يجب أن تبقى حمولة الملخص محدودة رغم تنوع القيم");
+    assert.equal(hr.serialized.includes("س".repeat(100)), false);
+    assert.equal(hr.serialized.includes("ص".repeat(100)), false);
+    assert.equal(hr.serialized.includes("ع".repeat(100)), false);
+  } finally {
+    await db.delete(erpRecordsTable).where(inArray(erpRecordsTable.id, inserted.map((row) => row.id)));
+  }
+});
+
 test("لا ترسل الملخصات الأسبوعية والتنبيهات حقائق المواقع المحجوبة إلى النموذج", async () => {
   const ownerSummary = await modelJsonPayload("owner", "/assistant/weekly-summary", "أنت محاسب يكتب ملخصاً أسبوعياً");
   assert.equal(ownerSummary.payload.totalSales, 7888);
