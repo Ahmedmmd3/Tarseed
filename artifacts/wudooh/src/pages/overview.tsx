@@ -47,6 +47,12 @@ type DashboardAccountingSummary = {
   };
 };
 
+type HrDashboardSummary = {
+  activeEmployeeCount: number;
+  monthlySalaryTotal: number;
+  pendingLeaves: number;
+};
+
 const weeklySummaryStoragePrefix = 'wudooh-weekly-summary-v1';
 
 type ReorderAlertItem = {
@@ -82,6 +88,8 @@ export default function Overview() {
   const [dashboardJournals, setDashboardJournals] = useState<Journal[]>(journals);
   const [reorderAlerts, setReorderAlerts] = useState<ReorderAlertsResponse | null>(null);
   const [isLoadingAlerts, setIsLoadingAlerts] = useState(true);
+  const [hrSummary, setHrSummary] = useState<HrDashboardSummary | null>(null);
+  const [hrSummaryIdentity, setHrSummaryIdentity] = useState('');
   const weeklySummaryIdentityRef = useRef('');
   const canReadAccounting = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.accounting === true));
   const localRevenue = accounts.filter((account) => account.type === 'revenue').reduce((sum, account) => sum + account.balance, 0);
@@ -117,6 +125,8 @@ export default function Overview() {
       .slice(0, 4);
   const canReadInventory = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.inventory === true));
   const canReadSales = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.sales === true));
+  const canReadHr = Boolean(currentUser && (currentUser.roleId === 'owner' || currentUser.permissions.hr === true));
+  const currentHrIdentity = currentUser && canReadHr ? `${currentUser.organizationId}:${currentUser.id}` : '';
   const quotationsCrud = useCrud<any>('quotations', canReadSales);
   const purchaseOrdersCrud = useCrud<any>('purchaseOrders', canReadInventory);
   const today = todayLocalDate();
@@ -259,6 +269,38 @@ export default function Overview() {
     })();
     return () => { active = false; };
   }, [canReadInventory, connectionMode, currentUser?.dataGeneration]);
+
+  useEffect(() => {
+    if (connectionMode !== 'remote' || !canReadHr) {
+      setHrSummary(null);
+      setHrSummaryIdentity('');
+      return;
+    }
+    let active = true;
+    const requestIdentity = currentHrIdentity;
+    setHrSummary(null);
+    setHrSummaryIdentity('');
+    void (async () => {
+      try {
+        const response = await fetch('/api/hr/summary', { credentials: 'include' });
+        if (!response.ok) return;
+        const payload = await response.json() as Partial<HrDashboardSummary>;
+        if (active && Number.isFinite(Number(payload.activeEmployeeCount))
+          && Number.isFinite(Number(payload.monthlySalaryTotal))
+          && Number.isFinite(Number(payload.pendingLeaves))) {
+          setHrSummary({
+            activeEmployeeCount: Number(payload.activeEmployeeCount),
+            monthlySalaryTotal: Number(payload.monthlySalaryTotal),
+            pendingLeaves: Number(payload.pendingLeaves),
+          });
+          setHrSummaryIdentity(requestIdentity);
+        }
+      } catch {
+        // Keep the dashboard available when the HR summary is unavailable.
+      }
+    })();
+    return () => { active = false; };
+  }, [canReadHr, connectionMode, currentHrIdentity, currentUser?.dataGeneration]);
 
   const generateWeeklySummary = async () => {
     if (isGeneratingWeeklySummary) return;
@@ -430,6 +472,20 @@ export default function Overview() {
           <MetricCard title="الذمم الدائنة (علينا)" value={formatCurrency(totalPayables)} note="مبالغ مستحقة للموردين" icon={ArrowDownRight} tone="rose" testId="text-total-payables" />
         </div>
       </section>
+
+      {canReadHr && hrSummary && hrSummaryIdentity === currentHrIdentity && (
+        <section aria-labelledby="hr-summary-heading" data-testid="card-hr-summary">
+          <div className="mb-4 flex items-end justify-between gap-4 text-white">
+            <div><p className="text-xs font-bold text-teal-200">الفريق والرواتب</p><h2 id="hr-summary-heading" className="mt-1 text-xl font-black sm:text-2xl">ملخص الموارد البشرية</h2></div>
+            <Link href="/hr" className="hidden items-center gap-1 text-xs font-bold text-teal-200 transition hover:text-white sm:inline-flex">إدارة الموارد البشرية <ArrowLeft className="h-3.5 w-3.5" /></Link>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <MetricCard title="الموظفون النشطون" value={hrSummary.activeEmployeeCount.toLocaleString('ar-SA')} note="ضمن فريق العمل الحالي" icon={UsersRound} tone="rose" testId="text-hr-active-employees" />
+            <MetricCard title="الرواتب الشهرية" value={formatCurrency(hrSummary.monthlySalaryTotal)} note="إجمالي الموظفين النشطين" icon={Wallet} tone="teal" testId="text-hr-monthly-salaries" />
+            <MetricCard title="إجازات قيد المراجعة" value={hrSummary.pendingLeaves.toLocaleString('ar-SA')} note="طلبات تنتظر الاعتماد" icon={ClipboardList} tone="blue" testId="text-hr-pending-leaves" />
+          </div>
+        </section>
+      )}
 
       {canUseWeeklySummary && <section
         className="overflow-hidden rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50 via-white to-teal-50 p-5 shadow-xl shadow-slate-950/10 sm:p-6"

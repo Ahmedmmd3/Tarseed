@@ -1,0 +1,129 @@
+في مشروع ترصيد، حوّل صفحة HR من 31 سطر
+لوحدة موارد بشرية متكاملة.
+
+الملف: artifacts/wudooh/src/pages/hr.tsx
+
+أضف تبويبات (Tabs) في الصفحة:
+- تبويب 1: الموظفون
+- تبويب 2: مسير الرواتب
+- تبويب 3: الإجازات
+
+═══════════════════════════════
+تبويب 1 — الموظفون
+═══════════════════════════════
+CrudTable بـ fields كاملة:
+
+البيانات الشخصية:
+{ key: 'employeeCode', label: 'رقم الموظف' }
+{ key: 'name', label: 'الاسم الكامل', required: true }
+{ key: 'nationalId', label: 'رقم الهوية' }
+{ key: 'phone', label: 'رقم الهاتف' }
+{ key: 'email', label: 'البريد الإلكتروني' }
+{ key: 'gender', label: 'الجنس', type: 'select',
+  options: [
+    { value: 'male', label: 'ذكر' },
+    { value: 'female', label: 'أنثى' }
+  ]
+}
+{ key: 'birthDate', label: 'تاريخ الميلاد', type: 'date' }
+{ key: 'nationality', label: 'الجنسية' }
+{ key: 'address', label: 'العنوان' }
+
+بيانات العمل:
+{ key: 'department', label: 'القسم' }
+{ key: 'position', label: 'المسمى الوظيفي' }
+{ key: 'hireDate', label: 'تاريخ التعيين', type: 'date' }
+{ key: 'contractType', label: 'نوع العقد', type: 'select',
+  options: [
+    { value: 'permanent', label: 'دائم' },
+    { value: 'temporary', label: 'مؤقت' },
+    { value: 'seasonal', label: 'موسمي' },
+    { value: 'remote', label: 'عن بُعد' }
+  ]
+}
+{ key: 'status', label: 'الحالة', type: 'select',
+  options: [
+    { value: 'active', label: 'نشط' },
+    { value: 'suspended', label: 'موقف' },
+    { value: 'terminated', label: 'منتهية الخدمة' }
+  ],
+  defaultValue: 'active',
+  renderCell: (value) => badge ملون أخضر/برتقالي/أحمر
+}
+
+الراتب والمزايا:
+{ key: 'basicSalary', label: 'الراتب الأساسي', type: 'number' }
+{ key: 'housingAllowance', label: 'بدل السكن', type: 'number' }
+{ key: 'transportAllowance', label: 'بدل المواصلات', type: 'number' }
+{ key: 'otherAllowances', label: 'بدلات أخرى', type: 'number' }
+{ key: 'paymentMethod', label: 'طريقة الدفع', type: 'select',
+  options: [
+    { value: 'cash', label: 'نقداً' },
+    { value: 'bank', label: 'تحويل بنكي' }
+  ]
+}
+{ key: 'bankName', label: 'اسم البنك' }
+{ key: 'iban', label: 'رقم الآيبان (IBAN)' }
+{ key: 'notes', label: 'ملاحظات', type: 'textarea' }
+
+في جدول العرض أظهر:
+اسم الموظف | القسم | المسمى | إجمالي الراتب | الحالة
+
+═══════════════════════════════
+تبويب 2 — مسير الرواتب
+═══════════════════════════════
+Component: PayrollPanel
+
+يعرض:
+- اختيار الشهر والسنة
+- جدول بكل الموظفين النشطين يحتوي:
+  الاسم | الراتب الأساسي | البدلات | الإجمالي | الحالة
+
+- زر "إنشاء مسير الشهر":
+  1. احسب إجمالي الرواتب
+  2. أنشئ قيداً محاسبياً تلقائياً:
+     مدين: مصاريف الرواتب (5200) — إجمالي الرواتب
+     دائن: البنك (1100) أو الصندوق (1000) — نفس المبلغ
+  3. احفظ في جدول payrollRuns:
+     { month, year, totalAmount, status, journalId }
+
+- بعد الإنشاء: badge "تم الصرف ✅" + رابط للقيد المحاسبي
+
+- زر "تصدير Excel" للمسير الشهري بتنسيق بنكي
+
+═══════════════════════════════
+تبويب 3 — الإجازات
+═══════════════════════════════
+Component: LeavePanel
+
+CrudTable بـ table="leaveRequests" وfields:
+{ key: 'employeeId', label: 'الموظف', type: 'select من قائمة الموظفين' }
+{ key: 'leaveType', label: 'نوع الإجازة', type: 'select',
+  options: [
+    { value: 'annual', label: 'سنوية' },
+    { value: 'sick', label: 'مرضية' },
+    { value: 'emergency', label: 'طارئة' },
+    { value: 'unpaid', label: 'بدون راتب' }
+  ]
+}
+{ key: 'startDate', label: 'من تاريخ', type: 'date' }
+{ key: 'endDate', label: 'إلى تاريخ', type: 'date' }
+{ key: 'days', label: 'عدد الأيام' — يحسب تلقائياً }
+{ key: 'status', label: 'الحالة', type: 'select',
+  options: [
+    { value: 'pending', label: 'قيد المراجعة' },
+    { value: 'approved', label: 'موافق' },
+    { value: 'rejected', label: 'مرفوض' }
+  ],
+  renderCell: badge ملون
+}
+{ key: 'notes', label: 'سبب الإجازة' }
+
+═══════════════════════════════
+إضافة في لوحة التحكم
+═══════════════════════════════
+في overview.tsx أضف بطاقة صغيرة:
+"ملخص الموارد البشرية":
+- عدد الموظفين النشطين
+- إجمالي الرواتب الشهرية
+- إجازات قيد المراجعة (عدد)

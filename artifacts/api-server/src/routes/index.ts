@@ -11,6 +11,7 @@ import platformAdminRouter from "./platform-admin";
 import financialAssistantRouter from "./financial-assistant";
 import attachmentsRouter from "./attachments";
 import dataTransferRouter from "./data-transfer";
+import hrRouter from "./hr";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use(platformAdminRouter);
 router.use(financialAssistantRouter);
 router.use(attachmentsRouter);
 router.use(dataTransferRouter);
+router.use(hrRouter);
 
 export default router;

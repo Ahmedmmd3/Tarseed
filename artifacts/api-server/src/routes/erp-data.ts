@@ -20,11 +20,12 @@ type DatabaseTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseExecutor = typeof db | DatabaseTransaction;
 type DemoIdSets = Map<string, Set<string>>;
 const ACCOUNT_HIERARCHY_LOCK_NAMESPACE = 0x41434354;
-const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines"]);
+const SPECIALIZED_MUTATION_TABLES = new Set(["inventoryBalances", "stockTransfers", "stockAdjustments", "sales", "invoices", "bankReconciliationSessions", "bankStatementLines", "payrollRuns"]);
 const TABLE_MODULES: Record<string, string | string[]> = {
   products: ["inventory", "sales"], productCategories: "inventory", invoices: "sales", quotations: "sales", expenses: "accounting", customers: "sales", sales: "sales",
   returns_: "sales", suppliers: "inventory", purchaseOrders: "inventory", warehouses: ["inventory", "sales"],
   employees: "hr", projects: "operations", inventoryBalances: ["inventory", "sales"], stockTransfers: "inventory",
+  leaveRequests: "hr", payrollRuns: "hr",
   branches: ["accounting", "operations"],
   stockAdjustments: "inventory",
   accounts: "accounting", journalEntries: "accounting", receivables: "accounting",
@@ -518,6 +519,22 @@ function validDateKey(value: string): boolean {
   return date.getUTCFullYear() === year
     && date.getUTCMonth() === month - 1
     && date.getUTCDate() === day;
+}
+
+function normalizeLeaveRequestData(data: Record<string, unknown>): Record<string, unknown> | null {
+  const employeeId = Number(data.employeeId);
+  const startDate = typeof data.startDate === "string" ? data.startDate : "";
+  const endDate = typeof data.endDate === "string" ? data.endDate : "";
+  const leaveType = String(data.leaveType ?? "");
+  const status = String(data.status ?? "pending");
+  if (!Number.isInteger(employeeId) || employeeId <= 0
+    || !validDateKey(startDate) || !validDateKey(endDate) || startDate > endDate
+    || !["annual", "sick", "emergency", "unpaid"].includes(leaveType)
+    || !["pending", "approved", "rejected"].includes(status)) return null;
+  const start = new Date(`${startDate}T00:00:00.000Z`).getTime();
+  const end = new Date(`${endDate}T00:00:00.000Z`).getTime();
+  const days = Math.floor((end - start) / 86400000) + 1;
+  return { ...data, employeeId, startDate, endDate, leaveType, status, days };
 }
 
 async function purchaseOrderData(
@@ -1850,6 +1867,17 @@ router.post("/data/:table", requireAuth, requireSubscriptionAccess, requireCurre
         response.locals.writeAccessFailure = "authorization_changed";
         throw lockedMutationRejected(response);
       }
+      if (access.tableName === "leaveRequests") {
+        const normalized = normalizeLeaveRequestData(recordData);
+        if (!normalized) throw new MutationRejected(400, "بيانات الإجازة غير صحيحة، وتحقق من التواريخ ونوع الإجازة.");
+        const [employee] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, Number(normalized.employeeId)),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "employees"),
+        )).for("update");
+        if (!employee) throw new MutationRejected(400, "الموظف المحدد غير موجود في هذه المنشأة.");
+        recordData = normalized;
+      }
       if (!isLocationAllowed(currentAuth, access.tableName, recordData)) {
         throw new MutationRejected(403, "ليس لديك صلاحية للمواقع المحددة.");
       }
@@ -2259,6 +2287,17 @@ router.patch("/data/:table/:id", requireAuth, requireSubscriptionAccess, require
         ? withoutManualJournalLinkFields(body as Record<string, unknown>)
         : body as Record<string, unknown>;
       let currentData = { ...current.data, ...currentPatch };
+      if (access.tableName === "leaveRequests") {
+        const normalized = normalizeLeaveRequestData(currentData);
+        if (!normalized) throw new MutationRejected(400, "بيانات الإجازة غير صحيحة، وتحقق من التواريخ ونوع الإجازة.");
+        const [employee] = await tx.select().from(erpRecordsTable).where(and(
+          eq(erpRecordsTable.id, Number(normalized.employeeId)),
+          eq(erpRecordsTable.organizationId, currentAuth.organizationId),
+          eq(erpRecordsTable.tableName, "employees"),
+        )).for("update");
+        if (!employee) throw new MutationRejected(400, "الموظف المحدد غير موجود في هذه المنشأة.");
+        currentData = normalized;
+      }
       if (access.tableName === "branches") {
         const normalized = normalizeBranchData(currentData);
         if (!normalized) throw new MutationRejected(400, "أدخل رمز الفرع واسمه وحالته بصورة صحيحة.");
