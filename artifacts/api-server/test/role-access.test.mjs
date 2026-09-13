@@ -448,6 +448,21 @@ async function modelJsonPayload(key, path, systemPromptStart) {
   return { payload: JSON.parse(serialized), serialized };
 }
 
+async function assertFinancialAssistantDeniedBeforeModel(key, path) {
+  const loginResult = await login(key);
+  const requestCount = assistantRequests.length;
+  const result = await request(path, {
+    method: "POST",
+    cookie: loginResult.cookie,
+  });
+  assert.equal(result.response.status, 403, `${key} ${path}: ${JSON.stringify(result.payload)}`);
+  assert.equal(
+    assistantRequests.length,
+    requestCount,
+    `${key} يجب رفضه قبل إرسال أي طلب إلى Anthropic عبر ${path}`,
+  );
+}
+
 test("لا يرسل المساعد وحدات أو مواقع خارج صلاحية المستخدم إلى النموذج", async () => {
   const owner = await assistantPayload("owner");
   assert.ok(owner.payload.availableData.includes("employees"));
@@ -570,6 +585,13 @@ test("لا ترسل الملخصات الأسبوعية والتنبيهات ح�
   assert.equal(limitedAnomalies.serialized.includes("7777"), false);
   assert.equal(limitedAnomalies.serialized.includes("8888"), false);
   assert.equal(limitedAnomalies.serialized.includes("الموقع المحجوب"), false);
+});
+
+test("يرفض الملخص الأسبوعي والتنبيهات الصلاحية المالية الناقصة قبل استدعاء Anthropic", async () => {
+  for (const key of ["cashier", "accountant"]) {
+    await assertFinancialAssistantDeniedBeforeModel(key, "/assistant/weekly-summary");
+    await assertFinancialAssistantDeniedBeforeModel(key, "/assistant/anomalies");
+  }
 });
 
 test("يمنح المحاسب والكاشير والمخزن والموارد البشرية وحداتهم فقط", async () => {
