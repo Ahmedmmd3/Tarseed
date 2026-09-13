@@ -26,6 +26,7 @@ const fixture = {
 };
 const passwords = {
   owner: "Owner-role-test-123",
+  financialanalyst: "Financial-analyst-role-test-123",
   accountant: "Accountant-role-test-123",
   cashier: "Cashier-role-test-123",
   warehouse: "Warehouse-role-test-123",
@@ -39,6 +40,10 @@ const roles = {
   accountant: {
     roleId: "accountant",
     permissions: { dashboard: true, accounting: true, reports: true },
+  },
+  financialanalyst: {
+    roleId: "financial_analyst",
+    permissions: { dashboard: true, sales: true, accounting: true },
   },
   cashier: {
     roleId: "sales",
@@ -54,6 +59,7 @@ const roles = {
   },
 };
 const assistantRequests = [];
+const loginSessions = new Map();
 const originalAnthropicCreate = anthropic.messages.create;
 
 async function request(path, { method = "GET", body, cookie, headers = {} } = {}) {
@@ -121,7 +127,18 @@ async function createRecord(organizationId, tableName, data) {
   return record;
 }
 
+function riyadhDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Riyadh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 async function login(key) {
+  const cached = loginSessions.get(key);
+  if (cached) return cached;
   const result = await request("/auth/login", {
     method: "POST",
     body: { email: fixture.users[key].email, password: passwords[key] },
@@ -129,7 +146,9 @@ async function login(key) {
   assert.equal(result.response.status, 200, JSON.stringify(result.payload));
   const cookie = cookieFrom(result.response);
   assert.ok(cookie);
-  return { ...result, cookie };
+  const session = { ...result, cookie };
+  loginSessions.set(key, session);
+  return session;
 }
 
 async function assertList(cookie, tableName, expectedStatus, expectedIds = null) {
@@ -223,6 +242,51 @@ before(async () => {
     warehouseId: fixture.warehouses.restricted.id,
     date: "2026-08-20",
     total: 1000,
+  });
+  const currentBusinessDate = riyadhDate();
+  fixture.records.allowedCurrentInvoice = await createRecord(organization.id, "invoices", {
+    invoiceNumber: `WEEKLY-ALLOWED-${suffix}`,
+    warehouseId: fixture.warehouses.allowed.id,
+    issueDate: currentBusinessDate,
+    dueDate: currentBusinessDate,
+    total: 111,
+    paid: 111,
+  });
+  fixture.records.restrictedCurrentInvoice = await createRecord(organization.id, "invoices", {
+    invoiceNumber: `WEEKLY-RESTRICTED-${suffix}`,
+    warehouseId: fixture.warehouses.restricted.id,
+    issueDate: currentBusinessDate,
+    dueDate: currentBusinessDate,
+    total: 7777,
+    paid: 7777,
+  });
+  fixture.records.allowedCurrentExpense = await createRecord(organization.id, "expenses", {
+    description: `WEEKLY-EXPENSE-ALLOWED-${suffix}`,
+    warehouseId: fixture.warehouses.allowed.id,
+    date: currentBusinessDate,
+    amount: 222,
+    status: "posted",
+  });
+  fixture.records.restrictedCurrentExpense = await createRecord(organization.id, "expenses", {
+    description: `WEEKLY-EXPENSE-RESTRICTED-${suffix}`,
+    warehouseId: fixture.warehouses.restricted.id,
+    date: currentBusinessDate,
+    amount: 8888,
+    status: "posted",
+  });
+  fixture.records.allowedCurrentSale = await createRecord(organization.id, "sales", {
+    productId: fixture.records.allowedProduct.id,
+    warehouseId: fixture.warehouses.allowed.id,
+    createdAt: `${currentBusinessDate}T10:00:00.000Z`,
+    quantity: 3,
+    total: 111,
+  });
+  fixture.records.restrictedCurrentSale = await createRecord(organization.id, "sales", {
+    productId: fixture.records.restrictedProduct.id,
+    warehouseId: fixture.warehouses.restricted.id,
+    createdAt: `${currentBusinessDate}T11:00:00.000Z`,
+    quantity: 99,
+    total: 7777,
   });
   fixture.records.employee = await createRecord(organization.id, "employees", {
     name: "موظف اختبار الموارد البشرية",
@@ -364,6 +428,26 @@ async function assistantPayload(key, question = "اعرض تفاصيل جميع 
   return { payload: JSON.parse(match[1]), serialized: match[1] };
 }
 
+async function modelJsonPayload(key, path, systemPromptStart) {
+  const loginResult = await login(key);
+  const requestCount = assistantRequests.length;
+  const result = await request(path, {
+    method: "POST",
+    cookie: loginResult.cookie,
+  });
+  assert.equal(result.response.status, 200, JSON.stringify(result.payload));
+  assert.equal(assistantRequests.length, requestCount + 1, "يجب أن يرسل المسار حقائقه إلى النموذج");
+  const modelRequest = assistantRequests.at(-1);
+  assert.equal(
+    typeof modelRequest.system === "string" && modelRequest.system.startsWith(systemPromptStart),
+    true,
+    "يجب اعتراض طلب النموذج الخاص بالمسار المقصود",
+  );
+  const serialized = modelRequest.messages.at(-1).content;
+  assert.equal(typeof serialized, "string");
+  return { payload: JSON.parse(serialized), serialized };
+}
+
 test("لا يرسل المساعد وحدات أو مواقع خارج صلاحية المستخدم إلى النموذج", async () => {
   const owner = await assistantPayload("owner");
   assert.ok(owner.payload.availableData.includes("employees"));
@@ -418,6 +502,42 @@ test("لا يرسل المساعد وحدات أو مواقع خارج صلاح�
   assert.equal(hr.serialized.includes("ص".repeat(301)), false);
 });
 
+test("لا ترسل الملخصات الأسبوعية والتنبيهات حقائق المواقع المحجوبة إلى النموذج", async () => {
+  const ownerSummary = await modelJsonPayload("owner", "/assistant/weekly-summary", "أنت محاسب يكتب ملخصاً أسبوعياً");
+  assert.equal(ownerSummary.payload.totalSales, 7888);
+  assert.equal(ownerSummary.payload.totalExpenses, 9110);
+  assert.equal(ownerSummary.payload.invoiceCount, 2);
+  assert.equal(ownerSummary.payload.topProduct.name, "منتج الموقع المحجوب");
+
+  const limitedSummary = await modelJsonPayload(
+    "financialanalyst",
+    "/assistant/weekly-summary",
+    "أنت محاسب يكتب ملخصاً أسبوعياً",
+  );
+  assert.equal(limitedSummary.payload.totalSales, 111);
+  assert.equal(limitedSummary.payload.totalExpenses, 222);
+  assert.equal(limitedSummary.payload.invoiceCount, 1);
+  assert.deepEqual(limitedSummary.payload.topProduct, {
+    name: "منتج الموقع المسموح",
+    quantity: 3,
+    salesAmount: 111,
+  });
+  assert.equal(limitedSummary.serialized.includes("7777"), false);
+  assert.equal(limitedSummary.serialized.includes("8888"), false);
+  assert.equal(limitedSummary.serialized.includes("الموقع المحجوب"), false);
+
+  const ownerAnomalies = await modelJsonPayload("owner", "/assistant/anomalies", "أنت مراقب مالي");
+  assert.equal(ownerAnomalies.payload.currentWeekExpenses, 9110);
+  assert.equal(ownerAnomalies.payload.currentWeekSales, 7888);
+
+  const limitedAnomalies = await modelJsonPayload("financialanalyst", "/assistant/anomalies", "أنت مراقب مالي");
+  assert.equal(limitedAnomalies.payload.currentWeekExpenses, 222);
+  assert.equal(limitedAnomalies.payload.currentWeekSales, 111);
+  assert.equal(limitedAnomalies.serialized.includes("7777"), false);
+  assert.equal(limitedAnomalies.serialized.includes("8888"), false);
+  assert.equal(limitedAnomalies.serialized.includes("الموقع المحجوب"), false);
+});
+
 test("يمنح المحاسب والكاشير والمخزن والموارد البشرية وحداتهم فقط", async () => {
   const accountant = await login("accountant");
   assert.equal(accountant.payload.user.roleId, "accountant");
@@ -433,7 +553,10 @@ test("يمنح المحاسب والكاشير والمخزن والموارد �
 
   const cashier = await login("cashier");
   assert.equal(cashier.payload.user.roleId, "sales");
-  await assertList(cashier.cookie, "invoices", 200, [fixture.records.invoice.id]);
+  await assertList(cashier.cookie, "invoices", 200, [
+    fixture.records.invoice.id,
+    fixture.records.allowedCurrentInvoice.id,
+  ]);
   await assertList(cashier.cookie, "accounts", 403);
   await assertList(cashier.cookie, "employees", 403);
 
