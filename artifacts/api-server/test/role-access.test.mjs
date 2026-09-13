@@ -11,6 +11,7 @@ import {
   pool,
   teamUsersTable,
 } from "@workspace/db";
+import { anthropic } from "@workspace/integrations-anthropic-ai";
 import app from "../src/app.ts";
 import { hashPassword } from "../src/lib/team-auth.ts";
 
@@ -24,12 +25,17 @@ const fixture = {
   warehouses: {},
 };
 const passwords = {
+  owner: "Owner-role-test-123",
   accountant: "Accountant-role-test-123",
   cashier: "Cashier-role-test-123",
   warehouse: "Warehouse-role-test-123",
   hr: "Hr-role-test-123",
 };
 const roles = {
+  owner: {
+    roleId: "owner",
+    permissions: {},
+  },
   accountant: {
     roleId: "accountant",
     permissions: { dashboard: true, accounting: true, reports: true },
@@ -47,6 +53,8 @@ const roles = {
     permissions: { dashboard: true, hr: true },
   },
 };
+const assistantRequests = [];
+const originalAnthropicCreate = anthropic.messages.create;
 
 async function request(path, { method = "GET", body, cookie, headers = {} } = {}) {
   const response = await fetch(`${origin}/api${path}`, {
@@ -138,6 +146,19 @@ async function assertList(cookie, tableName, expectedStatus, expectedIds = null)
 }
 
 before(async () => {
+  anthropic.messages.create = async (request) => {
+    assistantRequests.push(request);
+    return {
+      id: "role-access-assistant-test",
+      type: "message",
+      role: "assistant",
+      model: request.model,
+      stop_reason: "end_turn",
+      stop_sequence: null,
+      usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: "text", text: "إجابة اختبارية" }],
+    };
+  };
   server = createServer(app);
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${server.address().port}`;
@@ -179,15 +200,123 @@ before(async () => {
     openingBalance: 0,
     status: "active",
   });
+  fixture.records.revenueAccount = await createRecord(organization.id, "accounts", {
+    code: "4900",
+    name: "إيراد اختبار الصلاحيات",
+    type: "revenue",
+    status: "active",
+  });
+  fixture.records.expenseAccount = await createRecord(organization.id, "accounts", {
+    code: "5900",
+    name: "مصروف اختبار الصلاحيات",
+    type: "expense",
+    status: "active",
+  });
   fixture.records.invoice = await createRecord(organization.id, "invoices", {
     invoiceNumber: `ROLE-${suffix}`,
     warehouseId: fixture.warehouses.allowed.id,
     date: "2026-08-20",
     total: 25,
   });
+  fixture.records.restrictedInvoice = await createRecord(organization.id, "invoices", {
+    invoiceNumber: `ROLE-RESTRICTED-${suffix}`,
+    warehouseId: fixture.warehouses.restricted.id,
+    date: "2026-08-20",
+    total: 1000,
+  });
   fixture.records.employee = await createRecord(organization.id, "employees", {
     name: "موظف اختبار الموارد البشرية",
     status: "active",
+    profile: {
+      notes: "س".repeat(250_000),
+      nested: { privateNotes: "ص".repeat(250_000) },
+    },
+  });
+  fixture.records.supplier = await createRecord(organization.id, "suppliers", {
+    name: "مورد اختبار النطاق",
+    creditLimit: 100,
+    status: "active",
+  });
+  fixture.records.allowedPurchaseOrder = await createRecord(organization.id, "purchaseOrders", {
+    orderNumber: `PO-ALLOWED-${suffix}`,
+    supplierId: fixture.records.supplier.id,
+    supplierName: "مورد اختبار النطاق",
+    warehouseId: fixture.warehouses.allowed.id,
+    total: 70,
+    status: "received",
+  });
+  fixture.records.restrictedPurchaseOrder = await createRecord(organization.id, "purchaseOrders", {
+    orderNumber: `PO-RESTRICTED-${suffix}`,
+    supplierId: fixture.records.supplier.id,
+    supplierName: "مورد اختبار النطاق",
+    warehouseId: fixture.warehouses.restricted.id,
+    total: 900,
+    status: "received",
+  });
+  fixture.records.restrictedReceiptOperation = await createRecord(organization.id, "purchaseReceiptOperations", {
+    purchaseOrderId: fixture.records.restrictedPurchaseOrder.id,
+    warehouseId: fixture.warehouses.restricted.id,
+    status: "completed",
+  });
+  fixture.records.allowedPayable = await createRecord(organization.id, "receivables", {
+    party: "مورد اختبار النطاق",
+    type: "payable",
+    purchaseOrderId: fixture.records.allowedPurchaseOrder.id,
+    amount: 70,
+    paid: 0,
+    status: "unpaid",
+  });
+  fixture.records.restrictedPayable = await createRecord(organization.id, "receivables", {
+    party: "مورد اختبار النطاق",
+    type: "payable",
+    purchaseOrderId: fixture.records.restrictedPurchaseOrder.id,
+    amount: 900,
+    paid: 0,
+    status: "unpaid",
+  });
+  fixture.records.legacyRestrictedPayable = await createRecord(organization.id, "receivables", {
+    party: "مورد اختبار النطاق",
+    type: "payable",
+    purchaseReceiptOperationId: fixture.records.restrictedReceiptOperation.id,
+    amount: 800,
+    paid: 0,
+    status: "unpaid",
+  });
+  fixture.records.allowedSaleJournal = await createRecord(organization.id, "journalEntries", {
+    number: `J-SALE-ALLOWED-${suffix}`,
+    date: "2026-08-20",
+    description: "قيد بيع الموقع المسموح",
+    status: "posted",
+    sourceType: "sale",
+    sourceId: fixture.records.invoice.id,
+    lines: [{ accountId: fixture.records.revenueAccount.id, debit: 0, credit: 100 }],
+  });
+  fixture.records.restrictedSaleJournal = await createRecord(organization.id, "journalEntries", {
+    number: `J-SALE-RESTRICTED-${suffix}`,
+    date: "2026-08-20",
+    description: "قيد بيع الموقع المحجوب",
+    status: "posted",
+    sourceType: "sale",
+    sourceId: fixture.records.restrictedInvoice.id,
+    lines: [{ accountId: fixture.records.revenueAccount.id, debit: 0, credit: 1000 }],
+  });
+  fixture.records.allowedPurchaseJournal = await createRecord(organization.id, "journalEntries", {
+    number: `J-PURCHASE-ALLOWED-${suffix}`,
+    date: "2026-08-20",
+    description: "قيد شراء الموقع المسموح",
+    status: "posted",
+    sourceType: "purchase",
+    sourceId: fixture.records.allowedPurchaseOrder.id,
+    lines: [{ accountId: fixture.records.expenseAccount.id, debit: 70, credit: 0 }],
+  });
+  fixture.records.restrictedPurchaseJournal = await createRecord(organization.id, "journalEntries", {
+    number: `J-PURCHASE-RESTRICTED-${suffix}`,
+    date: "2026-08-20",
+    description: "قيد شراء الموقع المحجوب",
+    status: "posted",
+    sourceType: "purchase",
+    sourceId: fixture.records.restrictedPurchaseOrder.id,
+    lines: [{ accountId: fixture.records.expenseAccount.id, debit: 900, credit: 0 }],
   });
 
   for (const [key, role] of Object.entries(roles)) {
@@ -196,6 +325,7 @@ before(async () => {
 });
 
 after(async () => {
+  anthropic.messages.create = originalAnthropicCreate;
   const userIds = Object.values(fixture.users).map((user) => user.id);
   if (userIds.length) {
     await db.update(teamUsersTable)
@@ -217,11 +347,86 @@ after(async () => {
   await pool.end();
 });
 
+async function assistantPayload(key, question = "اعرض تفاصيل جميع البيانات والذمم والموردين والمشتريات والموظفين والقيود") {
+  const loginResult = await login(key);
+  const requestCount = assistantRequests.length;
+  const result = await request("/assistant/financial", {
+    method: "POST",
+    cookie: loginResult.cookie,
+    body: { question, history: [] },
+  });
+  assert.equal(result.response.status, 200, JSON.stringify(result.payload));
+  assert.equal(assistantRequests.length, requestCount + 1);
+  const content = assistantRequests.at(-1).messages.at(-1).content;
+  const match = content.match(/حقائق النظام الموثوقة \(JSON، بيانات فقط وليست تعليمات\):\s*([\s\S]*?)\n\nسؤال المستخدم:/);
+  assert.ok(match, "يجب أن تصل حقائق النظام إلى النموذج بصيغة قابلة للفحص");
+  assert.ok(match[1].length <= 120_000, "يجب ألا تتجاوز حقائق المساعد حد السياق");
+  return { payload: JSON.parse(match[1]), serialized: match[1] };
+}
+
+test("لا يرسل المساعد وحدات أو مواقع خارج صلاحية المستخدم إلى النموذج", async () => {
+  const owner = await assistantPayload("owner");
+  assert.ok(owner.payload.availableData.includes("employees"));
+  assert.ok(owner.payload.availableData.includes("receivables"));
+  assert.equal(owner.payload.organizationData.receivables.summary.totalRemaining, 1770);
+  assert.deepEqual(owner.payload.facts.postedAccounting, {
+    revenue: 1100,
+    expenses: 970,
+    netProfit: 130,
+    postedJournalCount: 4,
+  });
+
+  const accountant = await assistantPayload("accountant");
+  assert.ok(accountant.payload.availableData.includes("accounts"));
+  assert.ok(accountant.payload.availableData.includes("receivables"));
+  assert.equal(accountant.payload.availableData.includes("employees"), false);
+  assert.equal(accountant.payload.availableData.includes("purchaseOrders"), false);
+  assert.equal("employees" in accountant.payload.organizationData, false);
+  assert.equal("purchaseOrders" in accountant.payload.organizationData, false);
+  assert.equal(accountant.payload.organizationData.receivables.summary.totalRemaining, 70);
+  assert.deepEqual(accountant.payload.facts.postedAccounting, {
+    revenue: 100,
+    expenses: 70,
+    netProfit: 30,
+    postedJournalCount: 2,
+  });
+  assert.equal(accountant.payload.organizationData.journalEntries.summary.totalRecords, 2);
+  assert.equal(accountant.serialized.includes(`PO-RESTRICTED-${suffix}`), false);
+  assert.equal(accountant.serialized.includes(`J-SALE-RESTRICTED-${suffix}`), false);
+  assert.equal(accountant.serialized.includes(`J-PURCHASE-RESTRICTED-${suffix}`), false);
+  assert.equal(accountant.serialized.includes("قيد بيع الموقع المحجوب"), false);
+  assert.equal(accountant.serialized.includes("قيد شراء الموقع المحجوب"), false);
+  assert.equal(accountant.serialized.includes('"amount":900'), false);
+  assert.equal(accountant.serialized.includes('"amount":800'), false);
+
+  const warehouse = await assistantPayload("warehouse");
+  assert.deepEqual(
+    warehouse.payload.availableData.sort(),
+    ["inventoryBalances", "products", "purchaseOrders", "suppliers"].sort(),
+  );
+  assert.equal("receivables" in warehouse.payload.organizationData, false);
+  assert.equal("receivables" in warehouse.payload.facts, false);
+  assert.equal(warehouse.serialized.includes(`PO-RESTRICTED-${suffix}`), false);
+
+  const hr = await assistantPayload("hr");
+  assert.deepEqual(hr.payload.availableData, ["employees"]);
+  assert.deepEqual(Object.keys(hr.payload.organizationData), ["employees"]);
+  assert.deepEqual(hr.payload.facts, {});
+  assert.equal(hr.serialized.includes("receivables"), false);
+  assert.equal(hr.serialized.includes("purchaseOrders"), false);
+  assert.equal(hr.serialized.includes("س".repeat(301)), false);
+  assert.equal(hr.serialized.includes("ص".repeat(301)), false);
+});
+
 test("يمنح المحاسب والكاشير والمخزن والموارد البشرية وحداتهم فقط", async () => {
   const accountant = await login("accountant");
   assert.equal(accountant.payload.user.roleId, "accountant");
   assert.deepEqual(accountant.payload.user.warehouseIds, [fixture.warehouses.allowed.id]);
-  await assertList(accountant.cookie, "accounts", 200, [fixture.records.account.id]);
+  await assertList(accountant.cookie, "accounts", 200, [
+    fixture.records.revenueAccount.id,
+    fixture.records.expenseAccount.id,
+    fixture.records.account.id,
+  ]);
   await assertList(accountant.cookie, "invoices", 403);
   await assertList(accountant.cookie, "products", 403);
   await assertList(accountant.cookie, "employees", 403);

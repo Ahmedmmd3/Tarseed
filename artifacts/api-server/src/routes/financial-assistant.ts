@@ -93,6 +93,47 @@ async function assistantRecords(auth: AuthContext, tableName: string): Promise<E
     .map((record) => ({ ...(record.data as Record<string, unknown>), id: record.id }));
 }
 
+function filterLocationScopedPayables(
+  receivables: ErpRecord[],
+  purchaseOrders: ErpRecord[],
+  purchaseReceiptOperations: ErpRecord[],
+): ErpRecord[] {
+  const allowedPurchaseOrderIds = new Set(purchaseOrders.map((row) => String(row.id)));
+  const receiptOrderIds = new Map(purchaseReceiptOperations
+    .map((row) => [String(row.id), String(row.purchaseOrderId ?? "")]));
+  return receivables.filter((row) => {
+    if (row.type !== "payable") return true;
+    const hasSource = row.purchaseOrderId != null
+      || row.purchaseId != null
+      || row.purchaseReceiptOperationId != null;
+    if (!hasSource) return true;
+    const orderId = row.purchaseOrderId
+      ?? row.purchaseId
+      ?? receiptOrderIds.get(String(row.purchaseReceiptOperationId));
+    return orderId != null && allowedPurchaseOrderIds.has(String(orderId));
+  });
+}
+
+function filterLocationScopedJournals(
+  journals: ErpRecord[],
+  allowedSources: Record<string, ErpRecord[]>,
+): ErpRecord[] {
+  const allowedIdsBySourceType = new Map<string, Set<string>>([
+    ["sale", new Set((allowedSources.invoices ?? []).map((row) => String(row.id)))],
+    ["invoice", new Set((allowedSources.invoices ?? []).map((row) => String(row.id)))],
+    ["purchase", new Set((allowedSources.purchaseOrders ?? []).map((row) => String(row.id)))],
+    ["purchase_order", new Set((allowedSources.purchaseOrders ?? []).map((row) => String(row.id)))],
+    ["expense", new Set((allowedSources.expenses ?? []).map((row) => String(row.id)))],
+    ["expenses", new Set((allowedSources.expenses ?? []).map((row) => String(row.id)))],
+  ]);
+  return journals.filter((row) => {
+    const sourceType = typeof row.sourceType === "string" ? row.sourceType.trim().toLowerCase() : "";
+    if (!sourceType || row.sourceId == null) return true;
+    const allowedIds = allowedIdsBySourceType.get(sourceType);
+    return allowedIds?.has(String(row.sourceId)) === true;
+  });
+}
+
 const assistantTableAccess: Record<string, string[]> = {
   accounts: ["accounting"],
   journalEntries: ["accounting"],
@@ -418,21 +459,28 @@ router.post(
         tablesToLoad.add("purchaseOrders");
         tablesToLoad.add("purchaseReceiptOperations");
       }
+      if (readableTables.includes("journalEntries")) {
+        tablesToLoad.add("invoices");
+        tablesToLoad.add("purchaseOrders");
+        tablesToLoad.add("expenses");
+      }
       const loadedEntries = await Promise.all([...tablesToLoad].map(async (tableName) =>
         [tableName, await assistantRecords(auth, tableName)] as const));
       const loadedRecords = Object.fromEntries(loadedEntries) as Record<string, ErpRecord[]>;
       if (readableTables.includes("receivables")) {
-        const allowedPurchaseOrderIds = new Set((loadedRecords.purchaseOrders ?? []).map((row) => String(row.id)));
-        const receiptOrderIds = new Map((loadedRecords.purchaseReceiptOperations ?? [])
-          .map((row) => [String(row.id), String(row.purchaseOrderId ?? "")]));
-        loadedRecords.receivables = (loadedRecords.receivables ?? []).filter((row) => {
-          if (row.type !== "payable") return true;
-          const hasSource = row.purchaseOrderId != null || row.purchaseId != null || row.purchaseReceiptOperationId != null;
-          if (!hasSource) return true;
-          const orderId = row.purchaseOrderId ?? row.purchaseId
-            ?? receiptOrderIds.get(String(row.purchaseReceiptOperationId));
-          return orderId != null && allowedPurchaseOrderIds.has(String(orderId));
-        });
+        loadedRecords.receivables = filterLocationScopedPayables(
+          loadedRecords.receivables ?? [],
+          loadedRecords.purchaseOrders ?? [],
+          loadedRecords.purchaseReceiptOperations ?? [],
+        );
+      }
+      if (readableTables.includes("journalEntries")
+        && auth.roleId !== "owner"
+        && auth.locationScope !== "all") {
+        loadedRecords.journalEntries = filterLocationScopedJournals(
+          loadedRecords.journalEntries ?? [],
+          loadedRecords,
+        );
       }
       const records = {
         accounts: loadedRecords.accounts ?? [],
