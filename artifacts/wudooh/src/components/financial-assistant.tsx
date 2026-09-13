@@ -33,9 +33,9 @@ type DiscountAnalysis = {
 
 const suggestions = [
   'كم الإيرادات والمصروفات هذا الشهر؟',
-  'قارن الربح بين هذا الشهر والشهر الماضي',
-  'ما الذمم المتأخرة؟',
-  'ما الخصم الآمن لمنتج [اسم المنتج]؟',
+  'من الموردون الذين تجاوزوا حد الائتمان؟',
+  'كم عدد الموظفين النشطين؟',
+  'كيف أراجع أعمار الذمم الدائنة؟',
 ];
 
 function formatMessage(content: string) {
@@ -76,7 +76,7 @@ export function FinancialAssistant() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: 'مرحباً! أنا مساعدك المالي. اسألني عن الإيرادات والمصروفات والأرباح والذمم، أو اطلب مني خصماً آمناً لأي منتج.',
+      content: 'مرحباً! اسألني عن بيانات منشأتك مثل الحسابات والقيود والفواتير والموظفين والموردين والمخزون، أو عن طريقة استخدام أي جزء في تطبيق ترصيد.',
     },
   ]);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
@@ -157,15 +157,15 @@ export function FinancialAssistant() {
                 <Sparkles className="h-5 w-5" aria-hidden="true" />
               </div>
               <div>
-                <SheetTitle className="text-base font-black text-slate-900">المساعد المالي</SheetTitle>
-                <SheetDescription className="mt-1 text-xs text-slate-500">تحليل سريع لبيانات منشأتك</SheetDescription>
+                <SheetTitle className="text-base font-black text-slate-900">مساعد المنشأة الذكي</SheetTitle>
+                <SheetDescription className="mt-1 text-xs text-slate-500">بيانات منشأتك ودليل استخدام ترصيد</SheetDescription>
               </div>
             </div>
           </SheetHeader>
 
           <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5" aria-live="polite">
             <div className="rounded-2xl border border-teal-100 bg-teal-50 px-4 py-3 text-xs leading-6 text-teal-900">
-              يعتمد المساعد على القيود والفواتير والذمم والأسعار وتكلفة المخزون الموثوقة في منشأتك.
+              يعتمد المساعد على بيانات منشأتك المصرح لك برؤيتها، ويجيب أيضاً عن طريقة استخدام تطبيق ترصيد. لا يجري أي تعديل على البيانات.
             </div>
             {messages.map((message) => (
               <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
@@ -218,11 +218,11 @@ export function FinancialAssistant() {
               <Textarea
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
-                placeholder="اكتب سؤالك المالي..."
+                placeholder="اسأل عن منشأتك أو عن استخدام التطبيق..."
                 className="min-h-10 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0"
                 rows={1}
                 maxLength={2000}
-                aria-label="سؤالك المالي"
+                aria-label="سؤالك عن المنشأة أو التطبيق"
                 data-testid="input-financial-question"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
